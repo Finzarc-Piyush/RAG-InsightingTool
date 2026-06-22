@@ -212,6 +212,25 @@ export const INVARIANTS: ReadonlyArray<Invariant> = [
         file: "server/lib/periodColumnResolver.ts",
         needle: "DEFAULT_FACET_PREFERENCE",
       },
+      // Sub-day (Wave H1–H5): hour/minute/hour-of-day buckets are computed ONLY by
+      // the centralized inline expr (facetColumnInlineDuckDbExpr) + the authority.
+      // No chart builder may hand-roll sub-day DuckDB SQL — that would re-open the
+      // 'fixed on one route only' class of bug for intraday data.
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/visualPlanner.ts",
+        needle: "date_trunc('hour'",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/dashboardFeatureSweep.ts",
+        needle: "date_trunc('hour'",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/chartFromTable.ts",
+        needle: "EXTRACT(hour",
+      },
     ],
   },
   {

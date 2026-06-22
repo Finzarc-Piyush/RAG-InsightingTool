@@ -97,7 +97,7 @@ const WATERFALL_MEASURE_RE = /(_delta|_change|_diff|_var(iance)?|_contribution)$
 const WATERFALL_ROW_RE = /^(driver|component|bridge|step|stage|movement)/i;
 
 /** Inlined from `client/src/lib/temporalFacetDisplay.ts` to keep this file leaf-pure. */
-const DISPLAY_FACET_HEADER_RE = /^(Day|Week|Month|Quarter|Half-year|Year) · /;
+const DISPLAY_FACET_HEADER_RE = /^(Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · /;
 function isTemporalFacetFieldId(name: string): boolean {
   if (name.startsWith('__tf_')) return true;
   return DISPLAY_FACET_HEADER_RE.test(name);

@@ -64,6 +64,48 @@ build red.
 - Risk: row-derived span over a clustered sample can under-estimate; bounded to 200 rows
   and harmless for the short-span thresholds. Documented in the wave plan.
 
+## Sub-day extension (Wave H1–H6) — hour / hour-of-day / minute
+
+The 6-grain vocabulary (`date`…`year`) was extended **below the day** to answer
+"logins per hour", "average by hour of day", "peak hour", and intraday timelines —
+**globally, through this same authority**, and **dynamically from the question** (no
+pre-determined bins).
+
+Key design choices:
+
+- **Never materialized.** The codebase already separates the *reasoning* vocabulary
+  (`TemporalFacetGrain` type) from the *materialization* list (the `GRAINS` array that
+  writes `Month · Date` columns at ingest). Sub-day grains were added to the TYPE and the
+  inline expr (`facetColumnInlineDuckDbExpr` → `date_trunc('hour'…)` / `EXTRACT(hour…)` /
+  `strftime` over a TIMESTAMP, with a `TRY_CAST(… AS TIME)` arm for pure time-of-day
+  columns) but **deliberately NOT to `GRAINS`** — so no `Hour · X` column is ever
+  pre-written. They are computed on the fly, which is exactly "bucket dynamically, no
+  pre-determined buckets." `GRAIN_RANK` carries them (negative ranks, finer than `date`);
+  `GRAINS_FINE_TO_COARSE` does NOT (the cardinality/refinement tiers only pick materialized
+  facets). `hour_of_day` is cyclical (0–23, aggregated across days), intent-/explicit-only,
+  exactly like the existing `monthOnly`.
+- **Gated on a real signal.** A new per-column `dateRange.temporalResolution: 'day' |
+  'sub_day'` flag (set at ingest only when a column has ≥2 DISTINCT non-midnight times) is
+  the gate every sub-day branch checks. A pure-daily column can never be promoted to an hour
+  axis — set uniformly on every ingest path (`createDataSummary` + `deriveDateRangeFromRows`,
+  so the columnar/Snowflake/reload path agrees; invariant L-019).
+- **Absolute vs cyclical, decided by span.** Intent detection maps explicitly-cyclical
+  phrasing ("peak/busiest hour", "time of day", "by hour of day") → `hour_of_day`; a bare
+  "hourly"/"by hour" → `hour`, which the authority **downgrades to `hour_of_day` when the
+  data spans multiple days** (confirmed product default) and keeps absolute on a single day.
+  A single intraday day (which used to collapse every calendar facet to one Month dot) now
+  resolves to an absolute hourly timeline.
+- **Ingest fidelity.** `parseFlexibleDate` previously rejected space-separated datetimes
+  (`"2026-06-22 14:30"` → null), silently dropping the time; it now parses them and stores
+  intraday values as a naive wall-clock `YYYY-MM-DD HH:MM:SS` string (not UTC `toISOString()`,
+  which shifted the hour on non-UTC hosts) so `EXTRACT(hour…)` returns the hour the user typed.
+- **Enforced by I11.** New `absent` checks keep `date_trunc('hour'` / `EXTRACT(hour` out of
+  the chart builders — sub-day SQL lives only in the centralized inline expr.
+
+`sub_day_grain` was removed from `TEMPORAL_CAPABILITY_GAPS`; `hour`/`hour_of_day`/`minute`
+are in `SUPPORTED_DATE_AGGREGATION_PERIODS`. (Arbitrary N-minute bins, e.g. 15-min, remain a
+fast-follow — reachable today via `run_readonly_sql` `time_bucket`.)
+
 ## Recent changes
 
 - **2026-06-18 · The columnar ingest path was still STARVING the authority of its candidate

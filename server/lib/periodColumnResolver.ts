@@ -75,6 +75,11 @@ const INTENT_TO_PERIOD_KIND: Record<CoarseTimeIntent, PeriodKind> = {
   quarter: "quarter",
   half_year: "quarter",
   year: "year",
+  // Melted wide-format (Nielsen) data has no intraday detail — sub-day intents
+  // degrade to the finest available period kind (week).
+  hour: "week",
+  hour_of_day: "week",
+  minute: "week",
 };
 
 const KIND_LITERAL_SYNONYMS: Record<PeriodKind, string[]> = {

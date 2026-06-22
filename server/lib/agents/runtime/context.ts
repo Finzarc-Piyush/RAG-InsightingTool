@@ -666,6 +666,7 @@ export function formatDerivedTemporalFacetsBlock(summary: DataSummary): string {
   // not Month · Date which collapses to one bucket). Only emitted when the
   // source column carries dateRange (populated at upload over the full set).
   const headerLines: string[] = [];
+  const intradaySources: string[] = [];
   for (const src of [...new Set(meta.map((m) => m.sourceColumn))]) {
     const range = summary.columns.find((c) => c.name === src)?.dateRange;
     if (!range) continue;
@@ -673,6 +674,16 @@ export function formatDerivedTemporalFacetsBlock(summary: DataSummary): string {
     const grain = period === "day" ? "date" : period;
     headerLines.push(
       `${src}: ${range.minIso} → ${range.maxIso}, ${range.distinctDayCount} day(s) → for an open trend prefer \`${facetColumnKey(src, grain)}\``
+    );
+    if (range.temporalResolution === "sub_day") intradaySources.push(src);
+  }
+  // Sub-day (Wave H6) — intraday columns can ALSO bucket below the day. These
+  // facets are computed on the fly (not in the list below); name them directly in
+  // groupBy or set dateAggregationPeriod. "by hour of day"/"peak hour" → cyclical
+  // hour-of-day (averaged across days); "hourly on <date>"/single day → absolute hour.
+  if (intradaySources.length) {
+    headerLines.push(
+      `Intraday columns (carry time-of-day detail): ${intradaySources.join(", ")} → you may bucket sub-day: groupBy \`Hour of day · <col>\` (cyclical 0–23, for "peak/typical hour"), \`Hour · <col>\` (absolute hourly timeline), or \`Minute · <col>\` — or set dateAggregationPeriod="hour_of_day" / "hour" / "minute". Pair with AVG/SUM as usual (e.g. average logins by hour of day).`
     );
   }
   const lines = meta.map(

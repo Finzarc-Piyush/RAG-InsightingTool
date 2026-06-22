@@ -121,6 +121,10 @@ export interface ParsedQuery {
     | 'monthOnly'
     | 'quarter'
     | 'year'
+    // Sub-day periods (Wave H2). String-identical to facet grains; bucketing SQL in H5.
+    | 'hour'
+    | 'hour_of_day'
+    | 'minute'
     | null;
   timeFilters?: TimeFilter[];
   valueFilters?: ValueFilter[];

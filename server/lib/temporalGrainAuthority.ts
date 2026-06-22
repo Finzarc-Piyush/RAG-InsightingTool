@@ -43,7 +43,12 @@ import {
   type TemporalFacetGrain,
   type CoarseTimeIntent,
 } from "./temporalFacetColumns.js";
-import { normalizeDateToPeriod } from "./dateUtils.js";
+import {
+  normalizeDateToPeriod,
+  newIntradayStats,
+  accumulateIntraday,
+  intradayResolution,
+} from "./dateUtils.js";
 import type { DataSummary } from "../shared/schema.js";
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -61,21 +66,36 @@ export interface DateRange {
   distinctDayCount: number;
   minIso: string;
   maxIso: string;
+  /** Wave H1 · 'sub_day' iff the source column carries ≥2 distinct non-midnight
+   *  times. The gate every sub-day grain branch checks — pure-daily columns
+   *  ('day' or undefined) are never promoted to an hour/minute axis. */
+  temporalResolution?: "day" | "sub_day";
+  /** Distinct hours (0–23) seen — bounds the `hour_of_day` bucket count. */
+  distinctHourCount?: number;
 }
 
 export type DateRangeByColumn = ReadonlyMap<string, DateRange>;
 
-/** Coarse→fine ordinal so we only ever refine to / coarsen toward a known rank. */
+/** Coarse→fine ordinal so we only ever refine to / coarsen toward a known rank.
+ *  Sub-day grains are FINER than `date` (negative). `hour_of_day` is cyclical —
+ *  it has a rank for completeness but never participates in the absolute ladder. */
 export const GRAIN_RANK: Record<TemporalFacetGrain, number> = {
+  minute: -2,
+  hour: -1,
   date: 0,
   week: 1,
   month: 2,
   quarter: 3,
   half_year: 4,
   year: 5,
+  hour_of_day: -3,
 };
 
-/** All facet grains, fine → coarse. */
+/** MATERIALIZED facet grains, fine → coarse. Sub-day grains are intentionally
+ *  ABSENT: they are never pre-materialized (no "Hour · X" column), so they can't
+ *  be picked by the cardinality/refinement tiers (which require a materialized
+ *  facet). Sub-day grain comes only from the INTENT tier and the dedicated
+ *  intraday-span branch, both gated on `temporalResolution === 'sub_day'`. */
 const GRAINS_FINE_TO_COARSE: TemporalFacetGrain[] = [
   "date",
   "week",
@@ -109,6 +129,9 @@ const INTENT_TO_FACET_GRAIN: Record<CoarseTimeIntent, TemporalFacetGrain> = {
   quarter: "quarter",
   half_year: "half_year",
   year: "year",
+  hour: "hour",
+  hour_of_day: "hour_of_day",
+  minute: "minute",
 };
 
 /**
@@ -188,6 +211,7 @@ export function deriveDateRangeFromRows(
   let minMs = Number.POSITIVE_INFINITY;
   let maxMs = Number.NEGATIVE_INFINITY;
   const distinctDays = new Set<string>();
+  const intraday = newIntradayStats();
   for (const row of rows) {
     const v = row?.[col];
     if (v === null || v === undefined || v === "") continue;
@@ -197,13 +221,17 @@ export function deriveDateRangeFromRows(
     if (ms < minMs) minMs = ms;
     if (ms > maxMs) maxMs = ms;
     distinctDays.add(dayKey(d));
+    accumulateIntraday(intraday, d);
   }
   if (!Number.isFinite(minMs) || !Number.isFinite(maxMs)) return undefined;
+  const { temporalResolution, distinctHourCount } = intradayResolution(intraday);
   return {
     minIso: dayKey(new Date(minMs)),
     maxIso: dayKey(new Date(maxMs)),
     distinctDayCount: distinctDays.size,
     spanDays: Math.max(0, Math.floor((maxMs - minMs) / 86_400_000)),
+    temporalResolution,
+    distinctHourCount,
   };
 }
 
@@ -224,6 +252,8 @@ export function buildDateRangeByColumn(summary: DataSummary): Map<string, DateRa
         distinctDayCount: r.distinctDayCount,
         minIso: r.minIso,
         maxIso: r.maxIso,
+        temporalResolution: r.temporalResolution,
+        distinctHourCount: r.distinctHourCount,
       });
     }
   }
@@ -357,6 +387,30 @@ function bucketCount(
 
 const usableCount = (n: number) => n >= 2;
 
+/** Distinct sub-day buckets for a source date column, counted by parsing the
+ *  sample (sub-day grains are NEVER materialized, so there's no facet column to
+ *  read). Returns UNKNOWN when no sample. hour/minute/hour_of_day map 1:1 onto the
+ *  identically-named DatePeriod tokens. */
+function countSubDayBucketsInSample(
+  source: string,
+  grain: "hour" | "minute" | "hour_of_day",
+  sample: readonly Record<string, unknown>[] | undefined,
+  cap = 256,
+): number {
+  if (!sample?.length) return UNKNOWN;
+  const seen = new Set<string>();
+  for (const row of sample) {
+    const v = row?.[source];
+    if (v === null || v === undefined || v === "") continue;
+    const d = parseRowDate(v);
+    if (!d) continue;
+    const norm = normalizeDateToPeriod(d, grain);
+    if (norm) seen.add(norm.normalizedKey);
+    if (seen.size >= cap) break;
+  }
+  return seen.size;
+}
+
 /**
  * Resolve the single coherent time-axis facet column for a trend chart.
  *
@@ -449,17 +503,69 @@ export function resolveTrendGrain(input: TrendGrainInput): TrendGrainDecision {
     source,
   });
 
+  // Sub-day machinery (Wave H4). Sub-day grains are never materialized, so the
+  // facet column is the INLINE display key ("Hour · <src>") that the chart/executor
+  // computes from the source via facetColumnInlineDuckDbExpr / normalizeDateToPeriod.
+  // EVERY sub-day branch is gated on `intraday` — a pure-daily column can never get
+  // an hour axis (the regression the user flagged).
+  const intraday = sc.range?.temporalResolution === "sub_day";
+  const multiDay = (sc.range?.distinctDayCount ?? 0) > 1;
+  const decideInline = (
+    grain: "hour" | "minute" | "hour_of_day",
+    source: TrendGrainSource,
+    reason: string,
+  ): TrendGrainDecision => ({
+    facetColumn: facetColumnKey(sc.source, grain),
+    grain,
+    sourceColumn: sc.source,
+    reason,
+    source,
+  });
+  const subDayUsable = (grain: "hour" | "minute" | "hour_of_day") =>
+    usableCount(countSubDayBucketsInSample(sc.source, grain, sample));
+
   // 1. INTENT
   const intent = question ? detectCoarseTimeIntentFromMessage(question) : null;
   if (intent) {
-    const ig = INTENT_TO_FACET_GRAIN[intent];
-    if (usable(ig)) {
+    let ig = INTENT_TO_FACET_GRAIN[intent];
+    if (ig === "hour" || ig === "minute" || ig === "hour_of_day") {
+      // Sub-day intent honored ONLY when the source carries intraday detail.
+      if (intraday) {
+        // Confirmed default: bare/absolute "hourly" over MULTI-day data → cyclical
+        // hour-of-day ("typical/peak hour"); single-day scope keeps the absolute timeline.
+        if (ig === "hour" && multiDay) ig = "hour_of_day";
+        if (subDayUsable(ig)) {
+          return decideInline(
+            ig,
+            "intent",
+            ig === "hour_of_day"
+              ? "Hour-of-day pattern requested (aggregated across days)"
+              : `Explicit ${ig} grain requested`,
+          );
+        }
+      }
+      // not intraday or grain collapses → fall through to calendar logic.
+    } else if (usable(ig)) {
       return decide(ig, "intent", `Explicit ${intent} grain requested`);
     }
     // intent grain collapses → fall through (e.g. "monthly" on single-month data → finer trend).
   }
 
-  // 2. SPAN
+  // 2. SPAN — sub-day first: a single intraday day collapses every calendar facet
+  //    to one bucket (the old single-day→Month degeneracy), so show the absolute
+  //    hourly (or finer minute) timeline. Multi-day intraday data with no explicit
+  //    hour ask is intentionally left to the calendar span logic below (a week of
+  //    hourly points is rarely what was asked).
+  if (intraday && !multiDay) {
+    if (subDayUsable("hour")) {
+      return decideInline("hour", "span", "Single intraday day → hourly timeline");
+    }
+    if (subDayUsable("minute")) {
+      return decideInline("minute", "span", "Single intraday day → minute timeline");
+    }
+  }
+
+  // 2b. SPAN (calendar)
   if (sc.range) {
     let g =
       PERIOD_TO_FACET_GRAIN[

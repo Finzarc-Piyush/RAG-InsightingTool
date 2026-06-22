@@ -794,7 +794,7 @@ export function buildQueryPlanDuckdbSql(
   // Try to extract a temporal-unit adverb from a `Day · …` / `Week · …` /
   // `Month · …` / `Quarter · …` / `Year · …` perDimension prefix.
   const perDimAdverb = (perDim: string): string | null => {
-    const m = perDim.match(/^(Day|Week|Month|Quarter|Year)\b/i);
+    const m = perDim.match(/^(Hour of day|Day|Week|Month|Quarter|Year|Hour|Minute)\b/i);
     if (!m) return null;
     const grain = m[1]!.toLowerCase();
     switch (grain) {
@@ -808,6 +808,12 @@ export function buildQueryPlanDuckdbSql(
         return "quarterly";
       case "year":
         return "yearly";
+      case "hour":
+        return "hourly";
+      case "hour of day":
+        return "by hour of day";
+      case "minute":
+        return "by minute";
       default:
         return null;
     }

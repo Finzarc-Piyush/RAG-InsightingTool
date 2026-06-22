@@ -9,6 +9,9 @@ import {
   parseFlexibleDate,
   sanitizeDateStringForParse,
   classifyAsTimeOfDay,
+  newIntradayStats,
+  accumulateIntraday,
+  intradayResolution,
 } from './dateUtils.js';
 import { isLikelyIdentifierColumnName, isIdentifierLikeNumericColumn } from './columnIdHeuristics.js';
 import { agentLog } from './agents/runtime/agentLogger.js';
@@ -567,14 +570,37 @@ function formatLocalYMD(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Prefer YYYY-MM-DD when the source has no explicit time; otherwise full ISO UTC. */
+/** Naive wall-clock "YYYY-MM-DD HH:MM:SS" from LOCAL components (no TZ suffix). */
+function formatLocalYMDHMS(d: Date): string {
+  return (
+    `${formatLocalYMD(d)} ` +
+    `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+  );
+}
+
+/** Naive wall-clock "YYYY-MM-DD HH:MM:SS" from UTC components (Excel cells carry the displayed time in UTC). */
+function formatUtcYMDHMS(d: Date): string {
+  return (
+    `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')} ` +
+    `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`
+  );
+}
+
+/**
+ * Canonical storage form for a date/datetime cell.
+ *  - No time component  → "YYYY-MM-DD" (date-only).
+ *  - Intraday timestamp → naive wall-clock "YYYY-MM-DD HH:MM:SS" (NO `Z`/offset).
+ * Intraday values are stored as wall-clock so DuckDB `EXTRACT(hour …)` returns the
+ * hour the user typed regardless of server TZ (production runs UTC; local==UTC there).
+ * Storing `toISOString()` (UTC) here previously shifted the hour on non-UTC hosts.
+ */
 function toCanonicalDateStorage(raw: unknown, parsed: Date): string {
   if (raw instanceof Date) {
     // Excel date cells have no time component. xlsx parses them as Date objects
     // at UTC midnight (00:00 UTC). On non-UTC servers isLocalMidnight() returns
-    // false, causing toISOString() to be used ("2018-01-03T00:00:00.000Z").
-    // DuckDB cannot TRY_CAST that form directly to DATE → inline SQL returns null.
-    // Treat UTC midnight as date-only too so DuckDB always gets "YYYY-MM-DD".
+    // false. DuckDB cannot TRY_CAST a `…Z` instant directly to DATE → inline SQL
+    // returns null. Treat midnight (local or UTC) as date-only so DuckDB always
+    // gets "YYYY-MM-DD"; otherwise keep the intraday time as naive wall-clock.
     const isUtcMidnight =
       parsed.getUTCHours() === 0 &&
       parsed.getUTCMinutes() === 0 &&
@@ -582,14 +608,17 @@ function toCanonicalDateStorage(raw: unknown, parsed: Date): string {
       parsed.getUTCMilliseconds() === 0;
     return isLocalMidnight(parsed) || isUtcMidnight
       ? formatLocalYMD(parsed)
-      : parsed.toISOString();
+      : formatUtcYMDHMS(parsed);
   }
   const t = sanitizeDateStringForParse(String(raw));
-  const hasExplicitTime = /T\d{2}:\d{2}/.test(t) || /\b\d{1,2}:\d{2}:\d{2}\b/.test(t);
+  // Any space- OR T-separated time component (HH:MM or HH:MM:SS) counts as intraday.
+  const hasExplicitTime = /[ T]\d{1,2}:\d{2}(:\d{2})?/.test(t);
   if (!hasExplicitTime) {
     return formatLocalYMD(parsed);
   }
-  return parsed.toISOString();
+  // `parsed` was built from LOCAL components by parseFlexibleDate's datetime branch
+  // (or normalized from an explicit offset), so local components are the wall clock.
+  return formatLocalYMDHMS(parsed);
 }
 
 /**
@@ -868,12 +897,20 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     // the first 1000 rows would cluster at one end. Cost is O(rows) per date
     // column at upload time — fine for the once-per-upload pipeline.
     let dateRange:
-      | { minIso: string; maxIso: string; distinctDayCount: number; spanDays: number }
+      | {
+          minIso: string;
+          maxIso: string;
+          distinctDayCount: number;
+          spanDays: number;
+          temporalResolution?: "day" | "sub_day";
+          distinctHourCount?: number;
+        }
       | undefined;
     if (isDate) {
       let minMs = Number.POSITIVE_INFINITY;
       let maxMs = Number.NEGATIVE_INFINITY;
       const distinctDays = new Set<string>();
+      const intraday = newIntradayStats();
       for (const row of data) {
         const v = row[col];
         if (v === null || v === undefined || v === "") continue;
@@ -888,13 +925,17 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
         if (ms < minMs) minMs = ms;
         if (ms > maxMs) maxMs = ms;
         distinctDays.add(d.toISOString().slice(0, 10));
+        accumulateIntraday(intraday, d);
       }
       if (Number.isFinite(minMs) && Number.isFinite(maxMs)) {
+        const { temporalResolution, distinctHourCount } = intradayResolution(intraday);
         dateRange = {
           minIso: new Date(minMs).toISOString().slice(0, 10),
           maxIso: new Date(maxMs).toISOString().slice(0, 10),
           distinctDayCount: distinctDays.size,
           spanDays: Math.max(0, Math.floor((maxMs - minMs) / 86_400_000)),
+          temporalResolution,
+          distinctHourCount,
         };
       }
     }

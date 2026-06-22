@@ -1936,6 +1936,10 @@ export const temporalFacetGrainSchema = z.enum([
   'quarter',
   'half_year',
   'year',
+  // Sub-day grains (Wave H2). Computed on the fly; never materialized as facet columns.
+  'hour',
+  'hour_of_day',
+  'minute',
 ]);
 
 export const temporalFacetColumnMetaSchema = z.object({
@@ -2042,6 +2046,12 @@ export const dataSummarySchema = z.object({
         maxIso: z.string(),
         distinctDayCount: z.number().int().nonnegative(),
         spanDays: z.number().int().nonnegative(),
+        /** Wave H1 · 'sub_day' when the column carries ≥2 distinct non-midnight
+         * times (intraday detail). The gate that lets the grain authority offer
+         * an hour/minute/hour-of-day axis; absent/'day' ⇒ never sub-day. */
+        temporalResolution: z.enum(["day", "sub_day"]).optional(),
+        /** Distinct hours (0–23) observed — bounds the hour-of-day bucket count. */
+        distinctHourCount: z.number().int().nonnegative().optional(),
       })
       .optional(),
     /** Currency tag for numeric columns whose cells carried a currency

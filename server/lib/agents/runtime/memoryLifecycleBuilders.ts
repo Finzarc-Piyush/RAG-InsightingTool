@@ -250,6 +250,9 @@ function describeComputedDef(def: ComputedColumnDef): string {
   if (def.type === "datetime_concat") {
     return `datetime_concat(${def.dateColumn}, ${def.timeColumn})`;
   }
+  if (def.type === "time_threshold_bucket") {
+    return `time_threshold_bucket(${def.column} ≤ ${def.threshold} → "${def.atOrBeforeLabel}" else "${def.afterLabel}")`;
+  }
   return `${def.leftColumn} ${def.op} ${def.rightColumn}`;
 }
 

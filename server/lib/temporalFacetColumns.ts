@@ -22,7 +22,15 @@ export type TemporalFacetGrain =
   | "month"
   | "quarter"
   | "half_year"
-  | "year";
+  | "year"
+  // Sub-day grains (Wave H1–H5). Computed ON THE FLY via facetColumnInlineDuckDbExpr;
+  // deliberately NOT in the `GRAINS` materialization array, so no "Hour · X" column
+  // is ever written at ingest (the user's "dynamic, not pre-determined buckets").
+  // `hour`/`minute` are absolute timeline buckets; `hour_of_day` is the cyclical
+  // 0–23 bucket aggregated across days ("peak/typical hour"), like `monthOnly`.
+  | "hour"
+  | "hour_of_day"
+  | "minute";
 
 export interface TemporalFacetColumnMeta {
   name: string;
@@ -36,7 +44,13 @@ export type CoarseTimeIntent =
   | "half_year"
   | "month"
   | "week"
-  | "day";
+  | "day"
+  // Sub-day intents (Wave H3). `hour` is the bare/absolute reading (the authority
+  // downgrades it to `hour_of_day` on multi-day spans); `hour_of_day` is forced by
+  // explicitly-cyclical phrasing ("peak hour", "time of day"); `minute` is explicit.
+  | "hour"
+  | "hour_of_day"
+  | "minute";
 
 const GRAINS: TemporalFacetGrain[] = [
   "date",
@@ -54,6 +68,9 @@ export const GRAIN_TO_PERIOD: Record<TemporalFacetGrain, DatePeriod> = {
   quarter: "quarter",
   half_year: "half_year",
   year: "year",
+  hour: "hour",
+  hour_of_day: "hour_of_day",
+  minute: "minute",
 };
 
 /** Same grain labels as client `temporalFacetDisplay.ts`. */
@@ -64,9 +81,12 @@ const FACET_GRAIN_LABEL: Record<TemporalFacetGrain, string> = {
   quarter: "Quarter",
   half_year: "Half-year",
   year: "Year",
+  hour: "Hour",
+  hour_of_day: "Hour of day",
+  minute: "Minute",
 };
 
-const DISPLAY_FACET_HEADER_RE = /^(Day|Week|Month|Quarter|Half-year|Year) · /;
+const DISPLAY_FACET_HEADER_RE = /^(Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · /;
 
 const LABEL_TO_GRAIN_TOKEN: Record<string, string> = {
   Day: "date",
@@ -75,6 +95,9 @@ const LABEL_TO_GRAIN_TOKEN: Record<string, string> = {
   Quarter: "quarter",
   "Half-year": "half_year",
   Year: "year",
+  Hour: "hour",
+  "Hour of day": "hour_of_day",
+  Minute: "minute",
 };
 
 /**
@@ -104,6 +127,7 @@ export interface PeriodDimensionBinding {
  * when its own shape matches. Relative isos (`L12M-2YA`, `YTD-TY`, `MAT-…`,
  * `XXXX-Q1`) match nothing → null in all grains (correct: no calendar grain).
  */
+const NEVER_MATCH_RE = /(?!)/;
 const PERIOD_ISO_GRAIN_RE: Record<TemporalFacetGrain, RegExp> = {
   year: /^(\d{4})(?:-(?:Q[1-4]|H[12]|\d{2}|W\d{2}|\d{2}-\d{2}))?$/,
   half_year: /^\d{4}-H[12]$/,
@@ -111,6 +135,10 @@ const PERIOD_ISO_GRAIN_RE: Record<TemporalFacetGrain, RegExp> = {
   month: /^\d{4}-\d{2}$/,
   week: /^\d{4}-W\d{2}$/,
   date: /^\d{4}-\d{2}-\d{2}$/,
+  // Melted wide-format periods have no sub-day shape — never match.
+  hour: NEVER_MATCH_RE,
+  hour_of_day: NEVER_MATCH_RE,
+  minute: NEVER_MATCH_RE,
 };
 
 /**
@@ -204,7 +232,7 @@ export function isTemporalFacetColumnKey(name: string): boolean {
 export function parseTemporalFacetDisplayKey(
   key: string
 ): { sourceColumn: string; grain: TemporalFacetGrain } | null {
-  const m = key.match(/^(Day|Week|Month|Quarter|Half-year|Year) · (.+)$/);
+  const m = key.match(/^(Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · (.+)$/);
   if (!m) return null;
   const grain = LABEL_TO_GRAIN_TOKEN[m[1]!] as TemporalFacetGrain | undefined;
   if (!grain) return null;
@@ -248,7 +276,7 @@ export function temporalFacetGrainTokenFromFacetColumnName(name: string): string
     if (i <= 0) return null;
     return without.slice(0, i);
   }
-  const m = name.match(/^(Day|Week|Month|Quarter|Half-year|Year) · /);
+  const m = name.match(/^(Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · /);
   return m ? LABEL_TO_GRAIN_TOKEN[m[1]!] ?? null : null;
 }
 
@@ -316,7 +344,7 @@ export function facetColumnInlineDuckDbExpr(
   tableColumns: Set<string>,
   periodDimension?: PeriodDimensionBinding
 ): string | null {
-  const m = logical.match(/^(Day|Week|Month|Quarter|Half-year|Year) · (.+)$/);
+  const m = logical.match(/^(Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · (.+)$/);
   if (!m) return null;
   const grainLabel = m[1]!;
   const sourceCol = m[2]!;
@@ -363,6 +391,13 @@ export function facetColumnInlineDuckDbExpr(
   // back through TIMESTAMP for ISO datetime strings like "2018-01-03T00:00:00.000Z"
   // that DuckDB cannot auto-cast straight to DATE.
   const src = `COALESCE(TRY_CAST(${q} AS DATE), CAST(TRY_CAST(${q} AS TIMESTAMP) AS DATE))`;
+  // Sub-day grains (Wave H5) need the TIMESTAMP (the DATE cast above is destructive
+  // of the time). Pure time-of-day columns ("09:45:34", no date) cast to TIME and
+  // can only bucket cyclically — so absolute hour/minute COALESCE down to the
+  // clock-hour / clock-minute. Keys match normalizeDateToPeriod exactly so the
+  // DuckDB path and the in-JS path agree.
+  const ts = `TRY_CAST(${q} AS TIMESTAMP)`;
+  const tm = `TRY_CAST(${q} AS TIME)`;
   switch (grain) {
     case "year":
       return `strftime('%Y', ${src})`;
@@ -376,6 +411,12 @@ export function facetColumnInlineDuckDbExpr(
       return `strftime('%Y-%m-%d', ${src})`;
     case "week":
       return `printf('%d-W%02d', date_part('isoyear', ${src}), date_part('week', ${src}))`;
+    case "hour":
+      return `COALESCE(strftime(date_trunc('hour', ${ts}), '%Y-%m-%d %H'), printf('%02d', EXTRACT(hour FROM ${tm})))`;
+    case "minute":
+      return `COALESCE(strftime(date_trunc('minute', ${ts}), '%Y-%m-%d %H:%M'), printf('%02d:%02d', EXTRACT(hour FROM ${tm}), EXTRACT(minute FROM ${tm})))`;
+    case "hour_of_day":
+      return `COALESCE(printf('%02d', EXTRACT(hour FROM ${ts})), printf('%02d', EXTRACT(hour FROM ${tm})))`;
     default:
       return null;
   }
@@ -701,6 +742,37 @@ export function detectCoarseTimeIntentFromMessage(
 ): CoarseTimeIntent | null {
   if (!message?.trim()) return null;
   const q = message.toLowerCase();
+  // Sub-day intents (Wave H3) — checked FIRST (most granular wins). Explicitly
+  // cyclical phrasings force hour_of_day; a bare "hourly"/"by hour" returns "hour"
+  // and the authority downgrades it to hour_of_day when the data spans many days.
+  // Deliberately NOT triggered by "working hours" / "man-hours" (duration asks) —
+  // those carry no "hourly" / "by-hour" / "hour-of-day" bucketing cue.
+  if (
+    /\b(peak|busiest|quietest|slowest)\s+hours?\b/.test(q) ||
+    /\bhours?\s+of\s+(?:the\s+)?day\b/.test(q) ||
+    /\btime\s+of\s+(?:the\s+)?day\b/.test(q) ||
+    /\b(?:which|what)\s+hour\b/.test(q) ||
+    /\bhourly\s+(pattern|profile|distribution|breakdown|seasonality|cycle)\b/.test(q)
+  ) {
+    return "hour_of_day";
+  }
+  if (
+    /\bby\s+minute\b/.test(q) ||
+    /\bper\s+minute\b/.test(q) ||
+    /\bminute[-\s]by[-\s]minute\b/.test(q) ||
+    /\bevery\s+\d+\s*min(?:ute)?s?\b/.test(q)
+  ) {
+    return "minute";
+  }
+  if (
+    /\bhourly\b/.test(q) ||
+    /\b(?:by|per|each)\s+hour\b/.test(q) ||
+    /\bby\s+the\s+hour\b/.test(q) ||
+    /\bhour[-\s]by[-\s]hour\b/.test(q) ||
+    /\bintraday\b/.test(q)
+  ) {
+    return "hour";
+  }
   if (
     /\b(half year|half-year|semiannual|semi-annual|semi annual)\b/.test(q) ||
     /\bh1\b/.test(q) ||
@@ -746,6 +818,9 @@ const INTENT_TO_GRAIN: Record<CoarseTimeIntent, TemporalFacetGrain> = {
   month: "month",
   week: "week",
   day: "date",
+  hour: "hour",
+  hour_of_day: "hour_of_day",
+  minute: "minute",
 };
 
 export function resolveDateColumnForGroupBy(
@@ -781,6 +856,12 @@ export function coarseTimeIntentFromQueryPlanDatePeriod(
       return "half_year";
     case "year":
       return "year";
+    case "hour":
+      return "hour";
+    case "hour_of_day":
+      return "hour_of_day";
+    case "minute":
+      return "minute";
     default:
       return null;
   }
@@ -823,7 +904,14 @@ export function remapGroupByToTemporalFacet(params: {
 
   const grain = INTENT_TO_GRAIN[intent];
   const facetKey = facetColumnKey(source, grain);
-  if (!availableKeys.has(facetKey)) {
+  const isSubDay = grain === "hour" || grain === "minute" || grain === "hour_of_day";
+  // Calendar facets must be materialized (availableKeys has the facet key). Sub-day
+  // facets are NEVER materialized — they're computed on the fly from the source — so
+  // allow the rewrite whenever the source date column itself is present on the frame.
+  const canRemap = isSubDay
+    ? availableKeys.has(facetKey) || availableKeys.has(source)
+    : availableKeys.has(facetKey);
+  if (!canRemap) {
     return { groupBy: groupByColumn, remapped: false };
   }
   return { groupBy: facetKey, remapped: true };

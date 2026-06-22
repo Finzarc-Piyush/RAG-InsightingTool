@@ -309,7 +309,20 @@ export const queryPlanBodySchema = z
   .object({
     groupBy: z.array(z.string().min(1)).optional(),
     dateAggregationPeriod: z
-      .enum(["day", "week", "half_year", "month", "monthOnly", "quarter", "year"])
+      .enum([
+        "day",
+        "week",
+        "half_year",
+        "month",
+        "monthOnly",
+        "quarter",
+        "year",
+        // Sub-day periods (Wave H2 vocab; bucketing SQL wired in H5). Tokens are
+        // string-identical to the facet grains so remap is a pass-through.
+        "hour",
+        "hour_of_day",
+        "minute",
+      ])
       .nullable()
       .optional(),
     aggregations: z.array(aggregationEntrySchema).optional(),

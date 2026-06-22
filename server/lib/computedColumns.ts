@@ -40,6 +40,21 @@ const computedColumnDefSchema = z.discriminatedUnion("type", [
       timeColumn: z.string().min(1).max(200),
     })
     .strict(),
+  // CMP2 · time-of-day THRESHOLD bucket — one step for "on time vs late" style
+  // categorisation. Parses `column` as a clock time (pure HH:MM:SS or the time
+  // part of a datetime), compares to `threshold` (HH:MM[:SS]); ≤ threshold →
+  // `atOrBeforeLabel`, after → `afterLabel`. Sentinel rows ("Absent") → NULL.
+  // Then groupBy/count the new column. Avoids the datetime_concat +
+  // derive_dimension_bucket two-step for the common late/on-time split.
+  z
+    .object({
+      type: z.literal("time_threshold_bucket"),
+      column: z.string().min(1).max(200),
+      threshold: z.string().min(1).max(8),
+      atOrBeforeLabel: z.string().min(1).max(60),
+      afterLabel: z.string().min(1).max(60),
+    })
+    .strict(),
 ]);
 
 export const addComputedColumnsArgsSchema = z
@@ -108,6 +123,27 @@ function computeCellValue(
     if (def.clampNegative && days < 0) return null;
     return days;
   }
+  if (def.type === "time_threshold_bucket") {
+    const raw = row[def.column];
+    if (raw == null || String(raw).trim() === "") return null;
+    const s = String(raw).trim();
+    const sentinels = ctx?.sentinelByColumn?.[def.column];
+    if (sentinels && sentinels.has(s.toLowerCase())) return null;
+    // Accept a pure clock string OR the time part of a datetime cell.
+    let timeStr = normaliseTimeString(s);
+    if (!timeStr) {
+      const d = parseRowDate(raw);
+      if (!d) return null;
+      timeStr =
+        `${String(d.getHours()).padStart(2, "0")}:` +
+        `${String(d.getMinutes()).padStart(2, "0")}:` +
+        `${String(d.getSeconds()).padStart(2, "0")}`;
+    }
+    const threshold = normaliseTimeString(def.threshold);
+    if (!threshold) return null;
+    // Zero-padded HH:MM:SS compares lexically = chronologically.
+    return timeStr <= threshold ? def.atOrBeforeLabel : def.afterLabel;
+  }
   if (def.type === "datetime_concat") {
     const rawTime = row[def.timeColumn];
     // Sentinel rows ("Absent" etc.) collapse to null so they drop out of
@@ -150,7 +186,7 @@ function isNumericDef(def: ComputedColumnDef): boolean {
 }
 
 function isTextDef(def: ComputedColumnDef): boolean {
-  return def.type === "datetime_concat";
+  return def.type === "datetime_concat" || def.type === "time_threshold_bucket";
 }
 
 /** Per-column non-null counts for the newly-added computed columns. */
@@ -162,6 +198,9 @@ function failureMessageForDef(name: string, def: ComputedColumnDef): string {
   }
   if (def.type === "datetime_concat") {
     return `Computed column "${name}" produced null for every row. Check that "${def.dateColumn}" contains parseable dates and "${def.timeColumn}" contains HH:MM:SS time strings (sentinel placeholders like "Absent" are intentionally NULLed).`;
+  }
+  if (def.type === "time_threshold_bucket") {
+    return `Computed column "${name}" produced null for every row. Check that "${def.column}" contains clock times (HH:MM:SS) or datetimes and "${def.threshold}" is a valid HH:MM[:SS] cutoff.`;
   }
   return `Computed column "${name}" produced null for every row. Check that "${def.leftColumn}" and "${def.rightColumn}" contain valid numbers.`;
 }
@@ -207,6 +246,13 @@ export function applyAddComputedColumns(
       if (!allowed.has(def.timeColumn)) {
         return { ok: false, error: `Column not in schema: ${def.timeColumn}` };
       }
+    } else if (def.type === "time_threshold_bucket") {
+      if (!allowed.has(def.column)) {
+        return { ok: false, error: `Column not in schema: ${def.column}` };
+      }
+      if (!normaliseTimeString(def.threshold)) {
+        return { ok: false, error: `Invalid time threshold "${def.threshold}" (expected HH:MM or HH:MM:SS).` };
+      }
     }
   }
 
@@ -214,14 +260,15 @@ export function applyAddComputedColumns(
   // per-row compute step can skip "Absent" et al. without re-walking the
   // schema on every row.
   const sentinelByColumn: Record<string, Set<string>> = {};
-  for (const { def } of args.columns) {
-    if (def.type !== "datetime_concat") continue;
-    if (sentinelByColumn[def.timeColumn]) continue;
-    const colMeta = summary.columns.find((c) => c.name === def.timeColumn);
+  const noteSentinels = (col: string) => {
+    if (sentinelByColumn[col]) return;
+    const colMeta = summary.columns.find((c) => c.name === col);
     const sentinels = colMeta?.timeOfDay?.sentinelValues ?? [];
-    sentinelByColumn[def.timeColumn] = new Set(
-      sentinels.map((s) => s.toLowerCase())
-    );
+    sentinelByColumn[col] = new Set(sentinels.map((s) => s.toLowerCase()));
+  };
+  for (const { def } of args.columns) {
+    if (def.type === "datetime_concat") noteSentinels(def.timeColumn);
+    else if (def.type === "time_threshold_bucket") noteSentinels(def.column);
   }
   const ctx: ComputeContext = { sentinelByColumn };
 

@@ -9,7 +9,50 @@ export type DatePeriod =
   | 'month'
   | 'quarter'
   | 'year'
-  | 'monthOnly';
+  | 'monthOnly'
+  // Sub-day (Wave H2). `hour`/`minute` are absolute timeline buckets; `hour_of_day`
+  // is the cyclical 0–23 bucket (zero-padded key so lexicographic sort = clock order).
+  // Snake_case to stay string-identical to the facet-grain + executor period tokens.
+  | 'hour'
+  | 'minute'
+  | 'hour_of_day';
+
+/**
+ * Per-column intraday detection (Wave H1). A date column carries sub-day detail
+ * only when it has ≥2 DISTINCT non-midnight times — a constant time (e.g. every
+ * row at 00:00 or a placeholder 09:00) is treated as day-grain so pure-daily data
+ * is never promoted to an hour axis. Accumulated identically on every ingest path
+ * (`createDataSummary`, `deriveDateRangeFromRows`) so the grain authority's input
+ * is uniform (invariant L-019). Hours are read from LOCAL components to match the
+ * wall-clock storage form and DuckDB `EXTRACT(hour …)`.
+ */
+export interface IntradayStats {
+  nonMidnightDistinctHm: Set<string>;
+  distinctHours: Set<number>;
+}
+
+export function newIntradayStats(): IntradayStats {
+  return { nonMidnightDistinctHm: new Set(), distinctHours: new Set() };
+}
+
+export function accumulateIntraday(stats: IntradayStats, d: Date): void {
+  const h = d.getHours();
+  const mi = d.getMinutes();
+  const s = d.getSeconds();
+  stats.distinctHours.add(h);
+  if (h !== 0 || mi !== 0 || s !== 0) {
+    stats.nonMidnightDistinctHm.add(`${h}:${mi}`);
+  }
+}
+
+export function intradayResolution(
+  stats: IntradayStats
+): { temporalResolution: 'day' | 'sub_day'; distinctHourCount: number } {
+  return {
+    temporalResolution: stats.nonMidnightDistinctHm.size >= 2 ? 'sub_day' : 'day',
+    distinctHourCount: stats.distinctHours.size,
+  };
+}
 
 /** ISO week: key YYYY-Www, label Www YYYY (week-year may differ from calendar year at boundaries). */
 export function isoWeekKeyAndLabel(d: Date): { normalizedKey: string; displayLabel: string } {
@@ -59,6 +102,40 @@ export function sanitizeDateStringForParse(input: string): string {
 }
 
 /**
+ * Build a Date from explicit Y/M/D/H/M/S components.
+ *  - No tz  → LOCAL-component Date (its local clock == the typed wall clock).
+ *  - tz set → absolute instant from the explicit Z/offset (deterministic).
+ * Returns null when any component is out of range.
+ */
+function dateTimeFromComponents(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  tz: string | undefined
+): Date | null {
+  if (
+    year < 1900 || year > 2100 ||
+    month < 1 || month > 12 ||
+    day < 1 || day > 31 ||
+    hour > 23 || minute > 59 || second > 59
+  ) {
+    return null;
+  }
+  if (tz) {
+    const iso =
+      `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}` +
+      `T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}${tz}`;
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(year, month - 1, day, hour, minute, second);
+  return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day ? d : null;
+}
+
+/**
  * Flexible date parser for Date objects and common date strings.
  */
 export function parseFlexibleDate(dateStr: string | Date): Date | null {
@@ -99,6 +176,33 @@ export function parseFlexibleDate(dateStr: string | Date): Date | null {
   // Reject ambiguous month-prefix values (e.g., "1 something", "12abc")
   // unless they match explicit date formats we intentionally accept.
   const startsWithMonthPrefix = /^(?:[1-9]|1[0-2])(?:\D|$)/.test(str);
+
+  // Datetime with an explicit time component (space- OR T-separated):
+  //   "2026-06-22 14:30", "2026-06-22 14:30:00", "2026-06-22T14:30:00.5Z",
+  //   "06/22/2026 14:30". The date-only branches below are $-anchored and would
+  //   reject these, silently dropping the time. Build from LOCAL components so the
+  //   stored wall-clock hour matches what the user typed (no host-TZ shift); honor
+  //   an explicit Z/offset as an absolute instant when one is literally present.
+  const ymdTime = str.match(
+    /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?\s*(Z|[+-]\d{2}:?\d{2})?$/
+  );
+  if (ymdTime) {
+    return dateTimeFromComponents(
+      Number(ymdTime[1]), Number(ymdTime[2]), Number(ymdTime[3]),
+      Number(ymdTime[4]), Number(ymdTime[5]), ymdTime[6] ? Number(ymdTime[6]) : 0,
+      ymdTime[7]
+    );
+  }
+  const mdyTime = str.match(
+    /^(\d{1,2})[-/](\d{1,2})[-/](\d{4})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?\s*(Z|[+-]\d{2}:?\d{2})?$/
+  );
+  if (mdyTime) {
+    return dateTimeFromComponents(
+      Number(mdyTime[3]), Number(mdyTime[1]), Number(mdyTime[2]),
+      Number(mdyTime[4]), Number(mdyTime[5]), mdyTime[6] ? Number(mdyTime[6]) : 0,
+      mdyTime[7]
+    );
+  }
 
   const ymd = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
   if (ymd) {
@@ -341,6 +445,28 @@ export function normalizeDateToPeriod(
       normalizedKey = `${year}-H${month < 6 ? 1 : 2}`;
       displayLabel = month < 6 ? `H1 ${year}` : `H2 ${year}`;
       break;
+    case 'hour': {
+      const ymd = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const hh = String(date.getHours()).padStart(2, '0');
+      normalizedKey = `${ymd} ${hh}`;
+      displayLabel = `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${hh}:00`;
+      break;
+    }
+    case 'minute': {
+      const ymd = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const hh = String(date.getHours()).padStart(2, '0');
+      const mm = String(date.getMinutes()).padStart(2, '0');
+      normalizedKey = `${ymd} ${hh}:${mm}`;
+      displayLabel = `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${hh}:${mm}`;
+      break;
+    }
+    case 'hour_of_day': {
+      // Cyclical 0–23, aggregated across days. Zero-padded so "08" < "14" lexically.
+      const hh = String(date.getHours()).padStart(2, '0');
+      normalizedKey = hh;
+      displayLabel = `${hh}:00`;
+      break;
+    }
     default:
       return null;
   }
