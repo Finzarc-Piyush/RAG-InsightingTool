@@ -94,3 +94,74 @@ describe("Wave T4 · build_chart grain parameter", () => {
     assert.equal(out.memorySlots?.chart_x, "Date");
   });
 });
+
+describe("build_chart · temporal x-axis coerces bar → line (single chart-type authority)", () => {
+  it("type:'bar' on a raw date column is coerced to line", async () => {
+    const reg = new ToolRegistry();
+    registerDefaultTools(reg);
+    const data = dailyRows(false); // Date + Sales
+    const ctx = ctxFor(data, summaryFor(["Date", "Sales"]));
+    const out = await reg.execute(
+      "build_chart",
+      { type: "bar", x: "Date", y: "Sales", aggregate: "sum" },
+      ctx,
+    );
+    assert.equal(out.ok, true);
+    assert.equal((out.charts?.[0] as { type: string })?.type, "line");
+  });
+
+  it("type:'bar' on a temporal facet column ('Week · Date') is coerced to line", async () => {
+    const reg = new ToolRegistry();
+    registerDefaultTools(reg);
+    const data = Array.from({ length: 6 }, (_, i) => ({
+      "Week · Date": `2026-W${14 + i}`,
+      Sales: 100 + i,
+    }));
+    const summary = {
+      rowCount: data.length,
+      columnCount: 2,
+      columns: [
+        { name: "Week · Date", type: "string", sampleValues: [] },
+        { name: "Sales", type: "number", sampleValues: [] },
+      ],
+      numericColumns: ["Sales"],
+      dateColumns: [], // facet absent from dateColumns — real ingest shape
+    } as unknown as DataSummary;
+    const ctx = ctxFor(data, summary);
+    const out = await reg.execute(
+      "build_chart",
+      { type: "bar", x: "Week · Date", y: "Sales", aggregate: "sum" },
+      ctx,
+    );
+    assert.equal(out.ok, true);
+    assert.equal((out.charts?.[0] as { type: string })?.type, "line");
+  });
+
+  it("type:'bar' on a plain categorical column stays a bar", async () => {
+    const reg = new ToolRegistry();
+    registerDefaultTools(reg);
+    const data = [
+      { Region: "East", Sales: 10 },
+      { Region: "West", Sales: 20 },
+      { Region: "North", Sales: 15 },
+    ];
+    const summary = {
+      rowCount: 3,
+      columnCount: 2,
+      columns: [
+        { name: "Region", type: "string", sampleValues: [] },
+        { name: "Sales", type: "number", sampleValues: [] },
+      ],
+      numericColumns: ["Sales"],
+      dateColumns: [],
+    } as unknown as DataSummary;
+    const ctx = ctxFor(data, summary);
+    const out = await reg.execute(
+      "build_chart",
+      { type: "bar", x: "Region", y: "Sales", aggregate: "sum" },
+      ctx,
+    );
+    assert.equal(out.ok, true);
+    assert.equal((out.charts?.[0] as { type: string })?.type, "bar");
+  });
+});

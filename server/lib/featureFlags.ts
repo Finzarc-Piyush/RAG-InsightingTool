@@ -170,6 +170,12 @@ export const FEATURE_FLAGS = {
     purpose: "Auto-attach reference/comparison layers to charts.",
     lifecycle: "stable",
   },
+  QUICK_ANSWER_CHART_ENABLED: {
+    default: true,
+    purpose:
+      "On a quick-answer lookup with a breakdown, also attach ONE chart of all performers sorted by performance (the pivot is already derived downstream). Kill switch only — off on `=false`.",
+    lifecycle: "stable",
+  },
   DISABLE_TEMPORAL_FACETS: {
     default: false,
     purpose:

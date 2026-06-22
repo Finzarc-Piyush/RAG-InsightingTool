@@ -54,10 +54,16 @@ type AgentSseEmitter = (event: string, data: unknown) => void;
 import {
   detectQuickLookup,
   isQuickLookupEnabled,
+  isQuickAnswerChartEnabled,
 } from "./quickAnswerDetector.js";
 import { runQuickLookupPlanner } from "./quickAnswerPlanner.js";
 import { buildQuickAnswerFollowUps } from "./quickAnswerFollowUps.js";
 import { isDirectFactualQuestion } from "./isDirectFactualQuestion.js";
+import {
+  buildQuickAnswerChart,
+  deriveLeaderboardPlan,
+} from "./quickAnswerChart.js";
+import type { ChartSpec } from "../../../shared/schema.js";
 import { agentLog } from "./agentLogger.js";
 import { errorMessage } from "../../../utils/errorMessage.js";
 import {
@@ -308,36 +314,10 @@ export async function tryQuickAnswer(
     args: { plan: normalizedPlan },
   });
 
-  let rows: Record<string, unknown>[] = [];
-  let inputRowCount = 0;
-  let execOk = false;
-  let execError: string | undefined;
-
-  const tryDuck =
-    Boolean(ctx.columnarStoragePath) &&
-    Boolean(ctx.sessionId) &&
-    canExecuteQueryPlanOnDuckDb(normalizedPlan);
-
-  if (tryDuck) {
-    // PERF-10 · Reuse the per-turn shared DuckDB handle (closed by the agent
-    // loop's fast-path teardown when this path returns).
-    const { storage: sharedStorage } = await getTurnColumnarStorage(ctx);
-    const duck = await executeQueryPlanOnDuckDb(
-      ctx.sessionId,
-      normalizedPlan,
-      ctx.summary,
-      ctx.chatDocument,
-      ctx.abortSignal,
-      sharedStorage
-    );
-    if (duck.ok) {
-      rows = duck.rows;
-      inputRowCount = duck.inputRowCount;
-      execOk = true;
-    } else {
-      execError = duck.error;
-    }
-  }
+  // Execute a query plan via DuckDB when eligible, else the in-memory fallback.
+  // Factored into a closure so the leaderboard re-execution (for the chart)
+  // reuses the exact same branch as the main query.
+  //
   // This fast path is an optimization layer; the in-memory fallback gives the
   // user a 2-second answer instead of falling through to the slow full loop.
   // The "DuckDB always for aggregations" architectural contract is enforced at
@@ -345,16 +325,57 @@ export async function tryQuickAnswer(
   // registerTools.ts) — that's where the slow path would otherwise silently
   // grind through Cosmos-loaded rows. The fast path stays permissive so users
   // with short questions still get fast results.
-  if (!execOk) {
-    const mem = executeQueryPlan(ctx.data, ctx.summary, normalizedPlan);
-    if (mem.ok) {
-      rows = mem.data;
-      inputRowCount = ctx.data.length;
-      execOk = true;
-    } else {
-      execError = mem.error;
+  const executePlanRows = async (
+    plan: QueryPlanBody
+  ): Promise<
+    | { ok: true; rows: Record<string, unknown>[]; inputRowCount: number }
+    | { ok: false; error: string }
+  > => {
+    let outRows: Record<string, unknown>[] | undefined;
+    let outInput = 0;
+    let err: string | undefined;
+    const duckEligible =
+      Boolean(ctx.columnarStoragePath) &&
+      Boolean(ctx.sessionId) &&
+      canExecuteQueryPlanOnDuckDb(plan);
+    if (duckEligible) {
+      // PERF-10 · Reuse the per-turn shared DuckDB handle (memoised on ctx;
+      // closed by the agent loop's fast-path teardown when this path returns).
+      const { storage: sharedStorage } = await getTurnColumnarStorage(ctx);
+      const duck = await executeQueryPlanOnDuckDb(
+        ctx.sessionId,
+        plan,
+        ctx.summary,
+        ctx.chatDocument,
+        ctx.abortSignal,
+        sharedStorage
+      );
+      if (duck.ok) {
+        outRows = duck.rows;
+        outInput = duck.inputRowCount;
+      } else {
+        err = duck.error;
+      }
     }
-  }
+    if (!outRows) {
+      const mem = executeQueryPlan(ctx.data, ctx.summary, plan);
+      if (mem.ok) {
+        outRows = mem.data;
+        outInput = ctx.data.length;
+      } else {
+        err = mem.error;
+      }
+    }
+    return outRows
+      ? { ok: true, rows: outRows, inputRowCount: outInput }
+      : { ok: false, error: err ?? "executor failed" };
+  };
+
+  const mainExec = await executePlanRows(normalizedPlan);
+  const rows: Record<string, unknown>[] = mainExec.ok ? mainExec.rows : [];
+  const inputRowCount = mainExec.ok ? mainExec.inputRowCount : 0;
+  const execOk = mainExec.ok;
+  const execError = mainExec.ok ? undefined : mainExec.error;
 
   const toolCallEndedAt = Date.now();
 
@@ -445,6 +466,48 @@ export async function tryQuickAnswer(
       ? rows.slice(0, QUICK_LOOKUP_PREVIEW_CAP)
       : rows;
 
+  // 8b) Quick-answer chart (flag-gated, default ON). A lookup with a breakdown
+  // also gets ONE chart of all performers sorted by performance, so the user
+  // sees the broader picture — not just the concise answer table. The pivot is
+  // derived downstream (derivePivotDefaultsFromExecution re-queries base, so it
+  // already shows all performers); this fills the chart gap and reaches parity
+  // with the full-loop minimal-depth path. NOT speculative padding — it
+  // visualises the SAME answer data (invariant #12). Best-effort: any failure
+  // leaves the quick answer unchanged (no chart) and never breaks the fast path.
+  let quickAnswerCharts: ChartSpec[] | undefined;
+  if (isQuickAnswerChartEnabled()) {
+    try {
+      // Single-winner answers (e.g. "who is THE top performer" → limit 1 → one
+      // row) can't chart themselves; re-execute a leaderboard variant to get
+      // the full ranking the chart needs.
+      let leaderboardRows: Record<string, unknown>[] | null = null;
+      if (previewRows.length < 2) {
+        const lb = deriveLeaderboardPlan(normalizedPlan);
+        if (lb) {
+          const lbExec = await executePlanRows(lb.plan);
+          if (lbExec.ok && lbExec.rows.length >= 2) leaderboardRows = lbExec.rows;
+        }
+      }
+      const chart = buildQuickAnswerChart({
+        rows: previewRows,
+        leaderboardRows,
+        plan: normalizedPlan,
+        summary: ctx.summary,
+        question: ctx.question,
+      });
+      if (chart) {
+        quickAnswerCharts = [chart];
+        agentLog("quick_lookup.chart_attached", {
+          turnId,
+          fromLeaderboard: leaderboardRows != null,
+          chartType: chart.type,
+        });
+      }
+    } catch (err) {
+      agentLog("quick_lookup.chart_threw", { turnId, error: errorMessage(err) });
+    }
+  }
+
   const turnStartedAt = plannerStartedAt;
   const turnEndedAt = Date.now();
 
@@ -455,6 +518,7 @@ export async function tryQuickAnswer(
     totalLatencyMs: turnEndedAt - turnStartedAt,
     rowCount: rows.length,
     inputRowCount,
+    chartCount: quickAnswerCharts?.length ?? 0,
   });
 
   // 9) Compose `AgentLoopResult`. Empty answer body — the preview table IS
@@ -464,6 +528,7 @@ export async function tryQuickAnswer(
   const result: AgentLoopResult = {
     answer: "",
     table: previewRows,
+    ...(quickAnswerCharts ? { charts: quickAnswerCharts } : {}),
     agentTrace: {
       turnId,
       startedAt: turnStartedAt,

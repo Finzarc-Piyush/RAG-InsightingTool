@@ -52,3 +52,13 @@ export function detectQuickLookup(question: string | undefined | null): boolean 
 export function isQuickLookupEnabled(): boolean {
   return isFlagOn("QUICK_LOOKUP_ENABLED");
 }
+
+/**
+ * Env-gated kill-switch for the quick-answer chart. Default ON. Set
+ * `QUICK_ANSWER_CHART_ENABLED=false` to suppress the auto-attached
+ * "all performers, sorted" chart on the quick-answer fast path (the answer
+ * table + derived pivot are unaffected).
+ */
+export function isQuickAnswerChartEnabled(): boolean {
+  return isFlagOn("QUICK_ANSWER_CHART_ENABLED");
+}

@@ -55,11 +55,34 @@ test("chartFromTable: temporal X (date column) → line chart", () => {
     }),
     question: "yearly sales trend",
   });
-  // Temporal classification may render as line or bar depending on
-  // compileChartSpec's downstream rules; just assert promotion succeeded.
+  // A raw date column on the x-axis is a time progression → must be a line.
   assert.notEqual(out, null);
+  assert.equal(out!.type, "line");
   assert.equal(out!.x, "Order_Date");
   assert.equal(out!.y, "Sales_sum");
+});
+
+test("chartFromTable: temporal facet X ('Day · Date') → line chart", () => {
+  // Facet columns are NOT in dateColumns (they live in summary.columns as
+  // type "string") — the chart-type authority must still resolve them to line.
+  const out = buildChartFromAnalyticalTable({
+    table: {
+      rows: [
+        { "Day · Date": "2026-04-01", "Compliance Visit_sum": 120 },
+        { "Day · Date": "2026-04-02", "Compliance Visit_sum": 140 },
+        { "Day · Date": "2026-04-03", "Compliance Visit_sum": 110 },
+      ],
+      columns: ["Day · Date", "Compliance Visit_sum"],
+    },
+    summary: makeSummary({
+      numericColumns: ["Compliance Visit_sum"],
+      dateColumns: ["Date"],
+    }),
+    question: "daily compliance trend",
+  });
+  assert.notEqual(out, null);
+  assert.equal(out!.type, "line");
+  assert.equal(out!.x, "Day · Date");
 });
 
 test("chartFromTable: returns null when no dimension column", () => {

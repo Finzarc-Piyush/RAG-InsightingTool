@@ -7,6 +7,7 @@ import {
 } from "../lib/agents/runtime/dashboardFeatureSweep.js";
 import type { AgentExecutionContext } from "../lib/agents/runtime/types.js";
 import type { AnalysisBrief, ChartSpec, DataSummary } from "../shared/schema.js";
+import { isTemporalFacetColumnKey } from "../lib/temporalFacetColumns.js";
 
 /** Build a ctx whose summary carries temporal-facet columns + a base date
  *  column with `dateRange`, for the W3 grain-selection tests. */
@@ -351,6 +352,201 @@ test("adds a date trend when no chart yet uses the date column", () => {
   const out = enumerateMissingDashboardCharts(ctx, []);
   const trend = out.find((c) => c.type === "line" && c.x === "OrderDate");
   assert.ok(trend, "expected a line trend on OrderDate");
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Temporal facet columns ("Day · Date", "Week · Date") must render as LINE, not
+// BAR — even though they live in summary.columns as type "string" categoricals.
+// Regression for the "Compliance Visit (avg) by Day · Date" bar bug.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Daily rows carrying materialized temporal-facet columns + two numeric
+ *  measures (one rate-named, one count-named). */
+function genFacetRows(days: number): Record<string, unknown>[] {
+  const start = new Date("2026-04-01T00:00:00");
+  const rows: Record<string, unknown>[] = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start.getTime());
+    d.setDate(d.getDate() + i);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const iso = `${y}-${m}-${day}`;
+    const week =
+      Math.ceil((d.getTime() - new Date(y, 0, 1).getTime()) / (7 * 86400000)) + 1;
+    rows.push({
+      ASM: i % 2 === 0 ? "North" : "South",
+      Date: iso,
+      "Day · Date": iso,
+      "Week · Date": `${y}-W${String(week).padStart(2, "0")}`,
+      "Month · Date": `${y}-${m}`,
+      "Compliance Visit": 100 + (i % 10), // rate-named (matches RATE_METRIC_RX)
+      Sales: 50 + i, // count-named
+    });
+  }
+  return rows;
+}
+
+/** ctx where temporal facets are in summary.columns (type "string") but, per
+ *  `facetsInDateColumns`, optionally absent from summary.dateColumns — the real
+ *  ingest shape (fileParser stamps facets type "string", not in dateColumns). */
+function makeFacetCtx(
+  rows: Record<string, unknown>[],
+  opts: { facetsInDateColumns?: boolean } = {}
+): AgentExecutionContext {
+  const numeric = ["Compliance Visit", "Sales"];
+  const names = Object.keys(rows[0] ?? {});
+  const facets = names.filter(isTemporalFacetColumnKey);
+  const columns: DataSummary["columns"] = names.map((name) => ({
+    name,
+    type: numeric.includes(name)
+      ? "number"
+      : name === "Date"
+        ? "date"
+        : "string", // facets are type "string" — like real ingest
+    sampleValues: [],
+  }));
+  const dateColumns = opts.facetsInDateColumns ? ["Date", ...facets] : ["Date"];
+  const summary: DataSummary = {
+    rowCount: rows.length,
+    columnCount: columns.length,
+    columns,
+    numericColumns: numeric,
+    dateColumns,
+  };
+  return {
+    sessionId: "s",
+    question: "compliance visit analysis",
+    data: rows as Record<string, any>[],
+    turnStartDataRef: rows as Record<string, any>[],
+    summary,
+    chatHistory: [],
+    mode: "analysis",
+  } as AgentExecutionContext;
+}
+
+test("temporal facets render as LINE not BAR (facets absent from dateColumns — real ingest shape)", () => {
+  const ctx = makeFacetCtx(genFacetRows(30));
+  const out = enumerateMissingDashboardCharts(ctx, [], {
+    exhaustiveDimensions: true,
+    outcomeOverride: "Compliance Visit",
+    maxAdds: 50,
+  });
+  const dayChart = out.find((c) => c.x === "Day · Date");
+  const weekChart = out.find((c) => c.x === "Week · Date");
+  assert.ok(dayChart, "expected a Day · Date chart");
+  assert.equal(dayChart!.type, "line");
+  assert.ok(weekChart, "expected a Week · Date chart");
+  assert.equal(weekChart!.type, "line");
+  // The core invariant: no temporal facet is EVER a bar.
+  assert.ok(
+    !out.some((c) => isTemporalFacetColumnKey(String(c.x)) && c.type === "bar"),
+    "no temporal facet column may render as a bar"
+  );
+});
+
+test("temporal facets are never bars in EITHER ingest shape (L-019 dual-input check)", () => {
+  for (const facetsInDateColumns of [false, true]) {
+    const ctx = makeFacetCtx(genFacetRows(30), { facetsInDateColumns });
+    const out = enumerateMissingDashboardCharts(ctx, [], {
+      exhaustiveDimensions: true,
+      outcomeOverride: "Compliance Visit",
+      maxAdds: 50,
+    });
+    assert.ok(
+      !out.some((c) => isTemporalFacetColumnKey(String(c.x)) && c.type === "bar"),
+      `facet bar leaked with facetsInDateColumns=${facetsInDateColumns}`
+    );
+  }
+});
+
+test("metric-aware aggregate: rate metric → mean/(avg) line; count metric → sum line", () => {
+  // Pre-cover the trend grain (Day) so the loop deterministically builds the
+  // Week facet via the override path.
+  const cover = (y: string): ChartSpec[] => [
+    { type: "line", title: `${y} by Day · Date`, x: "Day · Date", y, aggregate: "sum" } as ChartSpec,
+  ];
+
+  const rateCtx = makeFacetCtx(genFacetRows(30));
+  const rateOut = enumerateMissingDashboardCharts(rateCtx, cover("Compliance Visit"), {
+    exhaustiveDimensions: true,
+    outcomeOverride: "Compliance Visit",
+    maxAdds: 50,
+  });
+  const rateWeek = rateOut.find((c) => c.x === "Week · Date");
+  assert.ok(rateWeek, "expected a Week · Date line for the rate metric");
+  assert.equal(rateWeek!.type, "line");
+  assert.equal(rateWeek!.aggregate, "mean");
+  assert.match(rateWeek!.title, /\(avg\)/);
+
+  const countCtx = makeFacetCtx(genFacetRows(30));
+  const countOut = enumerateMissingDashboardCharts(countCtx, cover("Sales"), {
+    exhaustiveDimensions: true,
+    outcomeOverride: "Sales",
+    maxAdds: 50,
+  });
+  const countWeek = countOut.find((c) => c.x === "Week · Date");
+  assert.ok(countWeek, "expected a Week · Date line for the count metric");
+  assert.equal(countWeek!.type, "line");
+  assert.equal(countWeek!.aggregate, "sum");
+  assert.doesNotMatch(countWeek!.title, /\(avg\)/);
+});
+
+test("high-cardinality daily facet is a wide line, NOT top-N bucketed", () => {
+  // Isolated fixture (just the facet + the measure) so the narrow-frame series
+  // auto-bind doesn't apply — mirrors production's wide-frame early-return path
+  // where the facet line is single-series. 90 distinct days > LOW_CARDINALITY_MAX
+  // (60): the OLD code would top-15+Other bucket this; a time axis must not be.
+  const rows = Array.from({ length: 90 }, (_, i) => {
+    const d = new Date("2026-04-01T00:00:00");
+    d.setDate(d.getDate() + i);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate()
+    ).padStart(2, "0")}`;
+    return { "Day · Date": iso, "Compliance Visit": 100 + (i % 10) };
+  });
+  const ctx = {
+    sessionId: "s",
+    question: "daily compliance",
+    data: rows as Record<string, any>[],
+    turnStartDataRef: rows as Record<string, any>[],
+    summary: {
+      rowCount: rows.length,
+      columnCount: 2,
+      columns: [
+        { name: "Day · Date", type: "string", sampleValues: [] },
+        { name: "Compliance Visit", type: "number", sampleValues: [] },
+      ],
+      numericColumns: ["Compliance Visit"],
+      dateColumns: [], // no raw date col → trend branch is skipped; loop owns the facet
+    },
+    chatHistory: [],
+    mode: "analysis",
+  } as AgentExecutionContext;
+  const out = enumerateMissingDashboardCharts(ctx, [], {
+    exhaustiveDimensions: true,
+    outcomeOverride: "Compliance Visit",
+    maxAdds: 50,
+  });
+  const dayChart = out.find((c) => c.x === "Day · Date");
+  assert.ok(dayChart, "expected a Day · Date chart");
+  assert.equal(dayChart!.type, "line");
+  const xs = (dayChart!.data as Array<Record<string, unknown>>).map((r) =>
+    String(r["Day · Date"])
+  );
+  assert.ok(!xs.includes("Other"), "a time axis must not be top-N+Other bucketed");
+  assert.ok(new Set(xs).size > 60, `expected the full daily span, got ${new Set(xs).size}`);
+});
+
+test("no duplicate grain line: the trend-branch grain is not re-emitted by the loop", () => {
+  const ctx = makeFacetCtx(genFacetRows(30)); // 30-day span → trend picks Day
+  const out = enumerateMissingDashboardCharts(ctx, [], {
+    exhaustiveDimensions: true,
+    outcomeOverride: "Compliance Visit",
+    maxAdds: 50,
+  });
+  const dayCharts = out.filter((c) => c.x === "Day · Date");
+  assert.equal(dayCharts.length, 1, "the Day grain must appear exactly once");
 });
 
 test("respects maxAdds cap", () => {

@@ -56,7 +56,7 @@ import { completeJson } from "./llmJson.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { ANALYST_PREAMBLE } from "./sharedPrompts.js";
 import { chartSpecSchema } from "../../../shared/schema.js";
-import { isTemporalFacetColumnKey } from "../../temporalFacetColumns.js";
+import { isTemporalChartX } from "../../chartTypeAuthority.js";
 import type { AnalyticalBlackboard } from "./analyticalBlackboard.js";
 import { checkInferredFilterFidelity } from "./verifierHelpers.js";
 import { detectConfidenceOverclaims } from "./verifierConfidenceCheck.js";
@@ -96,10 +96,15 @@ function chartPrecheck(
       course_correction: VERIFIER_VERDICT.reviseNarrative,
     };
   }
-  // Guard: bar chart with a temporal X axis → should be line/area
-  const isTemporalX =
-    ctx.summary.dateColumns.includes(p.data.x) ||
-    isTemporalFacetColumnKey(p.data.x);
+  // Guard: bar chart with a temporal X axis → should be line/area. Uses the
+  // single chart-type authority so this predicate stays uniform with
+  // chartFromTable / the feature sweep / build_chart (L-019). This stays a
+  // VISIBILITY backstop: per the single-flow policy (invariant #6) the verifier
+  // flags but does not rewrite — the deterministic FIX lives at construction
+  // (build_chart coercion + the feature-sweep facet→line branch).
+  const isTemporalX = isTemporalChartX(p.data.x, {
+    dateColumns: ctx.summary.dateColumns,
+  });
   if (p.data.type === "bar" && isTemporalX) {
     return {
       verdict: VERIFIER_VERDICT.reviseNarrative,

@@ -97,6 +97,7 @@ import { composeFindingDetail } from "../formatFindingEvidence.js";
 import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
 import { processChartData } from "../../../chartGenerator.js";
 import { compileChartSpec } from "../../../chartSpecCompiler.js";
+import { isTemporalChartX } from "../../../chartTypeAuthority.js";
 import { chartSpecSchema, type AgentWorkbenchEntry } from "../../../../shared/schema.js";
 import {
   executeQueryPlan,
@@ -1595,6 +1596,21 @@ export function registerDefaultTools(registry: ToolRegistry) {
         }
       }
 
+      // Temporal x-axis ⇒ line, never bar — via the single chart-type authority,
+      // applied at CONSTRUCTION. This is in-policy argument normalization (like
+      // the grain remap above), not a flow override: it closes the gap where the
+      // verifier flags BAR_ON_TEMPORAL_X but, per the single-flow policy
+      // (invariant #6), never rewrites the chart.
+      let chartType: typeof a.type = a.type;
+      let coercedTemporalBar = false;
+      if (
+        a.type === "bar" &&
+        isTemporalChartX(xCol, { dateColumns: ctx.exec.summary?.dateColumns ?? [] })
+      ) {
+        chartType = "line";
+        coercedTemporalBar = true;
+      }
+
       const names = [
         xCol,
         a.y,
@@ -1607,7 +1623,7 @@ export function registerDefaultTools(registry: ToolRegistry) {
       const explicitAgg =
         a.aggregate !== undefined && a.aggregate !== null;
       const compileProposal = {
-        type: a.type,
+        type: chartType,
         x: xCol,
         y: a.y,
         ...(a.type === "heatmap" && a.z ? { z: a.z } : {}),
@@ -1685,9 +1701,12 @@ export function registerDefaultTools(registry: ToolRegistry) {
         ? `, series=${spec.seriesColumn}${spec.barLayout ? ` (${spec.barLayout})` : ""}`
         : "";
       const zNote = spec.type === "heatmap" && spec.z ? `, z=${spec.z}` : "";
+      const coercionNote = coercedTemporalBar
+        ? ` (coerced bar→line: x='${spec.x}' is a temporal axis)`
+        : "";
       return {
         ok: true,
-        summary: `Chart ${spec.type}: ${spec.title} (x=${spec.x}, y=${spec.y}${a.y2 ? `, y2=${a.y2}` : ""}${zNote}${layerNote}, aggregate=${spec.aggregate ?? defaultAgg}), ${processed.length} points.`,
+        summary: `Chart ${spec.type}: ${spec.title} (x=${spec.x}, y=${spec.y}${a.y2 ? `, y2=${a.y2}` : ""}${zNote}${layerNote}, aggregate=${spec.aggregate ?? defaultAgg}), ${processed.length} points.${coercionNote}`,
         charts: [full],
         memorySlots: { chart_x: spec.x, chart_y: spec.y },
       };

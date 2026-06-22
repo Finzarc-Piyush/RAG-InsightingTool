@@ -97,3 +97,24 @@ a future hand-rolled classifier turns the build red.
   SPLITTER), and the dormant `decompositionGate` / `coordinatorAgent` (unwired by
   the single-flow policy, invariant #6) — folding the dormant ones in is a
   follow-up guarded by the same I12 firewall.
+
+## Refinement (2026-06-22) — a minimal/quick answer keeps ONE chart + ONE pivot of the answer data
+
+"Minimal depth = answer what was asked" does **not** mean "no visualization." The
+principle this decision encodes is *no auto-padding with tangential analysis* —
+speculative EXTRA charts, an unsolicited dashboard offer, recommendations,
+next-step chips, the breadth sweep, and the spawned-followup fan-out. A single
+chart + a single pivot **of the same answer data** are the answer in another
+form, not padding, so they are kept:
+
+- The full-loop `minimal` path always kept the deterministic single-chart
+  fallback (see the `minimal` bullet above) plus the derived pivot.
+- The **quick-answer fast path** ([`quickAnswerPath.ts`](../../server/lib/agents/runtime/quickAnswerPath.ts))
+  returns *before* `ctx.depthBudget` is even computed, so it inherited none of
+  that — it shipped a table only. It now attaches one chart of all performers
+  (sorted by the measure; for a single-winner answer it re-executes a leaderboard
+  frame) via the pure [`quickAnswerChart.ts`](../../server/lib/agents/runtime/quickAnswerChart.ts)
+  seam, flag `QUICK_ANSWER_CHART_ENABLED` (default ON). The pivot was already
+  present downstream (`derivePivotDefaultsFromExecution` re-queries base). This is
+  **parity** between the two paths, not a relaxation of I12: the suppression of
+  extra charts / recs / offers / fan-out is unchanged. Lesson L-029.

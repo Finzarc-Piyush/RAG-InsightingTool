@@ -48,6 +48,7 @@ import {
   resolveTrendGrain,
   buildDateRangeByColumn,
 } from "../../temporalGrainAuthority.js";
+import { isTemporalFacetColumnKey } from "../../temporalFacetColumns.js";
 import { isFlagOn } from "../../featureFlags.js";
 
 /**
@@ -179,12 +180,42 @@ export function enumerateMissingDashboardCharts(
   const trendX = pickStrongestDateColumn(ctx, sourceRows);
   if (trendX && !coveredX.has(trendX)) {
     const trend = tryBuildChart(ctx, sourceRows, "line", trendX, outcome);
-    if (trend) out.push(trend);
+    // Record the grain we just plotted so a temporal-facet dim of the SAME
+    // grain in the loop below doesn't emit a duplicate line (both now share
+    // chartAxisSignature `line|x|y|series`). coveredX was snapshotted from
+    // mergedCharts before the loop, so it must be updated as `out` grows.
+    if (trend) {
+      out.push(trend);
+      coveredX.add(trendX);
+    }
   }
 
   for (const dim of orderedDims) {
     if (out.length >= maxAdds) break;
     if (coveredX.has(dim)) continue;
+    // A temporal facet ("Day · Date", "Week · Date") is a TIME axis, not a
+    // category — it must be a line, never a bar (bars imply category ranking).
+    // Skip the top-N / top-bottom bucketing below (meaningless on a time axis)
+    // and the cardinality gates (a long daily span is a legitimately wide line;
+    // lines downsample, bars do not). Metric-aware aggregate: a per-period mean
+    // for rate/%/score metrics, a per-period total for count-like metrics.
+    if (isTemporalFacetColumnKey(dim)) {
+      // Keep the lower-bound guard (a single-bucket time axis is a degenerate
+      // one-point line — e.g. the Month facet of a single month of data), but
+      // SKIP the upper-bound cardinality / top-N bucketing: a long daily span is
+      // a legitimately wide line (lines downsample; bars cannot), and bucketing
+      // a time axis into top-N+Other is meaningless.
+      if (countUniqueValuesUpTo(sourceRows, dim, 2) < 2) continue;
+      const aggregate = RATE_METRIC_RX.test(outcome.replace(/[_-]+/g, " "))
+        ? "mean"
+        : "sum";
+      const line = tryBuildChart(ctx, sourceRows, "line", dim, outcome, aggregate);
+      if (line) {
+        out.push(line);
+        coveredX.add(dim);
+      }
+      continue;
+    }
     const uniques = countUniqueValuesUpTo(sourceRows, dim, MEDIUM_CARDINALITY_MAX + 1);
     if (uniques < 2) continue;
     if (uniques > MEDIUM_CARDINALITY_MAX) {
@@ -365,8 +396,19 @@ function tryBuildChart(
   rows: Record<string, unknown>[],
   type: "bar" | "line",
   x: string,
-  y: string
+  y: string,
+  // Optional aggregate override — DECOUPLES aggregate from chart type so a
+  // temporal-facet LINE can carry a per-period "mean" (rate metrics) just like a
+  // bar does. When omitted: bars de-confound size with "mean" (MW2); lines keep
+  // the compiler's inferred default so existing trend tiles are unchanged.
+  aggregateOverride?: "mean" | "sum"
 ): ChartSpec | null {
+  // bar → "mean" (size-normalised breakdown, MW2); line → compiler default,
+  // unless the caller pins an explicit aggregate (the facet-trend path).
+  const aggregate = aggregateOverride ?? (type === "bar" ? "mean" : undefined);
+  // Pin the aggregate through compile only when it is meaningful — i.e. bar's
+  // "mean" or an explicit override. A plain line keeps inference (old behaviour).
+  const preserveAggregate = aggregateOverride !== undefined || type === "bar";
   try {
     const { merged: mp } = compileChartSpec(
       rows,
@@ -376,16 +418,15 @@ function tryBuildChart(
       },
       // MW2 · size-normalized comparison for dimension breakdowns — a per-record
       // AVERAGE de-confounds unit size (a raw SUM rewards big ASMs/clusters and
-      // is not comparable). Trends (line) keep their default so totals-over-time
-      // read naturally.
-      { type, x, y, ...(type === "bar" ? { aggregate: "mean" as const } : {}) },
+      // is not comparable).
+      { type, x, y, ...(aggregate ? { aggregate } : {}) },
       {
         columnOrder: ctx.summary.columns.map((c) => c.name),
         // Each feature-sweep chart is a single (outcome × dim) breakdown.
         // Suppress the bar → heatmap upgrade so wide schemas (3+ dims)
         // don't collapse every dim into a 2D heatmap.
         disallowHeatmapUpgrade: true,
-        ...(type === "bar" ? { preserveAggregate: true } : {}),
+        ...(preserveAggregate ? { preserveAggregate: true } : {}),
       }
     );
     const spec = chartSpecSchema.parse({

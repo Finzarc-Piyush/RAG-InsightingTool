@@ -45,7 +45,7 @@ import { processChartData } from "../../chartGenerator.js";
 import { finishChartSpec } from "../../chartSpecFinish.js";
 import { resolvePeriodAxis } from "../../periodColumnResolver.js";
 import { resolveFactsMetric } from "../../factsMetricResolver.js";
-import { isTemporalFacetColumnKey } from "../../temporalFacetColumns.js";
+import { resolveChartType } from "../../chartTypeAuthority.js";
 import { isNumericishOnSample, scoreMeasure } from "./chartMeasurePick.js";
 
 const X_LABEL_CARDINALITY_CAP = 60;
@@ -160,16 +160,17 @@ export function buildChartFromAnalyticalTable(
     .slice()
     .sort((a, b) => scoreMeasure(b) - scoreMeasure(a))[0]!;
 
-  const xTemporal =
-    summary.dateColumns.includes(x) ||
-    isTemporalFacetColumnKey(x) ||
-    Boolean(periodAxis.pickedColumn);
-
   const workingSample = workingRows.slice(0, 80);
   const xUnique = new Set(workingSample.map((r) => String(r?.[x] ?? ""))).size;
   if (xUnique > X_LABEL_CARDINALITY_CAP) return null;
 
-  const chartType: "line" | "bar" = xTemporal ? "line" : "bar";
+  // Single authority for line-vs-bar — fed the SAME temporal inputs every
+  // builder must use (raw date col, temporal facet key, or a resolved period
+  // axis). See chartTypeAuthority.ts / docs/decisions/centralized-chart-type.md.
+  const chartType = resolveChartType(x, {
+    dateColumns: summary.dateColumns,
+    periodAxisPicked: Boolean(periodAxis.pickedColumn),
+  });
 
   let compiled: ReturnType<typeof compileChartSpec>;
   try {
