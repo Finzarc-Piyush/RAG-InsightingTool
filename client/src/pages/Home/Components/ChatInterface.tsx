@@ -244,6 +244,19 @@ export function ChatInterface({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [isDownloadingDataset, setIsDownloadingDataset] = useState(false);
   const [saveAutomationOpen, setSaveAutomationOpen] = useState(false);
+  // Turn-start anchor for the live "time to answer" timer in ThinkingPanel:
+  // stamp on the isLoading false→true edge so the timer measures from when the
+  // user actually asked, not from when the thinking panel later mounts.
+  const [turnStartedAtMs, setTurnStartedAtMs] = useState<number | null>(null);
+  const prevIsLoadingRef = useRef(false);
+  useEffect(() => {
+    if (isLoading && !prevIsLoadingRef.current) {
+      setTurnStartedAtMs(Date.now());
+    } else if (!isLoading && prevIsLoadingRef.current) {
+      setTurnStartedAtMs(null);
+    }
+    prevIsLoadingRef.current = isLoading;
+  }, [isLoading]);
   const { toast } = useToast();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pendingComposerCaretRef = useRef<number | null>(null);
@@ -1208,6 +1221,7 @@ export function ChatInterface({
                       spawnedSubQuestions={spawnedSubQuestions}
                       investigatedSubQuestions={investigatedSubQuestions}
                       isStreaming
+                      startedAtMs={turnStartedAtMs}
                       sessionId={sessionId ?? null}
                     />
                   </div>

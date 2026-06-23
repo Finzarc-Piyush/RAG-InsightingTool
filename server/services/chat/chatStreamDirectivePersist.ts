@@ -19,6 +19,7 @@ import type { DataSummary, UserDirective } from "../../shared/schema.js";
 import type { DirectiveDraft } from "../../models/datasetDirectives.model.js";
 import {
   extractUserDirectives,
+  isQuestionShapedWithoutMarker,
   type ExtractedDirective,
 } from "../../lib/agents/runtime/extractUserDirectives.js";
 import {
@@ -139,6 +140,16 @@ export async function persistDirectivesFromUserMessage(
       onError(err, { phase: "llm-extract" });
       llmOut = [];
     }
+  }
+
+  // W-UD-gate · deterministic guard against the LLM minting a "persistent rule"
+  // from a plain analytical question (e.g. "avg clock in time by cluster"). When
+  // the message reads as a question with no explicit persistence marker, drop the
+  // LLM-only drafts entirely — they would otherwise surface a surprising "Saved
+  // as a persistent rule" toast and silently bias future analysis. The strict
+  // deterministic pass already required a marker, so it is left untouched.
+  if (llmOut.length > 0 && isQuestionShapedWithoutMarker(params.message)) {
+    llmOut = [];
   }
 
   const extracted = mergeDirectiveExtractions(deterministic, llmOut);

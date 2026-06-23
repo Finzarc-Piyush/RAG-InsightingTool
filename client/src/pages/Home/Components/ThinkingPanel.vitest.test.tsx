@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import { ThinkingPanel } from "./ThinkingPanel";
-import { DASHBOARD_BUILD_MESSAGES } from "./dashboardBuildMessages";
+import { wittyPoolFor } from "./wittyCopy";
 import type { ThinkingStep } from "@/shared/schema";
 
 // Radix Collapsible measures its content via ResizeObserver, absent in jsdom.
@@ -25,60 +25,13 @@ function step(partial: Partial<ThinkingStep> & { step: string }): ThinkingStep {
   return { status: "active", timestamp: Date.now(), ...partial } as ThinkingStep;
 }
 
-function aBuildMessageIsOnScreen(): boolean {
-  return DASHBOARD_BUILD_MESSAGES.some(
-    (m) => screen.queryAllByText(m).length > 0
-  );
+/** True if ANY line from a category bank is currently rendered. */
+function aLineFromPoolIsOnScreen(pool: readonly string[]): boolean {
+  return pool.some((m) => screen.queryAllByText(m).length > 0);
 }
 
-describe("ThinkingPanel · dashboard-build rotating status", () => {
-  test("active 'Building dashboard' step shows the witty label + a rotating line while streaming", () => {
-    render(
-      <ThinkingPanel
-        steps={[step({ step: "Building dashboard", status: "active" })]}
-        workbench={[]}
-        isStreaming
-      />
-    );
-
-    // Pill maps the raw server step to the witty label.
-    expect(
-      screen.getAllByText("Assembling your dashboard…").length
-    ).toBeGreaterThan(0);
-    // The header flips to "Building dashboard".
-    expect(screen.getByText("Building dashboard")).toBeTruthy();
-    // A real line from the bank is on screen (rotating ticker).
-    expect(aBuildMessageIsOnScreen()).toBe(true);
-  });
-
-  test("completed build step keeps the label but stops the rotating line", () => {
-    render(
-      <ThinkingPanel
-        steps={[step({ step: "Building dashboard", status: "completed" })]}
-        workbench={[]}
-        isStreaming
-      />
-    );
-
-    expect(
-      screen.getAllByText("Assembling your dashboard…").length
-    ).toBeGreaterThan(0);
-    // Not active → no rotating quip from the bank.
-    expect(aBuildMessageIsOnScreen()).toBe(false);
-  });
-
-  test("does not rotate when the turn is no longer streaming", () => {
-    render(
-      <ThinkingPanel
-        steps={[step({ step: "Building dashboard", status: "active" })]}
-        workbench={[]}
-        isStreaming={false}
-      />
-    );
-    expect(aBuildMessageIsOnScreen()).toBe(false);
-  });
-
-  test("a normal step is unaffected (no dashboard ticker)", () => {
+describe("ThinkingPanel · pooled witty copy", () => {
+  test("an active step renders a line from that step's category bank", () => {
     render(
       <ThinkingPanel
         steps={[step({ step: "Synthesizing answer", status: "active" })]}
@@ -86,7 +39,74 @@ describe("ThinkingPanel · dashboard-build rotating status", () => {
         isStreaming
       />
     );
-    expect(screen.getAllByText("Stitching it all together…").length).toBeGreaterThan(0);
-    expect(aBuildMessageIsOnScreen()).toBe(false);
+    // Non-dashboard stages keep the neutral "Thinking" header.
+    expect(screen.getByText("Thinking")).toBeTruthy();
+    expect(aLineFromPoolIsOnScreen(wittyPoolFor("synthesis"))).toBe(true);
+    // No dashboard-build quip leaks into a normal step.
+    expect(aLineFromPoolIsOnScreen(wittyPoolFor("dashboard"))).toBe(false);
+  });
+
+  test("a settled (completed) step still shows a line from its bank", () => {
+    render(
+      <ThinkingPanel
+        steps={[step({ step: "Mapping columns from schema", status: "completed" })]}
+        workbench={[]}
+        isStreaming
+      />
+    );
+    expect(aLineFromPoolIsOnScreen(wittyPoolFor("columns"))).toBe(true);
+  });
+
+  test("active 'Building dashboard' step flips the header and shows a dashboard-bank line", () => {
+    render(
+      <ThinkingPanel
+        steps={[step({ step: "Building dashboard", status: "active" })]}
+        workbench={[]}
+        isStreaming
+      />
+    );
+    expect(screen.getByText("Building dashboard")).toBeTruthy();
+    expect(aLineFromPoolIsOnScreen(wittyPoolFor("dashboard"))).toBe(true);
+  });
+
+  test("the 'Building dashboard' header only appears while active AND streaming", () => {
+    render(
+      <ThinkingPanel
+        steps={[step({ step: "Building dashboard", status: "active" })]}
+        workbench={[]}
+        isStreaming={false}
+      />
+    );
+    // Not streaming → neutral header, no live build banner.
+    expect(screen.queryByText("Building dashboard")).toBeNull();
+    expect(screen.getByText("Thinking")).toBeTruthy();
+  });
+
+  test("shows the live answer timer when given a turn-start timestamp while streaming", () => {
+    render(
+      <ThinkingPanel
+        steps={[step({ step: "Synthesizing answer", status: "active" })]}
+        workbench={[]}
+        isStreaming
+        startedAtMs={Date.now() - 5000}
+      />
+    );
+    // The band chip renders "~low–highs"; match the numeric band token.
+    expect(
+      screen.getAllByText((content) => /~\s*\d+\D\d+s/.test(content)).length
+    ).toBeGreaterThan(0);
+  });
+
+  test("renders no timer without a start timestamp", () => {
+    render(
+      <ThinkingPanel
+        steps={[step({ step: "Synthesizing answer", status: "active" })]}
+        workbench={[]}
+        isStreaming
+      />
+    );
+    expect(
+      screen.queryAllByText((content) => /~\s*\d+\D\d+s/.test(content)).length
+    ).toBe(0);
   });
 });

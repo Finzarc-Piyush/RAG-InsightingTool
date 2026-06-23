@@ -40,13 +40,17 @@ import {
   NEG_POLARITY_FLIPPER_RE,
   inferFiltersFromQuestion,
 } from "../utils/inferFiltersFromQuestion.js";
+import { classifyQueryIntent } from "./queryIntentAuthority.js";
 
 /**
  * Persistence-intent vocabulary. A user message whose exclusion clause sits
  * inside the same sentence as one of these phrasings is interpreted as a
  * directive (persist across turns) rather than a one-shot filter.
+ *
+ * Exported (W-UD-gate) because the directive-persistence seam also uses it as a
+ * deterministic gate over the LLM extractor — see `isQuestionShapedWithoutMarker`.
  */
-const PERSISTENCE_QUALIFIER_RE =
+export const PERSISTENCE_QUALIFIER_RE =
   /\b(always|from\s+now\s+on|going\s+forward|for\s+the\s+rest\s+(?:of\s+(?:this|the)\s+(?:session|chat|dataset))?|for\s+this\s+dataset|for\s+all\s+(?:future\s+)?(?:questions|answers|charts)|permanently|by\s+default|every\s+time|whenever|in\s+general|throughout|hereafter)\b/i;
 
 /** Inclusion-direction qualifier — flips an exclusion intent to include-only. */
@@ -84,6 +88,40 @@ function isPersistentSentence(sentence: string): boolean {
 /** Does this sentence carry an inclusion qualifier? */
 function isInclusionSentence(sentence: string): boolean {
   return INCLUSION_VERB_RE.test(sentence);
+}
+
+/**
+ * W-UD-gate · deterministic guard for the LLM directive extractor.
+ *
+ * The LLM pass (extractUserDirectivesLlm) is *told* to never mint a directive
+ * from a one-off question lacking a persistence marker, but a MINI-tier model
+ * occasionally disobeys and saves a plain analytical question ("avg clock in
+ * time by cluster") as a standing rule — which then silently biases future
+ * analysis (lesson L-022: ship the deterministic gate BEFORE the prompt opens
+ * the permission). This predicate is that gate.
+ *
+ * Returns true when the message reads as an analytical / lookup / factual
+ * QUESTION (per the query-intent authority, invariant #12) AND carries NO
+ * explicit persistence marker. Such messages are asks-to-answer, not
+ * rules-to-remember, so any LLM-mined directive from them is dropped. Genuine
+ * marker-less rule statements ("stop featuring Hair Oil") are imperative /
+ * declarative — none of the question signals fire — so they still pass through.
+ * Marker-bearing messages ("from now on always exclude Central") also pass
+ * (and are caught by the strict deterministic extractor regardless).
+ */
+export function isQuestionShapedWithoutMarker(message: string): boolean {
+  const m = message?.trim() ?? "";
+  if (!m) return false;
+  if (PERSISTENCE_QUALIFIER_RE.test(m)) return false;
+  const intent = classifyQueryIntent(m);
+  return (
+    intent.isLookupShape ||
+    intent.isDirectFactual ||
+    intent.signals.analytical ||
+    intent.signals.diagnostic ||
+    intent.signals.strategic ||
+    intent.signals.trend
+  );
 }
 
 /** Returns true when a sentence has an exclusion verb whose captured clause

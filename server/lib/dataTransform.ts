@@ -21,6 +21,7 @@ import {
 } from './temporalFacetColumns.js';
 import { logger } from "./logger.js";
 import { toNumber } from "./numberCoercion.js";
+import { timeOfDayToSeconds, formatSecondsAsClock } from "./durationColumns.js";
 
 interface TransformationResult {
   data: Record<string, any>[];
@@ -704,6 +705,55 @@ function computeConditionalAggregation(
   return total;
 }
 
+/**
+ * TOD-AGG · coerce a measure column's cells to numbers for aggregation. Clock
+ * (time-of-day) columns parse "09:45:34" → seconds-since-midnight via
+ * `timeOfDayToSeconds` (sentinels like "Absent" → null, dropped); every other
+ * column uses the standard `toNumber`. Mirrors the DuckDB executor's
+ * `EXTRACT(EPOCH FROM TRY_CAST(col AS TIME))` and breakdownRankingTool's
+ * `metricIsTimeOfDay` flag so all three aggregation paths agree.
+ */
+function aggregationValues(
+  rows: Record<string, any>[],
+  column: string,
+  isTimeOfDay: boolean
+): number[] {
+  if (isTimeOfDay) {
+    const out: number[] = [];
+    for (const r of rows) {
+      const s = timeOfDayToSeconds(r[column]);
+      if (s !== null) out.push(s);
+    }
+    return out;
+  }
+  return rows
+    .map((r: Record<string, any>) => toNumber(r[column]))
+    .filter((v: number) => !isNaN(v));
+}
+
+/**
+ * TOD-AGG · avg/min/max of a clock column are computed in SECONDS; render the
+ * scalar back to "HH:MM". sum/count/median stay numeric (formatting them as a
+ * clock would be meaningless), matching the DuckDB path which only formats
+ * avg/min/max output aliases.
+ */
+function formatClockAggIfNeeded(
+  value: number | null,
+  operation: string,
+  isTimeOfDay: boolean
+): number | string | null {
+  if (!isTimeOfDay || value === null || !Number.isFinite(value)) return value;
+  if (
+    operation === "avg" ||
+    operation === "mean" ||
+    operation === "min" ||
+    operation === "max"
+  ) {
+    return formatSecondsAsClock(value);
+  }
+  return value;
+}
+
 function applyAggregations(
   data: Record<string, any>[],
   summary: DataSummary,
@@ -714,6 +764,14 @@ function applyAggregations(
   if (!aggregations.length) {
     return { data };
   }
+
+  // TOD-AGG · names of clock (time-of-day) columns — their avg/min/max is
+  // computed in seconds and rendered back as "HH:MM".
+  const timeOfDayCols = new Set(
+    (summary.columns ?? [])
+      .filter((c) => c.timeOfDay !== undefined)
+      .map((c) => c.name)
+  );
 
   if (!groupBy.length) {
     const base: Record<string, any> = {};
@@ -736,6 +794,7 @@ function applyAggregations(
         agg.operation = 'count';
       }
 
+      const isTod = timeOfDayCols.has(agg.column);
       let resultValue: number | null = null;
       if (isIdCol) {
         const distinctValues = new Set<string | number>();
@@ -757,9 +816,7 @@ function applyAggregations(
         }
         resultValue = distinctValues.size;
       } else {
-        const values = data
-          .map((r: Record<string, any>) => toNumber(r[agg.column]))
-          .filter((v: number) => !isNaN(v));
+        const values = aggregationValues(data, agg.column, isTod);
         const op = agg.operation as Exclude<AggregationOperation, 'percent_change' | 'count_distinct'>;
         switch (op) {
           case 'sum':
@@ -807,7 +864,7 @@ function applyAggregations(
         }
       }
       const targetName = agg.alias || (isIdCol ? getCountNameForIdColumn(agg.column) : `${agg.column}_${agg.operation}`);
-      base[targetName] = resultValue;
+      base[targetName] = formatClockAggIfNeeded(resultValue, agg.operation, isTod);
     }
 
     return {
@@ -939,6 +996,7 @@ function applyAggregations(
           agg.operation = 'count';
         }
 
+        const isTod = timeOfDayCols.has(agg.column);
         let resultValue: number | null = null;
 
         if (isIdCol) {
@@ -962,7 +1020,7 @@ function applyAggregations(
           }
           resultValue = distinctValues.size;
         } else {
-          const values = rows.map((r: Record<string, any>) => toNumber(r[agg.column])).filter((v: number) => !isNaN(v));
+          const values = aggregationValues(rows, agg.column, isTod);
           // TypeScript: percent_change is already filtered out above, so we can safely narrow the type
           const op = agg.operation as Exclude<AggregationOperation, 'percent_change' | 'count_distinct'>;
           switch (op) {
@@ -1014,7 +1072,7 @@ function applyAggregations(
         }
         // Use meaningful count name for ID columns
         const targetName = agg.alias || (isIdCol ? getCountNameForIdColumn(agg.column) : `${agg.column}_${agg.operation}`);
-        base[targetName] = resultValue;
+        base[targetName] = formatClockAggIfNeeded(resultValue, agg.operation, isTod);
       }
 
       aggregatedRows.push(base);
@@ -1146,6 +1204,7 @@ function applyAggregations(
           agg.operation = 'count';
         }
 
+        const isTod = timeOfDayCols.has(agg.column);
         let resultValue: number | null = null;
 
         if (isIdCol) {
@@ -1169,7 +1228,7 @@ function applyAggregations(
           }
           resultValue = distinctValues.size;
         } else {
-          const values = rows.map((r: Record<string, any>) => toNumber(r[agg.column])).filter((v: number) => !isNaN(v));
+          const values = aggregationValues(rows, agg.column, isTod);
           // TypeScript: percent_change is handled separately, so we can safely narrow the type
           const op = agg.operation as Exclude<AggregationOperation, 'percent_change' | 'count_distinct'>;
           switch (op) {
@@ -1221,7 +1280,7 @@ function applyAggregations(
         }
         // Use meaningful count name for ID columns
         const targetName = agg.alias || (isIdCol ? getCountNameForIdColumn(agg.column) : `${agg.column}_${agg.operation}`);
-        base[targetName] = resultValue;
+        base[targetName] = formatClockAggIfNeeded(resultValue, agg.operation, isTod);
       }
 
       aggregatedRows.push(base);

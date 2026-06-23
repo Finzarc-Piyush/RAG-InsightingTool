@@ -21,6 +21,7 @@ import {
   facetColumnInlineDuckDbExpr,
 } from "./temporalFacetColumns.js";
 import { quoteIdent, escapeSqlStringLiteral } from "./pivotFilterSql.js";
+import { formatSecondsAsClock } from "./durationColumns.js";
 import { errorMessage } from "../utils/errorMessage.js";
 
 const DATA_TABLE = "data";
@@ -179,9 +180,29 @@ function aggregationSqlExpr(
   columnLogical: string,
   columnPhysical: string,
   operation: NonNullable<QueryPlanBody["aggregations"]>[0]["operation"],
-  predicateSql: string | null
+  predicateSql: string | null,
+  // TOD-AGG · true when the measure is a time-of-day (clock) column. Clock
+  // strings ("09:45:34") can't TRY_CAST to a number, so the legacy
+  // `AVG(TRY_CAST(col AS DOUBLE))` collapses every row to NULL ("—"). Instead
+  // cast to TIME and aggregate seconds-since-midnight; the caller formats the
+  // resulting seconds back to a clock via `formatSecondsAsClock`. Sentinels
+  // ("Absent") TRY_CAST to NULL and drop out of the aggregate for free.
+  isTimeOfDay = false
 ): string {
   const q = quoteIdent(columnPhysical);
+  if (isTimeOfDay) {
+    switch (operation) {
+      case "mean":
+      case "avg":
+        return `AVG(EXTRACT(EPOCH FROM TRY_CAST(${q} AS TIME)))`;
+      case "min":
+        return `EXTRACT(EPOCH FROM MIN(TRY_CAST(${q} AS TIME)))`;
+      case "max":
+        return `EXTRACT(EPOCH FROM MAX(TRY_CAST(${q} AS TIME)))`;
+      // sum (meaningless for clock readings) + count/countIf/sumIf fall through
+      // to the standard handling below — unchanged behaviour.
+    }
+  }
   switch (operation) {
     case "sum":
       return `SUM(TRY_CAST(${q} AS DOUBLE))`;
@@ -378,6 +399,10 @@ export interface BuildQueryPlanDuckdbSqlResult {
    *  runs (currently the hidden PeriodIso column added for chronological
    *  ORDER BY when groupBy includes the wide-format Period column). */
   hiddenColumns?: string[];
+  /** TOD-AGG · output aliases whose value is a time-of-day aggregate computed
+   *  in SECONDS-since-midnight (avg/min/max over a clock column). The executor
+   *  formats these back to "HH:MM" after the query runs. */
+  clockAggAliases?: string[];
 }
 
 /** When set, facet columns in the plan use UI ids; DuckDB may still store legacy `__tf_*` names. */
@@ -481,16 +506,43 @@ export function buildQueryPlanDuckdbSql(
   const isNestedPlan = perDimsInPlan.size === 1;
   const perDimensionForPlan = isNestedPlan ? [...perDimsInPlan][0]! : null;
 
+  // TOD-AGG · names of time-of-day (clock) columns in the dataset. A measure
+  // drawn from one of these averages in seconds and is formatted back to a
+  // clock string after the query runs (see `clockAggAliases`).
+  const timeOfDayCols = new Set(
+    (ctx?.summary.columns ?? [])
+      .filter((c) => c.timeOfDay !== undefined)
+      .map((c) => c.name)
+  );
+  const clockAggAliases: string[] = [];
+
   if (!isNestedPlan) {
     for (const agg of p.aggregations ?? []) {
       const colPhys = physicalOf(agg.column);
       // PCT1 · compile predicate once per aggregation so countIf/sumIf can fold
       // it into a CASE WHEN. Other ops ignore predicateSql.
       const predicateSql = compilePredicateToSql(agg.predicate, physicalOf);
-      const expr = aggregationSqlExpr(agg.column, colPhys, agg.operation, predicateSql);
+      const isTod = timeOfDayCols.has(agg.column);
+      const expr = aggregationSqlExpr(
+        agg.column,
+        colPhys,
+        agg.operation,
+        predicateSql,
+        isTod
+      );
       if (!expr) return null;
       const alias = outputAliasForAgg(agg.column, agg.operation, agg.alias);
       selectParts.push(`${expr} AS ${quoteIdent(alias)}`);
+      // Only avg/min/max return clock seconds; sum/count keep their raw value.
+      if (
+        isTod &&
+        (agg.operation === "avg" ||
+          agg.operation === "mean" ||
+          agg.operation === "min" ||
+          agg.operation === "max")
+      ) {
+        clockAggAliases.push(alias);
+      }
     }
   }
 
@@ -846,6 +898,7 @@ export function buildQueryPlanDuckdbSql(
     descriptions: [...filterDesc, aggDesc],
     hiddenColumns:
       shouldHideIsoFromResults && periodIsoColumn ? [periodIsoColumn] : undefined,
+    clockAggAliases: clockAggAliases.length > 0 ? clockAggAliases : undefined,
   };
 }
 
@@ -923,6 +976,20 @@ export async function executeQueryPlanOnDuckDb(
             return out;
           })
         : rawRows;
+    // TOD-AGG · avg/min/max over a clock column was computed in SECONDS-since-
+    // midnight; format it back to "HH:MM" so the table, narrator JSON and memory
+    // slots show a clock reading instead of a raw second count. NULL (no rows /
+    // all-sentinel group) stays null → the client renders its own "—".
+    if (built.clockAggAliases && built.clockAggAliases.length > 0) {
+      for (const r of rows) {
+        for (const alias of built.clockAggAliases) {
+          const v = r[alias];
+          if (v === null || v === undefined) continue;
+          const sec = Number(v);
+          r[alias] = Number.isFinite(sec) ? formatSecondsAsClock(sec) : null;
+        }
+      }
+    }
     return {
       ok: true,
       rows,

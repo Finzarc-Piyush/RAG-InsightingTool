@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AgentWorkbenchEntry,
   ThinkingStep,
@@ -13,13 +13,21 @@ import {
   CheckCircle2,
   ChevronDown,
   Circle,
+  Clock,
   GitBranch,
   Loader2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useRotatingMessage } from "@/hooks/useRotatingMessage";
-import { DASHBOARD_BUILD_MESSAGES } from "./dashboardBuildMessages";
+import {
+  categoryForThinkingStep,
+  pickWittyLine,
+  startIndexFor,
+  wittyPoolFor,
+  type WittyCategory,
+} from "./wittyCopy";
+import { estimateAnswerBand, formatSeconds } from "./answerTimeEstimate";
 import { FeedbackButtons } from "./FeedbackButtons";
 import type { Feedback, FeedbackTarget } from "@/lib/api/feedback";
 
@@ -37,51 +45,16 @@ interface ThinkingPanelProps {
   sessionId?: string | null;
   turnId?: string | null;
   readOnly?: boolean;
+  /** Epoch ms the turn started (isLoading rising edge). Drives the live timer. */
+  startedAtMs?: number | null;
   spawnedQuestionFeedback?: Record<string, { feedback: Feedback; comment?: string }>;
 }
 
-const GENERIC_WITTY_LABEL = "Working some magic…";
-
-// The server brackets the long post-answer dashboard-build phase with this
-// step (agentLoop.service.ts). The panel turns the matching pill into a live
-// rotating status (DASHBOARD_BUILD_MESSAGES) so the ~1 min doesn't sit silent.
-const DASHBOARD_BUILDING_STEP = "Building dashboard";
-const DASHBOARD_BUILDING_LABEL = "Assembling your dashboard…";
-
-function wittyLabelFor(rawStep: string): string {
-  const step = rawStep.trim();
-  if (/^Running tool:/i.test(step)) return "Crunching the numbers…";
-  switch (step) {
-    case DASHBOARD_BUILDING_STEP:
-      return DASHBOARD_BUILDING_LABEL;
-    case "Mapping columns from schema":
-      return "Eyeballing the columns…";
-    case "Analyzing user intent":
-      return "Decoding what you actually meant…";
-    case "Detecting query type":
-      return "Sussing out the angle here…";
-    case "Loading dataset":
-      return "Cracking open the dataset…";
-    case "Generating hypotheses":
-      return "Floating a few theories…";
-    case "Drafting analysis brief & hypotheses":
-      return "Drawing up the case file…";
-    case "Running investigation pre-planner":
-      return "Casing the data before I dig in…";
-    case "Retrieving session context":
-      return "Flipping back through our chat…";
-    case "Agent plan":
-      return "Plotting the route…";
-    case "Planning approach":
-      return "Picking the sharpest angle of attack…";
-    case "Synthesizing answer":
-      return "Stitching it all together…";
-    case "Reviewing answer":
-      return "Marking my own homework…";
-    default:
-      return GENERIC_WITTY_LABEL;
-  }
-}
+// Witty per-step copy now lives in the shared, category-matched pool
+// (./wittyCopy). The panel resolves each server step → a CATEGORY → a bank of
+// candidate lines: a settled step shows one deterministically-picked line; the
+// single active step rotates through its whole bank during the wait. The long
+// dashboard-build phase ("Building dashboard") is just the `dashboard` category.
 
 function StepRow({ label, status }: { label: string; status: ThinkingStep["status"] }) {
   const icon =
@@ -129,25 +102,6 @@ function StepRow({ label, status }: { label: string; status: ThinkingStep["statu
   );
 }
 
-/** The live, rotating witty line shown under the "Building dashboard" pill. */
-function DashboardBuildingTicker({ line }: { line: string }) {
-  return (
-    <div className="ml-6 min-h-[1.1rem] text-[11px] italic leading-relaxed text-primary/80">
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={line}
-          initial={{ opacity: 0, y: 4 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -3 }}
-          transition={{ duration: 0.3 }}
-        >
-          {line}
-        </motion.div>
-      </AnimatePresence>
-    </div>
-  );
-}
-
 export function ThinkingPanel({
   steps,
   isStreaming,
@@ -157,15 +111,11 @@ export function ThinkingPanel({
   sessionId,
   turnId,
   readOnly = false,
+  startedAtMs,
   spawnedQuestionFeedback,
 }: ThinkingPanelProps) {
   const [open, setOpen] = useState(false);
   const prevStreaming = useRef(false);
-  // Open the rotating dashboard-build status on a per-mount random line so two
-  // builds don't always start on the same quip.
-  const [tickerStart] = useState(() =>
-    Math.floor(Math.random() * DASHBOARD_BUILD_MESSAGES.length)
-  );
 
   useEffect(() => {
     if (variant === "archived") {
@@ -183,34 +133,72 @@ export function ThinkingPanel({
     prevStreaming.current = isStreaming;
   }, [isStreaming, variant]);
 
-  // Dedupe by witty label so two server-side phases that map to the same
-  // user-facing message collapse into one row, with the latest timestamp
-  // wins for status.
-  const labelMap = new Map<string, { label: string; status: ThinkingStep["status"]; timestamp: number }>();
-  const labelOrder: string[] = [];
-  for (const step of steps) {
-    const label = wittyLabelFor(String(step.step));
-    const existing = labelMap.get(label);
-    if (!existing) {
-      labelMap.set(label, { label, status: step.status, timestamp: step.timestamp });
-      labelOrder.push(label);
-    } else if (step.timestamp > existing.timestamp) {
-      labelMap.set(label, { label, status: step.status, timestamp: step.timestamp });
+  // Dedupe by witty CATEGORY (not the now-varying label) so two server phases
+  // in the same stage collapse into one row. Earliest timestamp is the stable
+  // seed for the deterministic line; latest timestamp wins the status.
+  const { catOrder, catMap } = useMemo(() => {
+    const map = new Map<
+      WittyCategory,
+      { category: WittyCategory; status: ThinkingStep["status"]; seed: number; latestTs: number }
+    >();
+    const order: WittyCategory[] = [];
+    for (const step of steps) {
+      const category = categoryForThinkingStep(String(step.step));
+      const existing = map.get(category);
+      if (!existing) {
+        map.set(category, { category, status: step.status, seed: step.timestamp, latestTs: step.timestamp });
+        order.push(category);
+      } else {
+        if (step.timestamp < existing.seed) existing.seed = step.timestamp;
+        if (step.timestamp >= existing.latestTs) {
+          existing.latestTs = step.timestamp;
+          existing.status = step.status;
+        }
+      }
     }
+    return { catOrder: order, catMap: map };
+  }, [steps]);
+
+  // The single active step rotates through its whole bank during the wait, so a
+  // long stage surfaces many of the witty lines — the dashboard build is simply
+  // the `dashboard` category special case of this (header still says so below).
+  let activeCategory: WittyCategory | null = null;
+  for (const cat of catOrder) {
+    if (catMap.get(cat)!.status === "active") activeCategory = cat;
   }
-
-  // While the dashboard-build pill is active and the turn is still streaming,
-  // play the rotating witty status both under the pill and in the (possibly
-  // collapsed) header summary — so the user sees movement even on mobile.
-  const buildEntry = labelMap.get(DASHBOARD_BUILDING_LABEL);
+  const rotating = variant === "live" && isStreaming && activeCategory != null;
+  const activeSeed = activeCategory != null ? catMap.get(activeCategory)!.seed : 0;
+  const activeLine = useRotatingMessage(
+    activeCategory != null ? wittyPoolFor(activeCategory) : wittyPoolFor("generic"),
+    {
+      enabled: rotating,
+      startIndex: activeCategory != null ? startIndexFor(activeCategory, activeSeed) : 0,
+    }
+  );
   const buildingActive =
-    variant === "live" && isStreaming && buildEntry?.status === "active";
-  const buildLine = useRotatingMessage(DASHBOARD_BUILD_MESSAGES, {
-    enabled: buildingActive,
-    startIndex: tickerStart,
-  });
+    variant === "live" && isStreaming && catMap.get("dashboard")?.status === "active";
 
-  const stepCount = labelOrder.length;
+  // Live "time to get an answer" timer (mirrors the enrichment loader's box):
+  // elapsed since the turn started + a coarse "usually about X–Ys" band.
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (startedAtMs == null || variant !== "live" || !isStreaming) {
+      setElapsed(0);
+      return;
+    }
+    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000)));
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => window.clearInterval(id);
+  }, [startedAtMs, variant, isStreaming]);
+  const { low: etaLow, high: etaHigh } = useMemo(
+    () => estimateAnswerBand({ dashboardActive: catMap.has("dashboard"), stepCount: catOrder.length }),
+    [catMap, catOrder.length]
+  );
+  const showTimer = variant === "live" && isStreaming && startedAtMs != null;
+  const takingLong = elapsed > etaHigh * 1.5;
+
+  const stepCount = catOrder.length;
   const subQCount = spawnedSubQuestions.length;
   const summary =
     stepCount > 0 || subQCount > 0
@@ -247,17 +235,17 @@ export function ThinkingPanel({
             {buildingActive ? "Building dashboard" : "Thinking"}
           </span>
           <span className="block text-[10px] font-normal text-muted-foreground mt-0.5 truncate">
-            {buildingActive ? (
+            {rotating ? (
               <AnimatePresence mode="wait">
                 <motion.span
-                  key={buildLine}
+                  key={activeLine}
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.25 }}
                   className="text-primary/80"
                 >
-                  {buildLine}
+                  {activeLine}
                 </motion.span>
               </AnimatePresence>
             ) : (
@@ -265,22 +253,37 @@ export function ThinkingPanel({
             )}
           </span>
         </span>
+        {showTimer && (
+          <span
+            className="flex shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-card/70 px-2 py-1 text-[10px] font-normal tabular-nums text-muted-foreground"
+            title="Time so far · typical answer time"
+          >
+            <Clock className="h-3 w-3 text-muted-foreground/80" />
+            <span className="text-foreground/90">{formatSeconds(elapsed)}</span>
+            {takingLong ? (
+              <span className="text-muted-foreground/70">· a little longer…</span>
+            ) : (
+              <span className="text-muted-foreground/60">
+                / ~{etaLow}–{etaHigh}s
+              </span>
+            )}
+          </span>
+        )}
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-3 space-y-4 overflow-hidden">
-        {labelOrder.length > 0 && (
+        {catOrder.length > 0 && (
           <div className="space-y-1.5 pl-0.5">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Progress
             </div>
             <div className="space-y-1.5">
-              {labelOrder.map((label) => {
-                const entry = labelMap.get(label)!;
-                const showTicker =
-                  buildingActive && label === DASHBOARD_BUILDING_LABEL;
+              {catOrder.map((cat) => {
+                const entry = catMap.get(cat)!;
+                const isActiveRow = rotating && cat === activeCategory;
+                const label = isActiveRow ? activeLine : pickWittyLine(cat, entry.seed);
                 return (
-                  <div key={label} className="space-y-1.5">
-                    <StepRow label={entry.label} status={entry.status} />
-                    {showTicker && <DashboardBuildingTicker line={buildLine} />}
+                  <div key={cat} className="space-y-1.5">
+                    <StepRow label={label} status={entry.status} />
                   </div>
                 );
               })}

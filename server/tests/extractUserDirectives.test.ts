@@ -3,11 +3,44 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   extractUserDirectives,
+  isQuestionShapedWithoutMarker,
   __PERSISTENCE_QUALIFIER_RE,
   __INCLUSION_VERB_RE,
   __detectSupersedeIdsForTesting,
 } from "../lib/agents/runtime/extractUserDirectives.js";
 import type { DataSummary, UserDirective } from "../shared/schema.js";
+
+describe("W-UD-gate · isQuestionShapedWithoutMarker", () => {
+  it("flags plain analytical / lookup questions (no persistence marker)", () => {
+    assert.equal(isQuestionShapedWithoutMarker("avg clock in time by cluster"), true);
+    assert.equal(isQuestionShapedWithoutMarker("top 10 clusters by sales"), true);
+    assert.equal(isQuestionShapedWithoutMarker("what is the average clock-in time?"), true);
+    assert.equal(isQuestionShapedWithoutMarker("why did clock-in slip by cluster"), true);
+  });
+
+  it("does NOT flag messages carrying an explicit persistence marker", () => {
+    assert.equal(
+      isQuestionShapedWithoutMarker("from now on always exclude Cluster 2 WEST"),
+      false
+    );
+    assert.equal(
+      isQuestionShapedWithoutMarker("by default focus only on premium SKUs"),
+      false
+    );
+  });
+
+  it("does NOT flag genuine marker-less rule statements (imperative/declarative)", () => {
+    // These are real standing-rule paraphrases the LLM pass exists to catch —
+    // they are not question-shaped, so the gate lets them through.
+    assert.equal(isQuestionShapedWithoutMarker("stop featuring Hair Oil"), false);
+    assert.equal(isQuestionShapedWithoutMarker("I'd prefer we not bring up Pure Sense"), false);
+  });
+
+  it("returns false on empty/whitespace", () => {
+    assert.equal(isQuestionShapedWithoutMarker(""), false);
+    assert.equal(isQuestionShapedWithoutMarker("   "), false);
+  });
+});
 
 const brandSummary: DataSummary = {
   rowCount: 100,

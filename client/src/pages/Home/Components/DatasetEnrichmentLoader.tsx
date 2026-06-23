@@ -2,37 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sparkles } from 'lucide-react';
 import type { EnrichmentStep } from '@/lib/api/uploadStatus';
-
-const ROTATING_GENERIC = [
-  'Improving understanding of your columns and relationships…',
-  'Preparing meaningful analysis questions for you to start with…',
-  'Mapping types, grains, and what the numbers might mean…',
-  'Composing suggested analysis questions tailored to your fields…',
-  'Almost there — polish beats haste.',
-];
-
-const ROTATING_BY_STEP: Record<EnrichmentStep, string[]> = {
-  inferring_profile: [
-    'Reading the shape and intent of your dataset…',
-    'Inferring roles for each column — the quiet groundwork…',
-    'Naming patterns the way a careful analyst would…',
-  ],
-  dirty_date_enrichment: [
-    'Cleaning date-like strings into stable time signals…',
-    'Resolving ambiguous date formats before deeper reasoning…',
-    'Normalizing calendar values for reliable trends…',
-  ],
-  building_context: [
-    'Seeding durable context so future answers stay grounded…',
-    'Teaching the assistant your domain, one structured pass…',
-    'Weaving profile, summary, and question hints into durable context…',
-  ],
-  persisting: [
-    'Writing insights to your session…',
-    'Finalizing storage and suggested questions…',
-    'Crossing the last mile — persistence, not theatre…',
-  ],
-};
+import { categoryForEnrichmentStep, wittyPoolFor } from './wittyCopy';
 
 export function estimateBand(rows: number, cols: number, step?: EnrichmentStep) {
   // PVT6 · recalibrated to observed wall-clock (~15s for a 10k × 44 dataset).
@@ -107,10 +77,11 @@ export function DatasetEnrichmentLoader({
         'Still with you; we are not timing out, just thinking harder.',
       ];
     }
-    if (enrichmentStep && ROTATING_BY_STEP[enrichmentStep]?.length) {
-      return [...ROTATING_BY_STEP[enrichmentStep], ...ROTATING_GENERIC.slice(0, 2)];
-    }
-    return ROTATING_GENERIC;
+    // Source from the shared, category-matched witty pool (./wittyCopy) so the
+    // same large bank powers Enriching, Thinking, and the dashboard build. With
+    // no specific step yet, lean on the `profile` bank (first enrichment stage).
+    const category = enrichmentStep ? categoryForEnrichmentStep(enrichmentStep) : 'profile';
+    return [...wittyPoolFor(category), ...wittyPoolFor('generic').slice(0, 2)];
   }, [enrichmentStep, takingLong]);
 
   useEffect(() => {

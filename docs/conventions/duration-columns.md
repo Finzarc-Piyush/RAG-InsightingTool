@@ -32,23 +32,43 @@ annotation, format at the display leaves.
 **text** `timeOfDay` column so the planner can compare it chronologically
 against quoted `'09:30:00'` literals — converting it would break those filters.
 
-- Averages/rankings over a time-of-day column ARE computed in
-  [`run_breakdown_ranking`](../../server/lib/agents/runtime/tools/breakdownRankingTool.ts):
-  cells are coerced to seconds-since-midnight (`timeOfDayToSeconds`), the group
-  is ranked on the numeric seconds, then the result is rendered back as a clock
-  (`formatSecondsAsClock` → `09:51`) for the narrator/table.
+- Averages/rankings over a time-of-day column are computed by coercing cells to
+  seconds-since-midnight (`timeOfDayToSeconds`), aggregating on the numeric
+  seconds, then rendering the result back as a clock (`formatSecondsAsClock` →
+  `09:51`) for the narrator/table. This now happens in **all three** aggregation
+  paths (TOD-AGG):
+  - [`run_breakdown_ranking`](../../server/lib/agents/runtime/tools/breakdownRankingTool.ts)
+    — `metricIsTimeOfDay` flag (in-memory).
+  - [`queryPlanDuckdbExecutor`](../../server/lib/queryPlanDuckdbExecutor.ts) — the
+    production path. `aggregationSqlExpr` emits
+    `AVG(EXTRACT(EPOCH FROM TRY_CAST(col AS TIME)))` (and `MIN`/`MAX`) for a
+    `timeOfDay` measure; `executeQueryPlanOnDuckDb` formats the returned seconds
+    of each `clockAggAliases` output back to `HH:MM`. (Sentinels like `Absent`
+    `TRY_CAST` to NULL and drop out for free.)
+  - [`applyAggregations`](../../server/lib/dataTransform.ts) — the in-memory
+    fallback (`aggregationValues` + `formatClockAggIfNeeded`).
+  `sum` over a clock column is intentionally NOT special-cased (summing clock
+  readings is meaningless) — it keeps the legacy `DOUBLE` cast.
 
 ## Known limitation / follow-up
 
-Time-of-day averaging is currently wired only into `run_breakdown_ranking`
-(the "highest / lowest / average `<clock>` by `<dimension>`" shape — the common
-ask). The generic in-memory `applyAggregations` (pivots) and the DuckDB query
-plan executor still return their prior value (effectively 0) for an average over
-a *time-of-day* column — no regression, but a pivot of avg clock-in won't show a
-clock yet. Durations have no such gap (they are real numbers everywhere).
+Closed (TOD-AGG): a pivot / quick-answer of "avg clock-in by `<dimension>`" now
+renders a real clock instead of all `—`. Remaining gap: **chart value-axis**
+formatting for a time-of-day measure — because the aggregation output is a clock
+*string*, a bar chart of avg-clock-by-dimension has no numeric value axis yet.
+Deferred to a follow-up (keep the column numeric for charts via the
+`inferFormatHint → "duration"`-style hint, string for the table). Durations have
+no such gap (they are real numbers everywhere).
 
 ## Existing datasets
 
-The conversion runs at upload/refresh only. A dataset uploaded **before** this
-shipped keeps the raw `03:31:57` strings and will still average to 0 until it is
-**re-uploaded** (or refreshed via "Update data"). No in-place backfill.
+The **duration** conversion runs at upload/refresh only. A dataset uploaded
+**before** that shipped keeps the raw `03:31:57` strings and will still average
+to 0 until it is **re-uploaded** (or refreshed via "Update data"). No in-place
+backfill.
+
+**Time-of-day** averaging (TOD-AGG) is different: it parses the raw `HH:MM:SS`
+strings at *query* time, so any dataset whose clock column already carries the
+`timeOfDay` annotation averages correctly with no re-upload. Only a dataset old
+enough to predate time-of-day **detection** (`classifyAsTimeOfDay`) needs a
+re-upload to gain the annotation.

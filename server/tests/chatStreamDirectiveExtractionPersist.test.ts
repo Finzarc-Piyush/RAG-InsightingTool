@@ -232,6 +232,52 @@ test("a throwing onAdded notifier does not block subsequent persists", async () 
   for (const e of errors) assert.equal(e.phase, "append");
 });
 
+test("W-UD-gate · a plain question with no persistence marker never persists an LLM-mined rule", async () => {
+  // The LLM extractor mis-fires and mints a directive from a plain analytical
+  // question; the deterministic gate must drop it before any append/onAdded.
+  const { fn: appendDirective, calls } = makeFakeAppender();
+  const onAddedCalls: UserDirective[] = [];
+
+  const result = await persistDirectivesFromUserMessage({
+    username: USERNAME,
+    fingerprint: FINGERPRINT,
+    message: "avg clock in time by cluster",
+    summary: fakeSummary(),
+    existingDirectives: [],
+    appendDirective,
+    onAdded: (d) => onAddedCalls.push(d),
+    extractor: () => [], // deterministic finds nothing (no persistence marker)
+    llmExtractor: async () => [fakeExtracted("avg clock in time by cluster")],
+  });
+
+  assert.equal(result.extracted.length, 0);
+  assert.equal(result.persisted.length, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(onAddedCalls.length, 0);
+});
+
+test("W-UD-gate · a marker-bearing instruction still persists the LLM-mined rule", async () => {
+  // "from now on …" carries an explicit persistence marker → the gate must NOT
+  // suppress; the genuine standing rule is persisted.
+  const { fn: appendDirective, calls } = makeFakeAppender();
+
+  const result = await persistDirectivesFromUserMessage({
+    username: USERNAME,
+    fingerprint: FINGERPRINT,
+    message: "from now on always exclude Cluster 2 WEST",
+    summary: fakeSummary(),
+    existingDirectives: [],
+    appendDirective,
+    extractor: () => [], // isolate the LLM path
+    llmExtractor: async () => [
+      fakeExtracted("from now on always exclude Cluster 2 WEST", "Cluster 2 WEST"),
+    ],
+  });
+
+  assert.equal(result.persisted.length, 1);
+  assert.equal(calls.length, 1);
+});
+
 test("existingDirectives + sourceSessionId/sourceTurnId are forwarded to the extractor", async () => {
   const captured: Array<{
     existing: UserDirective[];
