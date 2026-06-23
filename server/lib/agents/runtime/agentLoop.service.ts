@@ -2977,16 +2977,27 @@ export async function runAgentTurn(
     const {
       enumerateMissingDashboardCharts,
       isExhaustiveBreadthEnabled,
+      shouldRunFeatureSweep,
       resolveBreadthOutcomeMetric,
       computeDimensionLeaders,
     } = await import("./dashboardFeatureSweep.js");
     const breadthEnabled = isExhaustiveBreadthEnabled();
-    // Depth-budget gate (query-intent authority): the breadth-on-every-analysis-
-    // turn path (one chart per categorical dimension) must NOT fire for a plain
-    // lookup. An EXPLICIT dashboard ask still sweeps (it is never minimal-depth).
-    const runFeatureSweep =
-      isExplicitDashboardAsk ||
-      (!minimalDepth && breadthEnabled && ctx.mode === "analysis");
+    // Depth-budget gate (query-intent authority · single enforcement point).
+    // The cross-dimension breadth sweep (one chart per categorical column) is
+    // breadth augmentation, which the authority's contract keeps OFF for a
+    // `standard` descriptive/trend ask unless the user explicitly asked. So a
+    // pointed "what is the daily trend in X" question must NOT sweep — only an
+    // explicit dashboard ask, diagnostic/strategic (`full`) depth, or an
+    // explicit breadth request ("all columns / every level / full fledged")
+    // opts in. Gating on `!minimalDepth` (the old condition) was the bug behind
+    // the "pointed question → 16 charts" report. See shouldRunFeatureSweep.
+    const runFeatureSweep = shouldRunFeatureSweep({
+      isExplicitDashboardAsk,
+      depthBudget: ctx.depthBudget,
+      breadthSignal: ctx.queryIntent?.signals?.breadth === true,
+      breadthEnabled,
+      mode: ctx.mode,
+    });
     if (runFeatureSweep) {
       try {
         // Breadth ties its ceiling to the configured final-chart cap (40 in the

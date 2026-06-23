@@ -95,6 +95,39 @@ describe("queryIntentAuthority · classifyQueryIntent", () => {
     }
   });
 
+  it("explicit BREADTH asks set signals.breadth (opt into the cross-dimension sweep)", () => {
+    const breadthCases = [
+      "break this down across all columns",
+      "show me every dimension",
+      "go full fledged on this",
+      "give me a comprehensive view",
+      "top and worst performers at every level",
+      "compliance across the board",
+    ];
+    for (const q of breadthCases) {
+      assert.equal(
+        classifyQueryIntent(q).signals.breadth,
+        true,
+        `breadth: ${q}`
+      );
+    }
+  });
+
+  it("pointed trend / descriptive asks do NOT set signals.breadth (stay pointed)", () => {
+    const pointedCases = [
+      "What is the daily trend in total visited OL's?",
+      "What is the trend in compliance visits over time?",
+      "sales trends across regions", // "across regions" is not a breadth request
+      "breakdown of revenue by region",
+      "Compare Cluster 1 EAST vs Cluster 2 SOUTH on compliance visits",
+    ];
+    for (const q of pointedCases) {
+      const r = classifyQueryIntent(q);
+      assert.equal(r.signals.breadth, false, `not breadth: ${q}`);
+      assert.equal(r.depthBudget, "standard", `standard: ${q}`);
+    }
+  });
+
   it("multi-part lookups are NOT minimal (the tail demands analysis)", () => {
     const r = classifyQueryIntent("top 10 states and why they grew");
     assert.equal(r.isLookupShape, false);

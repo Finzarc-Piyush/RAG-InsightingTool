@@ -82,6 +82,15 @@ export interface QueryIntent {
     diagnostic: boolean;
     strategic: boolean;
     trend: boolean;
+    /**
+     * Explicit BREADTH request ("all columns", "every dimension", "full
+     * fledged", "comprehensive", "top & worst at every level"). Distinct from
+     * depthBudget: a breadth ask can stay `standard` for prose depth yet opt
+     * INTO the cross-dimension feature sweep. A bare descriptive/trend question
+     * leaves this false — which is what keeps a pointed ask from fanning out
+     * one chart per categorical column.
+     */
+    breadth: boolean;
   };
 }
 
@@ -146,6 +155,20 @@ export const STRATEGIC_INTENT_RE =
 /** Time-evolution intent — "over time / trend / evolution / growth". */
 export const TREND_INTENT_RE =
   /\b(?:over\s*time|overtime|trend|trends|trending|evolution|month\s*over\s*month|year\s*over\s*year|growth|decline|seasonal|seasonality)\b/i;
+
+/**
+ * Explicit BREADTH intent — the user asked for wide, exhaustive coverage across
+ * dimensions, NOT a pointed answer. This is the signal that opts a turn INTO the
+ * cross-dimension feature sweep (one "outcome by <dim>" chart per categorical
+ * column) even when the depth budget is only `standard`. It preserves the
+ * deliberate "go full fledged: top & worst performers at every level, all
+ * columns considered" capability (the reason EXHAUSTIVE_BREADTH_ENABLED was
+ * turned on) while a bare descriptive/trend question — which does NOT match
+ * here — gets no breadth fan-out. Keep additive; over-broad phrases here would
+ * re-open the "simple question → plethora" bug.
+ */
+export const BREADTH_INTENT_RE =
+  /\b(?:all\s+(?:the\s+)?(?:columns|dimensions|fields|metrics|segments|levels)|every\s+(?:dimension|column|level|field|segment|metric|breakdown)|across\s+(?:all|every|the\s+board)|full[-\s]?fledged|comprehensive|exhaustive|each\s+(?:dimension|level|segment)|(?:top\s+(?:and|&|\/)\s+(?:worst|bottom))[\s\S]{0,40}\b(?:every|all|each)\b|at\s+every\s+level)\b/i;
 
 /**
  * Factual interrogative leaders — the question opens like a plain fact ask.
@@ -218,6 +241,7 @@ export function classifyQueryIntent(
   const diagnostic = raw.length > 0 && DIAGNOSTIC_INTENT_RE.test(lower);
   const strategic = raw.length > 0 && STRATEGIC_INTENT_RE.test(lower);
   const trend = raw.length > 0 && TREND_INTENT_RE.test(lower);
+  const breadth = raw.length > 0 && BREADTH_INTENT_RE.test(lower);
   const isMultiPart = raw.length > 0 && MULTI_PART_RE.test(lower);
 
   // Direct factual: opens with a factual interrogative AND carries no
@@ -263,7 +287,7 @@ export function classifyQueryIntent(
     isDirectFactual,
     isLookupShape,
     isMultiPart,
-    signals: { analytical, diagnostic, strategic, trend },
+    signals: { analytical, diagnostic, strategic, trend, breadth },
   };
 }
 

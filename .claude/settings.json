@@ -33,7 +33,24 @@
         "hooks": [
           {
             "type": "command",
+            "command": ".claude/hooks/kill-stray-servers.sh --tests-only",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": ".claude/hooks/check-docs-fresh.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/kill-stray-servers.sh --all",
+            "timeout": 15
           }
         ]
       }

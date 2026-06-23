@@ -61,6 +61,7 @@ import {
 } from "./analyticalBlackboard.js";
 import {
   buildNarratorConfidenceBlock,
+  buildNarratorCalendarBlock,
   summarizeNarratorConfidence,
 } from "./narratorHintsBlock.js";
 import {
@@ -354,6 +355,12 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
   // hedge into prose for medium / low findings.
   const confidenceBlock = buildNarratorConfidenceBlock(blackboard);
   const confidenceSection = confidenceBlock ? `\n\n${confidenceBlock}` : "";
+  // Deterministic day-of-week grounding for the MAIN narrative: if the turn's
+  // daily series has a recurring weekly off-day (e.g. Sundays at ~0), explain
+  // the trend's ups-and-downs by the calendar instead of speculating. Mirrors
+  // the per-chart Key-Insight grounding (insightGenerator.ts).
+  const calendarBlock = buildNarratorCalendarBlock(ctx);
+  const calendarSection = calendarBlock ? `\n\n${calendarBlock}` : "";
   // W-CP1 · thread the analysis brief's epistemic notes (e.g. "avoid claiming
   // causation from observational data alone") into the USER message so the
   // narrator calibrates its likelyDrivers hedging. Kept in the user block (not
@@ -364,7 +371,7 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
         .map((n) => `- ${n}`)
         .join("\n")}`
     : "";
-  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${confidenceSection}${bundleSection}${hierarchySection}${epistemicSection}${repairBlock}`;
+  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${confidenceSection}${calendarSection}${bundleSection}${hierarchySection}${epistemicSection}${repairBlock}`;
 
   // Use the streaming variant when (1) the env flag is on, (2) the caller
   // supplied a streaming hook, AND (3) this is the initial call (not a repair).

@@ -40,6 +40,13 @@ import {
   type FindingEvidence,
 } from "./scaleNarrativeByConfidence.js";
 import type { AnalyticalBlackboard, Finding } from "./analyticalBlackboard.js";
+import type { AgentExecutionContext } from "./types.js";
+import { deriveWeekdayPattern } from "../../insightGenerator/weekdayPattern.js";
+import { formatCompactNumber } from "../../formatCompactNumber.js";
+import {
+  parseTemporalFacetDisplayKey,
+  isTemporalFacetColumnKey,
+} from "../../temporalFacetColumns.js";
 
 /**
  * Regex-extract `FindingEvidence` from a finding's detail string. The agent
@@ -170,6 +177,60 @@ export function buildNarratorConfidenceBlock(
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Build the narrator's TEMPORAL CALENDAR block from the turn's daily analytical
+ * table, when present. Mirrors the per-chart Key-Insight grounding so the MAIN
+ * narrative also explains a trend's ups-and-downs by the weekly calendar (e.g.
+ * "the dips are Sundays") instead of speculating. Returns "" when the table is
+ * not a simple day-grain series, or no recurring off-day is detected.
+ *
+ * Conservative shape gate: exactly one day-grain temporal column + exactly one
+ * numeric measure column. Anything richer is ambiguous, so we stay silent rather
+ * than risk attaching the note to the wrong measure.
+ */
+export function buildNarratorCalendarBlock(ctx: AgentExecutionContext): string {
+  const table = ctx.lastAnalyticalTable;
+  if (!table?.rows?.length || !Array.isArray(table.columns)) return "";
+
+  const dateCols = ctx.summary?.dateColumns ?? [];
+  const isDailyTemporal = (col: string): boolean => {
+    const parsed = parseTemporalFacetDisplayKey(col);
+    if (parsed) return parsed.grain === "date";
+    return dateCols.includes(col);
+  };
+  const temporalCols = table.columns.filter(isDailyTemporal);
+  if (temporalCols.length !== 1) return "";
+  const xCol = temporalCols[0]!;
+
+  const isNumericMeasure = (col: string): boolean => {
+    if (col === xCol || isTemporalFacetColumnKey(col) || dateCols.includes(col)) {
+      return false;
+    }
+    let seen = 0;
+    let numeric = 0;
+    for (const r of table.rows) {
+      const v = r[col];
+      if (v === null || v === undefined || v === "") continue;
+      seen += 1;
+      if (Number.isFinite(typeof v === "number" ? v : Number(String(v).replace(/[%,]/g, "")))) {
+        numeric += 1;
+      }
+      if (seen >= 12) break;
+    }
+    return seen > 0 && numeric / seen >= 0.8;
+  };
+  const measureCols = table.columns.filter(isNumericMeasure);
+  if (measureCols.length !== 1) return "";
+
+  const pattern = deriveWeekdayPattern(
+    table.rows as Record<string, any>[],
+    xCol,
+    measureCols[0]!,
+    (n) => formatCompactNumber(n)
+  );
+  return pattern ? pattern.block : "";
 }
 
 /** Compact diagnostic summary — used for agentLog telemetry. */

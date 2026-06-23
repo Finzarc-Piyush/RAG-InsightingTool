@@ -50,6 +50,7 @@ import {
 } from "../../temporalGrainAuthority.js";
 import { isTemporalFacetColumnKey } from "../../temporalFacetColumns.js";
 import { isFlagOn } from "../../featureFlags.js";
+import type { DepthBudget } from "./queryIntentAuthority.js";
 
 /**
  * Cardinality regime (how many distinct values a dimension has):
@@ -468,6 +469,40 @@ function tryBuildChart(
  */
 export function isExhaustiveBreadthEnabled(): boolean {
   return isFlagOn("EXHAUSTIVE_BREADTH_ENABLED");
+}
+
+/**
+ * Decide — purely, so it is unit-testable in isolation (mirrors
+ * classifyDashboardIntent) — whether a turn should run the cross-dimension
+ * feature sweep (one "outcome by <dim>" chart per categorical column).
+ *
+ * This is the depth-budget enforcement point for breadth. It honours the
+ * query-intent authority's documented contract (queryIntentAuthority.ts
+ * DepthBudget docs): a `standard` descriptive/trend ask is the "full envelope
+ * but NO breadth augmentation unless explicitly asked" — so it must NOT sweep.
+ * The sweep fires only when:
+ *   - the user explicitly asked for a dashboard (always a breadth context), OR
+ *   - breadth is enabled on an analysis turn AND the ask is genuinely broad,
+ *     i.e. diagnostic/strategic depth (`full`) OR an explicit breadth request
+ *     (`signals.breadth`, e.g. "all columns / every level / full fledged").
+ *
+ * Gating on `!minimal` here (the previous behaviour) was the bug: it let every
+ * `standard` trend question fan out one chart per dimension — the "pointed
+ * question → plethora" the user reported. See queryIntentAuthority signals.breadth.
+ */
+export function shouldRunFeatureSweep(args: {
+  isExplicitDashboardAsk: boolean;
+  depthBudget: DepthBudget | undefined;
+  breadthSignal: boolean;
+  breadthEnabled: boolean;
+  mode: string | undefined;
+}): boolean {
+  if (args.isExplicitDashboardAsk) return true;
+  return (
+    args.breadthEnabled &&
+    args.mode === "analysis" &&
+    (args.depthBudget === "full" || args.breadthSignal === true)
+  );
 }
 
 /**

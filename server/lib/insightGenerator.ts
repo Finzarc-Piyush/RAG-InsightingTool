@@ -6,6 +6,7 @@ import type { ChartInsightSynthesisContext } from './insightSynthesis/types.js';
 import { formatSessionAnalysisContextForInsight } from './insightSynthesis/formatSessionContext.js';
 import { getInsightModel, getInsightTemperature } from './insightSynthesis/insightModelConfig.js';
 import { computePivotPatterns, renderPivotPatternsBlock } from './insightGenerator/pivotPatterns.js';
+import { deriveWeekdayPattern } from './insightGenerator/weekdayPattern.js';
 import { buildPatternDrivenFallbackShort } from './insightGenerator/deterministicNarratives.js';
 import { hasHedge, STAT_NUMBER_RE } from './agents/runtime/verifierCausalCheck.js';
 import { splitChartInsightLanes, joinChartInsightLanes } from '../shared/chartInsightLanes.js';
@@ -486,6 +487,17 @@ ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${
   const pivotPatternsBlock = renderPivotPatternsBlock(pivotPatterns, formatY);
   const pivotPatternsSection = pivotPatternsBlock ? `\n\n${pivotPatternsBlock}` : '';
 
+  // Deterministic day-of-week grounding: for a single-measure date-axis trend,
+  // detect a recurring weekly off-day (e.g. Sundays sit at ~0) and feed it in as
+  // ground truth so the WHY names the weekly rhythm instead of speculating about
+  // the dips. Pure + self-guarding (returns null for non-temporal / no-rhythm
+  // series), so it never pollutes charts that have no weekly structure.
+  const weekdayPattern =
+    seriesKeys || isDualAxis
+      ? null
+      : deriveWeekdayPattern(chartData, chartSpec.x, chartSpec.y, formatY);
+  const weekdayPatternSection = weekdayPattern ? `\n\n${weekdayPattern.block}` : '';
+
   const scatterBlock = scatterNumericFactsBlock ? `\n${scatterNumericFactsBlock}\n` : '';
 
   const businessCommentaryRequest = wantsBusinessCommentary
@@ -497,7 +509,7 @@ ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${
 
 TASK: Brief a busy manager (NOT a statistician) on THIS chart in AT MOST 3 short lines. Use the real numbers from DATA FACTS / PIVOT PATTERNS / blocks below, but translate them into everyday language—never invent metrics. PIVOT PATTERNS are internal analysis signals: read them to find the story, but NEVER echo their labels (no "quartile", "concentration", "HHI", "CV", "P75", "mass", "trough"). Emit these lanes, each on its OWN line, omitting any optional lane that does not genuinely apply:
   Line 1 — HEADLINE (REQUIRED): the single most important comparison in plain words WITH the actual number(s), naming each group by its EXACT label from DATA FACTS (e.g. "Female passengers survived at 74% versus 19% for male passengers — nearly 4× higher"). One sentence. No hedge here; no "WHY:"/"DO:" prefix.
-  Line 2 — start the line literally with "WHY: " then ONE clearly-hedged hypothesis for why the pattern might exist, drawn from the question and general real-world / business knowledge (OPTIONAL). It MUST open with a hedge ("likely", "may reflect", "consistent with", "one plausible reason") so it never reads as a measured fact, and MUST NOT contain any number (numbers belong in the headline). Omit the whole line if there is no credible reason.
+  Line 2 — start the line literally with "WHY: " then ONE clearly-hedged hypothesis for why the pattern might exist, drawn from the question and general real-world / business knowledge (OPTIONAL). It MUST open with a hedge ("likely", "may reflect", "consistent with", "one plausible reason") so it never reads as a measured fact, and MUST NOT contain any number (numbers belong in the headline). Omit the whole line if there is no credible reason. EXCEPTION — if a TEMPORAL CALENDAR block appears below, the WHY MUST use it: state the weekly rhythm plainly (e.g. "WHY: the regular dips are Sundays — a non-working day, so the weekly rise-and-fall is expected") and do NOT present that off-day pattern as a surprise, a demand swing, or a data gap. A calendar fact is observed, so a light hedge is fine but never contradict it.
   Line 3 — start the line literally with "DO: " then ONE concrete next step the reader could actually act on (OPTIONAL). If the pattern is a fixed historical or structural fact nobody can change from this chart, OMIT this line entirely rather than forcing a generic action.
 
 Keep it tight — a manager should absorb all of it in a few seconds. Drop a lane rather than padding it.
@@ -514,7 +526,7 @@ ${seriesKeys ? `- Series: ${chartSpec.seriesColumn?.trim() || 'series'} (${serie
 - Points: ${chartData.length}
 - Y stats: ${formatY(minY)}–${formatY(maxY)} (avg ${formatY(avgY)}, 75th percentile: ${formatY(yP75)})${isDualAxis ? ` | Y2: ${formatY2(minY2)}–${formatY2(maxY2)} (avg ${formatY2(avgY2)})` : ''}
 
-${dataFactsContext}${pivotPatternsSection}
+${dataFactsContext}${pivotPatternsSection}${weekdayPatternSection}
 ${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}${chatInsightsContext}${domainBlock}
 
 OUTPUT JSON (exact keys only):

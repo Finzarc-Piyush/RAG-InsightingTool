@@ -12,10 +12,16 @@ import type { AgentExecutionContext } from "../lib/agents/runtime/types.js";
 import type { DataSummary } from "../shared/schema.js";
 
 /**
- * Exhaustive breadth: a plain analysis turn must get one "outcome by <dim>"
- * chart for EVERY categorical column (not just the LLM brief's lists), the
- * outcome resolved deterministically (never an ordinal like "Day"), and a
- * best/worst leader pair per dimension.
+ * Exhaustive breadth (the PURE engine): when invoked, it produces one
+ * "outcome by <dim>" chart for EVERY categorical column (not just the LLM
+ * brief's lists), the outcome resolved deterministically (never an ordinal
+ * like "Day"), and a best/worst leader pair per dimension.
+ *
+ * NOTE: these tests exercise the function DIRECTLY. WHETHER it runs on a given
+ * turn is a separate decision owned by `shouldRunFeatureSweep` (see
+ * featureSweepGate.test.ts) — which now suppresses it for `standard`-depth
+ * descriptive/trend asks so a pointed question no longer fans out one chart per
+ * dimension. The breadth engine itself is unchanged.
  */
 function makeCtx(
   data: Record<string, unknown>[],
