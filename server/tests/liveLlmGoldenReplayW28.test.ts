@@ -202,7 +202,7 @@ describe("W28 · live-LLM golden replay", () => {
         outcomeMetricColumn: "Volume_MT",
         segmentationDimensions: ["Brand", "Region", "Channel"],
         candidateDriverDimensions: ["Brand", "Region", "Channel"],
-        epistemicNotes: "Observational; avoid causal claims.",
+        epistemicNotes: ["Observational; avoid causal claims."],
         filters: [],
         requestsDashboard: false,
         clarifyingQuestions: [],
@@ -231,10 +231,6 @@ describe("W28 · live-LLM golden replay", () => {
               ? {
                   type: result.charts[0].type,
                   title: result.charts[0].title,
-                  hasBusinessCommentary: Boolean(
-                    (result.charts[0] as { businessCommentary?: string })
-                      .businessCommentary
-                  ),
                 }
               : null,
             traceStepCount: result.agentTrace?.steps?.length ?? 0,

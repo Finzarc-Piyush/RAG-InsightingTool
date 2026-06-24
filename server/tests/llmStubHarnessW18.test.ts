@@ -10,6 +10,7 @@ const { callLlm } = await import("../lib/agents/runtime/callLlm.js");
 const { LLM_PURPOSE } = await import("../lib/agents/runtime/llmCallPurpose.js");
 const { installLlmStub, clearLlmStub, DEFAULT_STUB_HANDLERS, getActiveStubHandlers } =
   await import("./helpers/llmStub.js");
+const { analysisBriefSchema } = await import("../shared/schema.js");
 
 beforeEach(() => clearLlmStub());
 after(() => clearLlmStub());
@@ -32,6 +33,25 @@ describe("W18 · default stub handlers cover every LLM_PURPOSE value", () => {
     assert.equal((out.implications as unknown[]).length, 2);
     assert.ok(Array.isArray(out.recommendations));
     assert.match(out.domainLens as string, /marico-stub/);
+  });
+
+  it("default ANALYSIS_BRIEF stub honors the brief contract (epistemicNotes is string[], not a bare string)", () => {
+    // Regression guard (W-CP1): `runNarrator` calls `epistemicNotes.map()`. A
+    // bare-string fixture has a truthy `.length` but no `.map`, so it threw and
+    // crashed synthesis — and in the multi-turn agent-turn tests that crash
+    // didn't just fail, it HUNG the test and wedged the whole suite. Stubs
+    // bypass schema validation, so assert the field against its canonical
+    // schema here to stop a fixture drifting back to the wrong type.
+    const brief = DEFAULT_STUB_HANDLERS[LLM_PURPOSE.ANALYSIS_BRIEF](
+      undefined as never
+    ) as Record<string, unknown>;
+    const parsed = analysisBriefSchema.shape.epistemicNotes.safeParse(
+      brief.epistemicNotes
+    );
+    assert.ok(
+      parsed.success,
+      "default ANALYSIS_BRIEF stub.epistemicNotes must satisfy analysisBriefSchema (string[])"
+    );
   });
 });
 

@@ -118,7 +118,7 @@ function installCommonStub(opts?: {
       outcomeMetricColumn: "Volume",
       segmentationDimensions: ["Brand", "Region"],
       candidateDriverDimensions: ["Brand", "Region"],
-      epistemicNotes: "fixture",
+      epistemicNotes: ["fixture"],
     }),
     [LLM_PURPOSE.NARRATOR]: () => ({
       body: "MARICO lost share in South-region metros.",
@@ -199,7 +199,7 @@ describe("agentLoop · post-verifier business-actions seam", () => {
       outcomeMetricColumn: "Volume",
       segmentationDimensions: ["Brand", "Region"],
       candidateDriverDimensions: ["Brand", "Region"],
-      epistemicNotes: "fixture",
+      epistemicNotes: ["fixture"],
       filters: [],
       requestsDashboard: false,
       clarifyingQuestions: [],
@@ -238,7 +238,7 @@ describe("agentLoop · post-verifier business-actions seam", () => {
       outcomeMetricColumn: "Volume",
       segmentationDimensions: ["Brand", "Region"],
       candidateDriverDimensions: ["Brand", "Region"],
-      epistemicNotes: "fixture",
+      epistemicNotes: ["fixture"],
       filters: [],
       requestsDashboard: false,
       clarifyingQuestions: [],
@@ -256,10 +256,46 @@ describe("agentLoop · post-verifier business-actions seam", () => {
   it("agent self-gates to empty array — promise resolves but yields []", async () => {
     process.env.BUSINESS_ACTIONS_ENABLED = "true";
     installCommonStub({ businessActions: { items: [] } });
+    // Must be a NON-minimal (analytical/strategic) ask so the turn produces a
+    // full envelope and the business-actions seam actually spawns — only then
+    // can we exercise the agent self-gating to []. A minimal-depth descriptive
+    // lookup is intentionally NOT augmented with business actions (depth-budget
+    // gate, invariant #12), so it would never reach this seam. See the dedicated
+    // minimal-depth skip assertion below.
     const ctx = buildAgentExecutionContext({
       sessionId: "fixture-session",
       username: "tester@example.com",
-      question: "What are sales by region last quarter?", // descriptive
+      question: "How do I rescue MARICO's falling share?",
+      data: fixtureData(),
+      summary,
+      chatHistory: [],
+      mode: "analysis",
+      sessionAnalysisContext: sac,
+      chatDocument: chatDocument as ChatDocument,
+    });
+    ctx.analysisBrief = {
+      questionShape: "driver_discovery",
+      outcomeMetricColumn: "Volume",
+      segmentationDimensions: ["Brand", "Region"],
+      candidateDriverDimensions: ["Brand", "Region"],
+      epistemicNotes: ["fixture"],
+      filters: [],
+      requestsDashboard: false,
+      clarifyingQuestions: [],
+    };
+    const result = await runAgentTurn(ctx, loadAgentConfigFromEnv());
+    assert.ok(result.businessActionsPromise);
+    const items = await result.businessActionsPromise!;
+    assert.deepEqual(items, [], "self-gate yields empty array");
+  });
+
+  it("minimal-depth descriptive lookup is NOT augmented with business actions (invariant #12)", async () => {
+    process.env.BUSINESS_ACTIONS_ENABLED = "true";
+    installCommonStub({ businessActions: { items: [] } });
+    const ctx = buildAgentExecutionContext({
+      sessionId: "fixture-session",
+      username: "tester@example.com",
+      question: "What are sales by region last quarter?", // descriptive → minimal depth
       data: fixtureData(),
       summary,
       chatHistory: [],
@@ -272,14 +308,16 @@ describe("agentLoop · post-verifier business-actions seam", () => {
       outcomeMetricColumn: "Volume",
       segmentationDimensions: ["Brand", "Region"],
       candidateDriverDimensions: [],
-      epistemicNotes: "fixture",
+      epistemicNotes: ["fixture"],
       filters: [],
       requestsDashboard: false,
       clarifyingQuestions: [],
     };
     const result = await runAgentTurn(ctx, loadAgentConfigFromEnv());
-    assert.ok(result.businessActionsPromise);
-    const items = await result.businessActionsPromise!;
-    assert.deepEqual(items, [], "self-gate yields empty array");
+    assert.equal(
+      result.businessActionsPromise,
+      undefined,
+      "a minimal-depth descriptive lookup must not spawn business actions"
+    );
   });
 });

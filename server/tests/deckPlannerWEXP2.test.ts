@@ -41,7 +41,6 @@ function makeChart(title: string, type: ChartSpec["type"] = "bar"): ChartSpec {
       { Quarter: "Q2", Sales: 120 },
     ],
     keyInsight: `Insight for ${title}`,
-    businessCommentary: `Business commentary for ${title}`,
   } as ChartSpec;
 }
 
@@ -115,7 +114,7 @@ function makeDashboard(): Dashboard {
 }
 
 describe("W-EXP-2 · buildSlimDashboard / chart-id allocation", () => {
-  test("strips raw chart data, keeps title + encodings + commentary", () => {
+  test("strips raw chart data, keeps title + encodings + insight", () => {
     const dash = makeDashboard();
     const slim = buildSlimDashboard({ dashboard: dash, generatedAt: "2026-05-05" });
     const c0 = slim.sheets[0]!.charts[0]!;
@@ -125,7 +124,6 @@ describe("W-EXP-2 · buildSlimDashboard / chart-id allocation", () => {
     assert.equal(c0.x, "Quarter");
     assert.equal(c0.y, "Sales");
     assert.match(c0.insight ?? "", /Insight for Quarterly sales trend/);
-    assert.match(c0.businessCommentary ?? "", /Business commentary for Quarterly sales trend/);
     // Raw data must NOT have leaked through.
     assert.equal((c0 as unknown as { data?: unknown }).data, undefined);
   });

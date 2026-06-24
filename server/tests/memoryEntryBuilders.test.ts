@@ -80,11 +80,9 @@ describe("W58 · buildTurnEndMemoryEntries", () => {
             x: "Region",
             y: "Sales",
             aggregate: "sum",
-            // AMR7 · richer body — insight + commentary survive when present;
-            // the spec (sans inline `data`) ships for spec-replay on recall.
+            // AMR7 · richer body — the key insight survives when present; the
+            // spec (sans inline `data`) ships for spec-replay on recall.
             keyInsight: "East leads at 38% of Q3 total sales.",
-            businessCommentary:
-              "Watch West softening — drove the bulk of the YoY decline.",
           },
         ],
       },
@@ -100,10 +98,7 @@ describe("W58 · buildTurnEndMemoryEntries", () => {
     assert.strictEqual(body.seriesColumn, undefined);
     assert.strictEqual(body.aggregate, "sum");
     assert.strictEqual(body.keyInsight, "East leads at 38% of Q3 total sales.");
-    assert.strictEqual(
-      body.businessCommentary,
-      "Watch West softening — drove the bulk of the YoY decline."
-    );
+    assert.strictEqual(body.businessCommentary, undefined);
     // chartSpec carries the spec (no inline `data`).
     const spec = body.chartSpec as Record<string, unknown>;
     assert.strictEqual(spec.type, "bar");

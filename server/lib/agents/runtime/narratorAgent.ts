@@ -136,7 +136,9 @@ export const narratorOutputSchema = z.object({
     )
     .max(12)
     .optional(),
-  // One-paragraph framing of the findings against FMCG/Marico priors.
+  // Retired: domain "context" framing is no longer requested or rendered. The
+  // field is kept optional for back-compat (persisted envelopes) but the prompt
+  // no longer asks for it, so the narrator does not produce one.
   domainLens: z.string().max(2000).optional(),
   // W-SR1 · the hedged "Why this might be happening" causal lane. The narrator
   // is the primary producer; this is the field the AnswerCard's "Why" section
@@ -365,7 +367,13 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
   // causation from observational data alone") into the USER message so the
   // narrator calibrates its likelyDrivers hedging. Kept in the user block (not
   // the system prompt) so the cacheable system prefix stays byte-stable.
-  const epistemicNotes = ctx.analysisBrief?.epistemicNotes ?? [];
+  // Guard the TYPE, not just null/undefined: the brief is `string[]` per
+  // analysisBriefSchema in production (validated at the LLM boundary), but a
+  // malformed brief (e.g. an un-validated test stub) could carry a bare string
+  // — `.length` would be truthy and `.map` would throw, crashing synthesis.
+  const epistemicNotes = Array.isArray(ctx.analysisBrief?.epistemicNotes)
+    ? ctx.analysisBrief.epistemicNotes
+    : [];
   const epistemicSection = epistemicNotes.length
     ? `\n\nEPISTEMIC NOTES (calibrate hedging; the measured layer must stay causation-free, the "why" goes only in likelyDrivers):\n${epistemicNotes
         .map((n) => `- ${n}`)

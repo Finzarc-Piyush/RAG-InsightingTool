@@ -97,12 +97,14 @@ export const DEFAULT_STUB_HANDLERS: Required<StubHandlerMap> = {
   [LLM_PURPOSE.ANALYSIS_BRIEF]: () => ({
     questionShape: "exploration",
     candidateDriverDimensions: [],
-    epistemicNotes: "stub",
+    epistemicNotes: ["stub"],
   }),
   // Visual planner schema requires `addCharts: array` (not `charts`).
   [LLM_PURPOSE.VISUAL_PLANNER]: () => ({ addCharts: [] }),
   [LLM_PURPOSE.BUILD_DASHBOARD]: () => ({ tiles: [] }),
   [LLM_PURPOSE.SQL_GEN]: () => ({ sql: "SELECT 1" }),
+  // Auto-title (commit 8efdbeab) — schema is `{ title: string (3..MAX) }`.
+  [LLM_PURPOSE.ANALYSIS_TITLE]: () => ({ title: "Stub analysis title" }),
   [LLM_PURPOSE.SESSION_CONTEXT]: () => ({}),
   [LLM_PURPOSE.DATASET_PROFILE]: () => ({
     shortDescription: "stub",
@@ -111,7 +113,6 @@ export const DEFAULT_STUB_HANDLERS: Required<StubHandlerMap> = {
   }),
   [LLM_PURPOSE.INSIGHT_GEN]: () => ({
     keyInsight: "Stub chart insight.",
-    businessCommentary: "Per `marico-stub`, this metric typically …",
   }),
   [LLM_PURPOSE.CORRELATION_INSIGHT]: () => ({ insights: [] }),
   [LLM_PURPOSE.CHART_JSON_REPAIR]: () => ({}),

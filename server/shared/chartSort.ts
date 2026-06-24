@@ -351,6 +351,31 @@ export function selectTopNByValue<T extends Record<string, unknown>>(
   return withVal.slice(0, n).map((x) => x.r);
 }
 
+/**
+ * Pick the bottom-N rows BY VALUE (ascending), preserving input order among ties
+ * and pushing finite values ahead of NaN — so "Bottom N" selects the N smallest
+ * *finite* values rather than N blank rows. Mirror of `selectTopNByValue`; the
+ * SELECTION step, decoupled from display ORDER (see `applyChartSort`'s `limit`).
+ */
+export function selectBottomNByValue<T extends Record<string, unknown>>(
+  rows: T[],
+  n: number,
+  opts: { yCol: string; seriesKeys?: string[] },
+): T[] {
+  if (!(n > 0) || rows.length <= n) return rows.slice();
+  const withVal = rows.map((r, i) => ({ r, i, v: rowValue(r, opts.yCol, opts.seriesKeys) }));
+  withVal.sort((a, b) => {
+    const af = Number.isFinite(a.v);
+    const bf = Number.isFinite(b.v);
+    if (!af && !bf) return a.i - b.i;
+    if (!af) return 1; // NaN last — never selected as "smallest"
+    if (!bf) return -1;
+    if (a.v !== b.v) return a.v - b.v; // ascending
+    return a.i - b.i;
+  });
+  return withVal.slice(0, n).map((x) => x.r);
+}
+
 /** Order rows by the category axis (direction-aware, nulls always last). */
 function sortByCategory<T extends Record<string, unknown>>(
   rows: T[],
@@ -396,13 +421,24 @@ function sortByValue<T extends Record<string, unknown>>(
  * THE one ordering function. Returns a NEW array; the input is never mutated.
  * `seriesKeys` (legend/stack order) is never touched — only rows are reordered.
  *
- * `maxRows` capping semantics differ by mode, and both are intuitive:
+ * `limit` is the explicit user-driven Top-N / Bottom-N selection. It runs FIRST
+ * and ALWAYS selects by value, fully decoupled from the display `sort`:
+ *  - `{mode:'top', n:10}`    → the 10 biggest by value, then ordered by `sort`.
+ *  - `{mode:'bottom', n:10}` → the 10 smallest (finite) by value, then by `sort`.
+ *  So "Top 10 + axis-asc" shows the 10 biggest displayed by axis, and
+ *  "Bottom 10 + value-desc" shows the 10 smallest displayed tallest-first.
+ *
+ * `maxRows` is the legacy auto-cap (inline card / server). Its semantics differ
+ * by mode and are left untouched:
  *  - VALUE sort → order by value in the chosen direction, then take the first N.
  *    So `value/desc + maxRows` = the best N (top-N), `value/asc + maxRows` = the
  *    worst N (bottom-N) — preserving the MW3 management-by-exception behavior.
  *  - CATEGORY sort → select the most-significant N BY VALUE first, then order
  *    that set by the axis. So `category/asc + maxRows:10` shows the 10 biggest
  *    cohorts ordered by axis, never the 10 smallest categories.
+ *
+ * When both are present `limit` narrows first, then `maxRows` caps — they compose
+ * safely, though callers use one or the other.
  */
 export function applyChartSort<T extends Record<string, unknown>>(
   rows: T[],
@@ -412,19 +448,32 @@ export function applyChartSort<T extends Record<string, unknown>>(
     yCol: string;
     seriesKeys?: string[];
     maxRows?: number;
+    limit?: { mode: "top" | "bottom"; n: number };
     isTemporalX?: boolean;
   },
 ): T[] {
-  const { xCol, yCol, seriesKeys } = opts;
+  const { xCol, yCol, seriesKeys, limit } = opts;
+
+  // Explicit Top-N / Bottom-N selection runs FIRST, by value, regardless of the
+  // display sort below (see JSDoc). `rowValue` sums across seriesKeys, so a
+  // multi-series bar's Top-N ranks by stacked total — consistent with how sort
+  // already ranks multi-series bars.
+  let working: T[] = rows;
+  if (limit && limit.n > 0 && working.length > limit.n) {
+    working =
+      limit.mode === "bottom"
+        ? selectBottomNByValue(working, limit.n, { yCol, seriesKeys })
+        : selectTopNByValue(working, limit.n, { yCol, seriesKeys });
+  }
+
   const cap = opts.maxRows && opts.maxRows > 0 ? opts.maxRows : 0;
 
   if (sort.by === "value") {
-    const sorted = sortByValue(rows, sort.direction, xCol, yCol, seriesKeys);
+    const sorted = sortByValue(working, sort.direction, xCol, yCol, seriesKeys);
     return cap && sorted.length > cap ? sorted.slice(0, cap) : sorted;
   }
 
   // category sort: cap to the most-significant N (by value) BEFORE ordering by axis.
-  let working: T[] = rows;
   if (cap && working.length > cap) {
     working = selectTopNByValue(working, cap, { yCol, seriesKeys });
   }

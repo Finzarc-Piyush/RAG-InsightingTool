@@ -240,7 +240,6 @@ const EXPECTED_ENVELOPE_KEYS = [
   "methodology",
   "implications",
   "recommendations",
-  "domainLens",
 ] as const;
 
 function buildCtx(question: string) {
@@ -262,7 +261,7 @@ function buildCtx(question: string) {
     outcomeMetricColumn: "Volume",
     segmentationDimensions: ["Brand", "Region"],
     candidateDriverDimensions: ["Brand", "Region"],
-    epistemicNotes: "fixture",
+    epistemicNotes: ["fixture"],
     filters: [],
     requestsDashboard: false,
     clarifyingQuestions: [],
@@ -364,7 +363,7 @@ describe("runAgentTurn characterization · multi-step / synthesis-retry / abort"
   });
 
   it("SHAPE D · an incomplete first draft triggers a synthesis completeness-repair round", async () => {
-    // The narrator's FIRST draft omits implications/recommendations/domainLens —
+    // The narrator's FIRST draft omits implications/recommendations —
     // mandatory for an analytical questionShape. The deterministic W17
     // completeness gate must fire ≥1 repair round (observable as an
     // `envelope-*` flow_decision) and the SECOND, complete draft must win.
@@ -378,7 +377,7 @@ describe("runAgentTurn characterization · multi-step / synthesis-retry / abort"
         narratorCall++;
         if (narratorCall === 1) {
           // Deliberately incomplete: a body + tldr + findings but NO
-          // implications, recommendations, or domainLens.
+          // implications or recommendations.
           return {
             body:
               "Saffola leads brand volume across the portfolio, with the South region carrying most of the lift.",
@@ -442,7 +441,6 @@ describe("runAgentTurn characterization · multi-step / synthesis-retry / abort"
       (result.answerEnvelope!.recommendations ?? []).length >= 1,
       "repaired envelope carries recommendations"
     );
-    assert.match(result.answerEnvelope!.domainLens ?? "", /marico-foods-edible-oils-portfolio/);
   });
 
   it("SHAPE E · an aborted turn returns a clean abort envelope and skips synthesis + the final verifier", async () => {

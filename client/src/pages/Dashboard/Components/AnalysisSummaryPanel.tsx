@@ -1,6 +1,6 @@
 /**
  * DPF4 · render the persisted analytical content (TL;DR, findings,
- * implications, recommendations, methodology, caveats, domainLens,
+ * implications, recommendations, methodology, caveats,
  * businessActions, investigationSummary, followUpPrompts) as visible
  * tiles in the live dashboard view.
  *
@@ -341,8 +341,7 @@ export function AnalysisSummaryPanel(props: AnalysisSummaryPanelProps) {
       (envelope.implications?.length ?? 0) > 0 ||
       (envelope.recommendations?.length ?? 0) > 0 ||
       envelope.methodology ||
-      (envelope.caveats?.length ?? 0) > 0 ||
-      envelope.domainLens);
+      (envelope.caveats?.length ?? 0) > 0);
   const hasBusinessActions = (businessActions?.length ?? 0) > 0;
   const hasFollowUps = (followUpPrompts?.length ?? 0) > 0;
   const hasInvestigation =
@@ -382,12 +381,6 @@ export function AnalysisSummaryPanel(props: AnalysisSummaryPanelProps) {
       {question ? (
         <div className="text-xs text-muted-foreground italic">
           Original question: {question}
-        </div>
-      ) : null}
-
-      {envelope?.domainLens ? (
-        <div className="rounded-brand-sm border border-border bg-muted/20 px-3 py-2 text-sm italic text-muted-foreground">
-          {envelope.domainLens}
         </div>
       ) : null}
 

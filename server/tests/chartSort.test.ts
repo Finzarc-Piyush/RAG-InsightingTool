@@ -7,6 +7,7 @@ import {
   resolveSort,
   rowValue,
   selectTopNByValue,
+  selectBottomNByValue,
   type ChartSortSpec,
 } from "../shared/chartSort.js";
 
@@ -225,5 +226,108 @@ describe("chartSort · selectTopNByValue", () => {
     ];
     const out = selectTopNByValue(rows, 2, { yCol: "y" });
     assert.deepEqual(new Set(order(out, "x")), new Set(["b", "c"]));
+  });
+});
+
+describe("chartSort · selectBottomNByValue", () => {
+  it("keeps the N lowest-value rows", () => {
+    const rows = [
+      { x: "a", y: 1 },
+      { x: "b", y: 9 },
+      { x: "c", y: 5 },
+    ];
+    const out = selectBottomNByValue(rows, 2, { yCol: "y" });
+    assert.deepEqual(new Set(order(out, "x")), new Set(["a", "c"]));
+  });
+
+  it("pushes NaN/blank rows last — never selected as 'smallest'", () => {
+    const rows = [
+      { x: "a", y: 4 },
+      { x: "b", y: null },
+      { x: "c", y: 2 },
+      { x: "d", y: "n/a" },
+    ];
+    const out = selectBottomNByValue(rows, 2, { yCol: "y" });
+    // The 2 smallest FINITE values are c(2) and a(4); the blanks are excluded.
+    assert.deepEqual(new Set(order(out, "x")), new Set(["a", "c"]));
+  });
+
+  it("returns a copy of all rows when n >= length", () => {
+    const rows = [{ x: "a", y: 1 }, { x: "b", y: 2 }];
+    const out = selectBottomNByValue(rows, 5, { yCol: "y" });
+    assert.deepEqual(order(out, "x"), ["a", "b"]);
+    assert.notEqual(out, rows);
+  });
+});
+
+describe("chartSort · applyChartSort limit (Top-N / Bottom-N)", () => {
+  const rows = [
+    { age: "1", survived: 5 },
+    { age: "2", survived: 100 },
+    { age: "3", survived: 1 },
+    { age: "4", survived: 80 },
+    { age: "5", survived: 90 },
+  ];
+
+  it("Top-3 selects by value, then DISPLAYS in the chosen sort (axis-asc)", () => {
+    // top-3 by value = 2(100),5(90),4(80); displayed ascending by age.
+    const out = applyChartSort(rows, { by: "category", direction: "asc" }, {
+      xCol: "age",
+      yCol: "survived",
+      limit: { mode: "top", n: 3 },
+    });
+    assert.deepEqual(order(out, "age"), ["2", "4", "5"]);
+  });
+
+  it("Bottom-3 selects the smallest by value, DISPLAYED value-desc (tallest of the small first)", () => {
+    // bottom-3 by value = 3(1),1(5),4(80); displayed value-desc → 4,1,3.
+    const out = applyChartSort(rows, { by: "value", direction: "desc" }, {
+      xCol: "age",
+      yCol: "survived",
+      limit: { mode: "bottom", n: 3 },
+    });
+    assert.deepEqual(order(out, "age"), ["4", "1", "3"]);
+  });
+
+  it("selection is decoupled from display order: Top-2 + value-asc", () => {
+    // top-2 by value = 2(100),5(90); displayed value-asc → 5,2.
+    const out = applyChartSort(rows, { by: "value", direction: "asc" }, {
+      xCol: "age",
+      yCol: "survived",
+      limit: { mode: "top", n: 2 },
+    });
+    assert.deepEqual(order(out, "age"), ["5", "2"]);
+  });
+
+  it("limit n >= count is a no-op on selection (all rows kept)", () => {
+    const out = applyChartSort(rows, { by: "value", direction: "desc" }, {
+      xCol: "age",
+      yCol: "survived",
+      limit: { mode: "top", n: 99 },
+    });
+    assert.equal(out.length, rows.length);
+  });
+
+  it("no limit leaves behavior byte-identical to today (back-compat)", () => {
+    const withLimit = applyChartSort(rows, { by: "value", direction: "desc" }, {
+      xCol: "age",
+      yCol: "survived",
+    });
+    assert.deepEqual(order(withLimit, "age"), ["2", "5", "4", "1", "3"]);
+  });
+
+  it("ranks multi-series bars by the summed value (Top-2)", () => {
+    const wide = [
+      { x: "A", S1: 1, S2: 1 }, // 2
+      { x: "B", S1: 9, S2: 1 }, // 10
+      { x: "C", S1: 4, S2: 4 }, // 8
+    ];
+    const out = applyChartSort(wide, { by: "value", direction: "desc" }, {
+      xCol: "x",
+      yCol: "S1",
+      seriesKeys: ["S1", "S2"],
+      limit: { mode: "top", n: 2 },
+    });
+    assert.deepEqual(order(out, "x"), ["B", "C"]);
   });
 });

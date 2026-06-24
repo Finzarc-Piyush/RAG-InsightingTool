@@ -105,7 +105,7 @@ export async function generateChartInsights(
   summary: DataSummary,
   chatInsights?: Insight[],
   synthesisContext?: ChartInsightSynthesisContext
-): Promise<{ keyInsight: string; businessCommentary?: string }> {
+): Promise<{ keyInsight: string }> {
   if (!chartData || chartData.length === 0) {
     return {
       keyInsight: "No data available for analysis"
@@ -449,16 +449,6 @@ SUGGESTION FORMAT:
     ? `\n\nUSER NOTES:\n${synthesisContext.permanentContext.trim()}`
     : '';
 
-  // W12 · feed FMCG/Marico domain context to chart insight generation. When
-  // present, the model is asked to fill `businessCommentary` (1–2 sentences
-  // framing the chart's metric against industry priors). Capped at 3000 chars
-  // so the prompt stays under the existing budget; the full pack content is
-  // already available to narrator/synthesizer via the W7 bundle.
-  const domainBlock = synthesisContext?.domainContext?.trim()
-    ? `\n\nFMCG / MARICO DOMAIN CONTEXT (background only — never numeric evidence; cite pack id when used):\n${synthesisContext.domainContext.trim().slice(0, 3000)}`
-    : '';
-  const wantsBusinessCommentary = Boolean(domainBlock);
-
   // Build chat insights context if available
   const chatInsightsContext = chatInsights && chatInsights.length > 0
     ? `\n\nRELEVANT CHAT-LEVEL INSIGHTS (optional cross-check; prefer DATA FACTS + user question):
@@ -500,11 +490,6 @@ ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${
 
   const scatterBlock = scatterNumericFactsBlock ? `\n${scatterNumericFactsBlock}\n` : '';
 
-  const businessCommentaryRequest = wantsBusinessCommentary
-    ? `,
-  "businessCommentary": "1–2 sentences framing this chart's metric (${chartSpec.y}${isDualAxis ? `, ${y2Label}` : ''}) against the FMCG/Marico domain context above. Cite the pack id verbatim (e.g. \`marico-haircare-portfolio\`, \`kpi-and-metric-glossary\`) when you reference it. Treat domain content as orientation only — never invent industry figures. Omit (return null) when no pack is materially relevant."`
-    : '';
-
   const prompt = `Return JSON with the listed fields.
 
 TASK: Brief a busy manager (NOT a statistician) on THIS chart in AT MOST 3 short lines. Use the real numbers from DATA FACTS / PIVOT PATTERNS / blocks below, but translate them into everyday language—never invent metrics. PIVOT PATTERNS are internal analysis signals: read them to find the story, but NEVER echo their labels (no "quartile", "concentration", "HHI", "CV", "P75", "mass", "trough"). Emit these lanes, each on its OWN line, omitting any optional lane that does not genuinely apply:
@@ -516,7 +501,7 @@ Keep it tight — a manager should absorb all of it in a few seconds. Drop a lan
 
 If ${chartSpec.y} is a rate, share, ratio or average, the categories do NOT add up to a meaningful total — compare them directly (e.g. "X is about 4× Y"), render any 0–1 value as a percentage (e.g. 0.742 → 74%, 0.189 → 19%) rather than a raw decimal, and never say "X% of the total".
 
-Use general business sense where it does not contradict the numbers.${wantsBusinessCommentary ? '\n\nADDITIONALLY: produce `businessCommentary` (see schema) — 1–2 sentences framing the chart\'s metric against the FMCG/Marico domain context. Cite the pack id verbatim. Treat the domain context as orientation only; numeric evidence still comes only from this chart.' : ''}
+Use general business sense where it does not contradict the numbers.
 
 CHART CONTEXT
 - Type: ${chartSpec.type}
@@ -527,11 +512,11 @@ ${seriesKeys ? `- Series: ${chartSpec.seriesColumn?.trim() || 'series'} (${serie
 - Y stats: ${formatY(minY)}–${formatY(maxY)} (avg ${formatY(avgY)}, 75th percentile: ${formatY(yP75)})${isDualAxis ? ` | Y2: ${formatY2(minY2)}–${formatY2(maxY2)} (avg ${formatY2(avgY2)})` : ''}
 
 ${dataFactsContext}${pivotPatternsSection}${weekdayPatternSection}
-${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}${chatInsightsContext}${domainBlock}
+${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}${chatInsightsContext}
 
 OUTPUT JSON (exact keys only):
 {
-  "keyInsight": "Up to 3 lines (≤${KEY_INSIGHT_MAX_CHARS} characters total), no statistics jargon, no markdown headings. Line 1 is the HEADLINE: name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS using the category's EXACT label text (not a synonym) with the real number (never labels like P75/P90). Then, ONLY where each genuinely applies, a line starting 'WHY: ' (one clearly-hedged, number-free reason) and a line starting 'DO: ' (one concrete action). Omit the WHY and/or DO line when they do not apply."${businessCommentaryRequest}
+  "keyInsight": "Up to 3 lines (≤${KEY_INSIGHT_MAX_CHARS} characters total), no statistics jargon, no markdown headings. Line 1 is the HEADLINE: name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS using the category's EXACT label text (not a synonym) with the real number (never labels like P75/P90). Then, ONLY where each genuinely applies, a line starting 'WHY: ' (one clearly-hedged, number-free reason) and a line starting 'DO: ' (one concrete action). Omit the WHY and/or DO line when they do not apply."
 }`;
 
   try {
@@ -599,20 +584,6 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
 
     const candidate = truncateInsight(modelKeyInsight);
 
-    // W12 · parse the optional businessCommentary the model emits when domain
-    // context was supplied. Cap to 500 chars to match the persisted schema;
-    // null/empty/whitespace cleanly drops the field.
-    let businessCommentary: string | undefined;
-    if (wantsBusinessCommentary) {
-      const raw = result.businessCommentary;
-      if (typeof raw === "string") {
-        const trimmed = raw.trim();
-        if (trimmed && trimmed.toLowerCase() !== "null") {
-          businessCommentary = trimmed.length <= 500 ? trimmed : `${trimmed.slice(0, 499)}…`;
-        }
-      }
-    }
-
     // Deterministic verification: ensure the output explicitly names the top category/value.
     const topX = topPerformers.length > 0 ? topPerformers[0]!.x : undefined;
     const topY = topPerformers.length > 0 ? topPerformers[0]!.y : undefined;
@@ -663,7 +634,6 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
         });
         return {
           keyInsight: insertSentenceBreaks(truncateInsight(text)),
-          ...(businessCommentary ? { businessCommentary } : {}),
         };
       }
 
@@ -684,13 +654,11 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
 
       return {
         keyInsight: insertSentenceBreaks(truncateInsight(fallback)),
-        ...(businessCommentary ? { businessCommentary } : {}),
       };
     }
 
     return {
       keyInsight: insertSentenceBreaks(enforceInsightLimit(candidate)),
-      ...(businessCommentary ? { businessCommentary } : {}),
     };
   } catch (error) {
     logger.error('Error generating chart insights:', error);

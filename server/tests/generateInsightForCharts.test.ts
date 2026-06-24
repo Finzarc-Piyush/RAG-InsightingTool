@@ -52,14 +52,6 @@ describe("generateInsightForCharts — idempotency (the load-bearing contract)",
     const [out] = await generateInsightForCharts([noDataChart({ keyInsight: "   " })], baseDeps);
     assert.equal(out.keyInsight, "No data available for analysis");
   });
-
-  it("preserves an existing businessCommentary even when keyInsight is regenerated", async () => {
-    const [out] = await generateInsightForCharts(
-      [noDataChart({ businessCommentary: "Domain framing to keep." })],
-      baseDeps,
-    );
-    assert.equal(out.businessCommentary, "Domain framing to keep.");
-  });
 });
 
 describe("generateInsightForCharts — generation gate fills missing insights (offline)", () => {

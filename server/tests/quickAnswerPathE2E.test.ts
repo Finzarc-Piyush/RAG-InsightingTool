@@ -266,10 +266,13 @@ describe("Wave QL1 · quick-lookup fast path · end-to-end", () => {
         callCounts.hypothesis = (callCounts.hypothesis ?? 0) + 1;
         return { hypotheses: [{ text: "stub" }] };
       },
-      [LLM_PURPOSE.PLANNER]: () => ({
-        rationale: "minimal",
-        steps: [{ id: "s1", tool: "get_schema_summary", args: {} }],
-      }),
+      [LLM_PURPOSE.PLANNER]: () => {
+        callCounts.planner = (callCounts.planner ?? 0) + 1;
+        return {
+          rationale: "minimal",
+          steps: [{ id: "s1", tool: "get_schema_summary", args: {} }],
+        };
+      },
       [LLM_PURPOSE.REFLECTOR]: () => ({ action: "finish", reasoning: "done" }),
       [LLM_PURPOSE.NARRATOR]: () => ({
         body: "Full-loop body.",
@@ -290,9 +293,13 @@ describe("Wave QL1 · quick-lookup fast path · end-to-end", () => {
       undefined,
       "fast path must NOT fire when QUICK_LOOKUP_ENABLED=false"
     );
+    // Full-loop marker must be depth-INDEPENDENT: a lookup question runs the
+    // full loop in MINIMAL depth (invariant #12), which correctly skips
+    // hypothesis. The full planner fires regardless of depth, so it's the
+    // reliable "the full loop took over" signal (mirrors the analytical case).
     assert.ok(
-      (callCounts.hypothesis ?? 0) >= 1,
-      "full loop must run when fast path is disabled"
+      (callCounts.planner ?? 0) >= 1,
+      "full loop (full planner) must run when fast path is disabled"
     );
 
     // Reset for subsequent tests.
@@ -325,10 +332,13 @@ describe("Wave QL1 · quick-lookup fast path · end-to-end", () => {
         callCounts.hypothesis = (callCounts.hypothesis ?? 0) + 1;
         return { hypotheses: [{ text: "stub" }] };
       },
-      [LLM_PURPOSE.PLANNER]: () => ({
-        rationale: "minimal",
-        steps: [{ id: "s1", tool: "get_schema_summary", args: {} }],
-      }),
+      [LLM_PURPOSE.PLANNER]: () => {
+        callCounts.planner = (callCounts.planner ?? 0) + 1;
+        return {
+          rationale: "minimal",
+          steps: [{ id: "s1", tool: "get_schema_summary", args: {} }],
+        };
+      },
       [LLM_PURPOSE.REFLECTOR]: () => ({ action: "finish", reasoning: "done" }),
       [LLM_PURPOSE.NARRATOR]: () => ({
         body: "Full-loop body.",
@@ -349,8 +359,11 @@ describe("Wave QL1 · quick-lookup fast path · end-to-end", () => {
       1,
       "fast path should have attempted and produced zero rows"
     );
+    // Depth-independent full-loop marker (see note above): the lookup question
+    // runs the full loop minimally and skips hypothesis, but the full planner
+    // always fires on fall-through.
     assert.ok(
-      (callCounts.hypothesis ?? 0) >= 1,
+      (callCounts.planner ?? 0) >= 1,
       "zero-row fast-path attempt must fall through to the full loop"
     );
   });

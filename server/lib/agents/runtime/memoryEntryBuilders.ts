@@ -188,7 +188,7 @@ function buildChartEntries(ctx: TurnEndContext): AnalysisMemoryEntry[] {
       actor: "agent" as const,
       title: clip(chartTitle(c, i), TITLE_MAX),
       summary: clipNonEmpty(
-        c.keyInsight || c.businessCommentary || chartTitle(c, i),
+        c.keyInsight || chartTitle(c, i),
         SUMMARY_MAX,
         chartTitle(c, i)
       ),
@@ -199,9 +199,6 @@ function buildChartEntries(ctx: TurnEndContext): AnalysisMemoryEntry[] {
         seriesColumn: c.seriesColumn,
         aggregate: c.aggregate,
         ...(c.keyInsight ? { keyInsight: c.keyInsight } : {}),
-        ...(c.businessCommentary
-          ? { businessCommentary: c.businessCommentary }
-          : {}),
         chartSpec: specWithoutData,
       },
       dataVersion: ctx.dataVersion,

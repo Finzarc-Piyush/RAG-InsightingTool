@@ -25,7 +25,6 @@ import {
   ChevronRight,
   Star,
   AlertTriangle,
-  BookOpen,
   Sparkles,
   Target,
   ListOrdered,
@@ -101,28 +100,6 @@ export function AnswerCard({
 
   return (
     <div className="space-y-4">
-      {env.domainLens && (
-        <div
-          className="rounded-brand-md border border-border/60 bg-muted/30 px-4 py-2.5"
-          aria-label="Industry context"
-        >
-          <div className="flex items-start gap-2">
-            <BookOpen
-              className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <div className="min-w-0">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-0.5">
-                Industry context
-              </p>
-              <p className="text-[13px] italic leading-[20px] text-foreground">
-                {env.domainLens}
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* "Highlight Summary" — the headline answer, given its own titled
           section (icon + name) the way Key Insights is. The narrator's key
           insight is intentionally NOT shown here anymore (it lives once, in

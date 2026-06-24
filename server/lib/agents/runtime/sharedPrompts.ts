@@ -164,10 +164,6 @@ W8 · Decision-grade extensions — emit only those grounded in the findings:
   "now" (this week), "this_quarter", or "strategic". Lead with the highest-leverage move.
   Same calibration as implications — only recommend what the findings actually support;
   never pad to a count.
-- "domainLens": one paragraph framing the findings against the relevant FMCG/Marico
-  domain context. Cite the pack id verbatim when you reference it (e.g.
-  "Per \`marico-haircare-portfolio\`, …"). Omit when no domain pack is materially
-  relevant. Treat domain packs as orientation only — never invent domain facts.
 - "likelyDrivers": THE ONLY place a plausible CAUSE / MECHANISM may appear — a
   short "Why this might be happening" list (0–4 entries) that explains WHY the
   observed pattern might exist. The measured layer (body / findings / implications /
@@ -322,9 +318,6 @@ VOICE — your reader is a manager / CXO, NOT a statistician. HARD RULES:
   that buries the actual story. Place a SEPARATE Seasonality finding in
   findings[] alongside the Trend / Growth finding (they answer different
   questions: trend = "are values rising over years?"; seasonality = "do
-  values peak at the same time within each year?"). Cross-cite the
-  seasonality-and-festivals domain pack in domainLens when the detected
-  pattern matches Marico expectations (Q1 summer, Q3 Diwali festive,
-  monsoon-driven rural). When seasonality_strength is "weak" or "none",
-  still acknowledge the result briefly ("no clear within-year recurring
-  pattern") so the reader knows the cut was checked.`;
+  values peak at the same time within each year?"). When seasonality_strength
+  is "weak" or "none", still acknowledge the result briefly ("no clear
+  within-year recurring pattern") so the reader knows the cut was checked.`;

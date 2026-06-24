@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { ChartSpec } from '@/shared/schema';
 import { ChartInsightBody } from '@/components/charts/ChartInsightBody';
 import { ChartSortControl } from '@/components/charts/ChartSortControl';
+import { ChartLimitControl, type ChartLimit } from '@/components/charts/ChartLimitControl';
 import { useChartSort, chartSupportsSort } from '@/lib/charts/useChartSort';
 import { applyChartSort } from '@/shared/chartSort';
 import {
@@ -132,6 +133,10 @@ export function ChartOnlyModal({
   const { sort, setSort } = useChartSort(chart);
   const showSortControl = chartSupportsSort(chart);
 
+  // Top-N / Bottom-N view limiter for bar charts with many categories. Ephemeral
+  // (view-only; not persisted), decoupled from the display sort.
+  const [limit, setLimit] = useState<ChartLimit>(null);
+
   // Wave F3 · field-aware axis tick formatters (parity with ChartRenderer F2)
   // so the expand view formats rate columns as "%", currency with symbols, etc.
   const yTickFormatter = useMemo(() => makeAxisTickFormatter(y), [y]);
@@ -191,18 +196,32 @@ export function ChartOnlyModal({
     return displayData;
   }, [type, allData, hideOutliers, x, y]);
   
+  // Distinct category count drives the Top/Bottom-N "Show" control (>10 only).
+  const barCategoryCount = useMemo(() => {
+    if (type !== 'bar' || typeof x !== 'string') return 0;
+    const seen = new Set<string>();
+    for (const r of allData as Array<Record<string, unknown>>) seen.add(String(r[x] ?? ''));
+    return seen.size;
+  }, [type, x, allData]);
+  const showLimitControl = barCategoryCount > 10;
+  const specSeriesKeysSig = specSeriesKeys?.join(',');
+  // Drop a stale Top/Bottom-N selection when the chart identity changes.
+  useEffect(() => { setLimit(null); }, [type, x, y, specSeriesKeysSig]);
+
   // Wave B3 · re-order bar rows by the active sort (category axis or value).
-  // Other marks keep their natural / chronological order.
+  // Other marks keep their natural / chronological order. Top/Bottom-N selection
+  // (limit) is applied first, decoupled from the sort.
   const barData = useMemo(() => {
-    if (type !== 'bar' || !sort || typeof x !== 'string' || typeof y !== 'string') {
+    if (type !== 'bar' || typeof x !== 'string' || typeof y !== 'string') {
       return allData;
     }
+    if (!sort && !limit) return allData;
     return applyChartSort(
       allData as Array<Record<string, unknown>>,
-      sort,
-      { xCol: x, yCol: y, seriesKeys: specSeriesKeys },
+      sort ?? { by: 'value', direction: 'desc' },
+      { xCol: x, yCol: y, seriesKeys: specSeriesKeys, limit: limit ?? undefined },
     );
-  }, [type, sort, allData, x, y, specSeriesKeys]);
+  }, [type, sort, limit, allData, x, y, specSeriesKeys]);
 
   const data = type === 'scatter' ? processedScatterData : allData;
 
@@ -871,6 +890,13 @@ export function ChartOnlyModal({
                 axisLabel={xLabel || (typeof x === 'string' ? x : '')}
               />
             )}
+            {showSortControl && showLimitControl && (
+              <ChartLimitControl
+                value={limit}
+                onChange={setLimit}
+                total={barCategoryCount}
+              />
+            )}
             {type === 'line' && (
               <div className="flex items-center gap-2 px-2">
                 <Checkbox
@@ -1250,20 +1276,14 @@ export function ChartOnlyModal({
               insight (same shared <ChartInsightBody> as the tile footer + chat),
               where it previously showed none. Display-only: the chart is
               born-insighted server-side, so no on-demand fetch is wired here. */}
-          {(chart.keyInsight ||
-            (chart as { businessCommentary?: string }).businessCommentary) && (
+          {chart.keyInsight && (
             <div className="flex-shrink-0 border-t border-border/40 bg-muted/30 px-4 py-3 max-h-[30vh] overflow-y-auto">
               <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
                 <span aria-hidden="true">✦</span>
                 Insight
               </div>
               <div className="mt-1 text-sm leading-relaxed text-foreground/90">
-                <ChartInsightBody
-                  keyInsight={chart.keyInsight}
-                  businessCommentary={
-                    (chart as { businessCommentary?: string }).businessCommentary
-                  }
-                />
+                <ChartInsightBody keyInsight={chart.keyInsight} />
               </div>
             </div>
           )}

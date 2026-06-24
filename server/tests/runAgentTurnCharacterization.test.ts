@@ -205,7 +205,6 @@ const EXPECTED_ENVELOPE_KEYS = [
   "methodology",
   "implications",
   "recommendations",
-  "domainLens",
 ] as const;
 
 function installNarratorStub(planSteps: unknown[]) {
@@ -224,7 +223,7 @@ function installNarratorStub(planSteps: unknown[]) {
       outcomeMetricColumn: "Volume",
       segmentationDimensions: ["Brand", "Region"],
       candidateDriverDimensions: ["Brand", "Region"],
-      epistemicNotes: "fixture",
+      epistemicNotes: ["fixture"],
     }),
     [LLM_PURPOSE.NARRATOR]: () => ({
       body:
@@ -302,7 +301,7 @@ function buildCtx(question: string) {
     outcomeMetricColumn: "Volume",
     segmentationDimensions: ["Brand", "Region"],
     candidateDriverDimensions: ["Brand", "Region"],
-    epistemicNotes: "fixture",
+    epistemicNotes: ["fixture"],
     filters: [],
     requestsDashboard: false,
     clarifyingQuestions: [],
@@ -368,7 +367,6 @@ describe("runAgentTurn characterization · SSE contract + envelope shape", () =>
     assert.equal((env.findings ?? []).length >= 2, true, "≥2 findings");
     assert.equal(env.implications![0].confidence, "high");
     assert.equal(env.recommendations![1].horizon, "this_quarter");
-    assert.match(env.domainLens!, /marico-foods-edible-oils-portfolio/);
 
     // ── Telemetry surfaces ──
     assert.ok(Array.isArray(result.magnitudes) && result.magnitudes!.length >= 2, "≥2 magnitudes");

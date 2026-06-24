@@ -168,6 +168,8 @@ from `schemas.ts`) rather than string literals:
 
 ## Recent changes
 
+- 2026-06-23 · **Waves NCF2–NCF3 · domain "context" framing retired from generation.** The narrator/synthesizer no longer emit `domainLens` and `insightGenerator` no longer emits `businessCommentary` (the two user-visible "Industry/Business context" blocks). [`checkEnvelopeCompleteness`](../../server/lib/agents/runtime/checkEnvelopeCompleteness.ts) no longer **demands** `domainLens` (dropped its 3rd param) — required so the repair loop doesn't chase a field that is never produced; `checkDomainLensCitations` stays as a no-op guard for legacy data. Schema fields kept `optional` (back-compat); background `ctx.domainContext` packs still power analysis (hypotheses, business actions, pivot envelope). Convention: [`no-domain-context-framing.md`](../conventions/no-domain-context-framing.md). See [`docs/WAVES.md`](../WAVES.md).
+
 Per-wave history lives in [`docs/WAVES.md`](../WAVES.md) (search the wave id). The detailed
 pre-2026-06 subsystem changelog was moved out of this routing doc to keep `/load` cheap —
 see [`docs/archive/agent-runtime-changelog.md`](../archive/agent-runtime-changelog.md). Keep new

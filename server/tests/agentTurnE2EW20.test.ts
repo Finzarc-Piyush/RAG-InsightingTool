@@ -9,8 +9,8 @@
  * Stays single-flow on purpose: planner returns one cheap step
  * (`get_schema_summary`), so the loop exits quickly and we don't depend on
  * DuckDB / RAG / chart-data services. The LLM stubs supply rich envelope
- * content (implications, recommendations, domainLens) so the W17
- * completeness gate is satisfied without a repair.
+ * content (implications, recommendations) so the W17 completeness gate is
+ * satisfied without a repair.
  */
 import assert from "node:assert/strict";
 import { describe, it, after, before } from "node:test";
@@ -137,7 +137,7 @@ before(() => {
       outcomeMetricColumn: "Volume_MT",
       segmentationDimensions: ["Brand", "Region", "Channel"],
       candidateDriverDimensions: ["Brand", "Region", "Channel"],
-      epistemicNotes: "fixture",
+      epistemicNotes: ["fixture"],
     }),
     // Narrator emits the full W8 envelope so the W17 completeness check
     // passes on the first try (no repair).
@@ -221,7 +221,7 @@ describe("W20 · runAgentTurn end-to-end against Marico fixture", () => {
       outcomeMetricColumn: "Volume_MT",
       segmentationDimensions: ["Brand", "Region", "Channel"],
       candidateDriverDimensions: ["Brand", "Region", "Channel"],
-      epistemicNotes: "Observational data; avoid causal claims.",
+      epistemicNotes: ["Observational data; avoid causal claims."],
       filters: [],
       requestsDashboard: false,
       clarifyingQuestions: [],
@@ -244,13 +244,19 @@ describe("W20 · runAgentTurn end-to-end against Marico fixture", () => {
     assert.match(env.implications![0].soWhat, /private label|category softness/);
     assert.ok(Array.isArray(env.recommendations) && env.recommendations!.length >= 2, "≥2 recommendations");
     assert.equal(env.recommendations![1].horizon, "now");
-    assert.ok(env.domainLens && /marico-foods-edible-oils-portfolio/.test(env.domainLens), "domainLens cites pack id");
 
     // ── W13 · investigation summary digest ──
     assert.ok(result.investigationSummary, "investigationSummary must be populated");
     const inv = result.investigationSummary!;
-    assert.ok(Array.isArray(inv.hypotheses) && inv.hypotheses!.length >= 1, "≥1 hypothesis");
-    assert.match(inv.hypotheses![0].text, /Saffola/);
+    // W-CW1 · the digest intentionally drops never-tested (OPEN) hypotheses as
+    // clutter (see buildInvestigationSummary `h.status !== "open"`). This turn is
+    // single-flow on purpose (one cheap step), so the planned hypotheses are
+    // never investigated → stay OPEN → absent from the digest. They remain on
+    // the blackboard, asserted below. (Was a stale pre-W-CW1 `≥1 hypothesis`.)
+    assert.ok(
+      !inv.hypotheses || inv.hypotheses.length === 0,
+      "untested hypotheses are dropped from the digest (W-CW1)"
+    );
 
     // ── W8 · magnitudes & telemetry surfaces ──
     assert.ok(Array.isArray(result.magnitudes) && result.magnitudes!.length >= 2, "≥2 magnitudes");

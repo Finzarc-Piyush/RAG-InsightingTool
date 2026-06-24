@@ -53,8 +53,7 @@ export function hasAnySummaryContent(
       (e.implications?.length ?? 0) > 0 ||
       (e.recommendations?.length ?? 0) > 0 ||
       !!e.methodology ||
-      (e.caveats?.length ?? 0) > 0 ||
-      !!e.domainLens);
+      (e.caveats?.length ?? 0) > 0);
   const hasBusinessActions = (props.businessActions?.length ?? 0) > 0;
   const hasFollowUps = (props.followUpPrompts?.length ?? 0) > 0;
   const hasInvestigation =

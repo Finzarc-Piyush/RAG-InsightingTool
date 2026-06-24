@@ -121,7 +121,6 @@ export async function synthesizeFinalAnswerEnvelope(
   unexplained?: string;
   implications?: z.infer<typeof finalAnswerEnvelopeSchema>["implications"];
   recommendations?: z.infer<typeof finalAnswerEnvelopeSchema>["recommendations"];
-  domainLens?: string;
   likelyDrivers?: z.infer<typeof finalAnswerEnvelopeSchema>["likelyDrivers"];
   source: SynthesisSource;
 }> {
@@ -209,7 +208,7 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
     };
   }
 
-  const { body, keyInsight, ctas, magnitudes, unexplained, implications, recommendations, domainLens, likelyDrivers } = out.data;
+  const { body, keyInsight, ctas, magnitudes, unexplained, implications, recommendations, likelyDrivers } = out.data;
   const ki = keyInsight?.trim() || undefined;
   const ctaList = (ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
   const cleanedMagnitudes =
@@ -234,7 +233,6 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
           .filter((r) => r && r.action?.trim() && r.rationale?.trim())
           .slice(0, 4)
       : undefined;
-  const cleanedDomainLens = domainLens?.trim()?.slice(0, 500) || undefined;
   // W-CP1 · pass the hedged causal lane through (non-empty only); the agent loop
   // applies the deterministic sanitize uniformly across narrator + synth paths.
   const cleanedLikelyDrivers =
@@ -259,7 +257,6 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
         ...(cleanedUnexplained ? { unexplained: cleanedUnexplained } : {}),
         ...(cleanedImplications ? { implications: cleanedImplications } : {}),
         ...(cleanedRecommendations ? { recommendations: cleanedRecommendations } : {}),
-        ...(cleanedDomainLens ? { domainLens: cleanedDomainLens } : {}),
         ...(cleanedLikelyDrivers ? { likelyDrivers: cleanedLikelyDrivers } : {}),
         source: "narrative_retry",
       };
@@ -286,7 +283,6 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
     ...(cleanedUnexplained ? { unexplained: cleanedUnexplained } : {}),
     ...(cleanedImplications ? { implications: cleanedImplications } : {}),
     ...(cleanedRecommendations ? { recommendations: cleanedRecommendations } : {}),
-    ...(cleanedDomainLens ? { domainLens: cleanedDomainLens } : {}),
     ...(cleanedLikelyDrivers ? { likelyDrivers: cleanedLikelyDrivers } : {}),
     source: "json_envelope",
   };

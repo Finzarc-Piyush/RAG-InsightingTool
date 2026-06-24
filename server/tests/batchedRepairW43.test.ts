@@ -34,8 +34,7 @@ describe("W43 · per-check ordering preserved (completeness short-circuit)", () 
 
     const completenessGap = checkEnvelopeCompleteness(
       envelope,
-      "driver_discovery",
-      true
+      "driver_discovery"
     );
     const citationGap = completenessGap.ok
       ? checkDomainLensCitations(envelope, [])
@@ -75,8 +74,7 @@ describe("W43 · multi-issue batching (citation + magnitudes in one round)", () 
     const suppliedPackIds = ["marico-haircare-portfolio"];
     const completenessGap = checkEnvelopeCompleteness(
       envelope,
-      "driver_discovery",
-      true
+      "driver_discovery"
     );
     const citationGap = completenessGap.ok
       ? checkDomainLensCitations(envelope, suppliedPackIds)

@@ -6,8 +6,7 @@ import { splitChartInsightLanes } from "@/shared/chartInsightLanes";
 /**
  * ChartInsightBody — the ONE presentational unit for a chart's auto-generated
  * insight: a tight manager-grade HEADLINE, an optional clearly-hedged
- * "Why it might be happening" line, an optional "Do" next step, plus the
- * optional 1–2 sentence domain "business context" framing (W12).
+ * "Why it might be happening" line, and an optional "Do" next step.
  *
  * The headline / why / do lanes are carried inside `keyInsight` via the shared
  * `WHY:` / `DO:` wire format ([splitChartInsightLanes]) the server emits, so this
@@ -16,7 +15,8 @@ import { splitChartInsightLanes } from "@/shared/chartInsightLanes";
  * back-compat). The Why/Do affordances reuse the same lucide icons + labelled
  * styling as the answer card's "Why this might be happening" / "Recommended
  * actions" sections, so a chart insight reads like the rest of the manager-grade
- * surface — just more compact.
+ * surface — and at the SAME (normal) text size as the headline, not a smaller
+ * footnote.
  *
  * Shared so every surface that shows a chart's insight renders it identically:
  * the chat answer bubble ([MessageBubble]), the dashboard tile footer
@@ -33,13 +33,10 @@ import { splitChartInsightLanes } from "@/shared/chartInsightLanes";
 export interface ChartInsightBodyProps {
   /** Plain-English key-insight prose, carrying optional WHY:/DO: lanes (markdown). */
   keyInsight?: string;
-  /** Domain framing — rendered as a "Business context:" block. */
-  businessCommentary?: string;
   /**
    * `'on-accent'` = this body is hosted on a COLORED panel (e.g. the chat zoom's
-   * blue "Key Insight" card). The Why/Do lines and the business-context block
-   * then drop their own neutral chrome and instead inherit the host surface (a
-   * hairline divider + inherited text) so they harmonize instead of clashing.
+   * blue "Key Insight" card). The Why/Do lines then drop their own neutral chrome
+   * and instead inherit the host surface so they harmonize instead of clashing.
    * Default = the standalone neutral treatment used on muted/transparent surfaces.
    */
   tone?: "default" | "on-accent";
@@ -47,93 +44,65 @@ export interface ChartInsightBodyProps {
 
 export function ChartInsightBody({
   keyInsight,
-  businessCommentary,
   tone = "default",
 }: ChartInsightBodyProps) {
   const hasKey = typeof keyInsight === "string" && keyInsight.trim().length > 0;
-  const hasCommentary =
-    typeof businessCommentary === "string" && businessCommentary.trim().length > 0;
 
-  if (!hasKey && !hasCommentary) return null;
+  if (!hasKey) return null;
 
   const onAccent = tone === "on-accent";
-  const lanes = hasKey ? splitChartInsightLanes(keyInsight!) : null;
+  const lanes = splitChartInsightLanes(keyInsight!);
 
   return (
     <>
-      {lanes ? (
-        <>
-          {lanes.headline ? <MarkdownRenderer content={lanes.headline} /> : null}
-          {lanes.why ? (
-            <p
-              className={cn(
-                "mt-1.5 flex items-start gap-1.5 text-[12px] italic leading-snug",
-                onAccent ? "opacity-90" : "text-muted-foreground",
-              )}
-              aria-label="Why it might be happening"
-            >
-              <HelpCircle
-                className={cn(
-                  "mt-[2px] h-3 w-3 shrink-0",
-                  onAccent ? "opacity-80" : "text-primary/70",
-                )}
-                aria-hidden="true"
-              />
-              <span>
-                <span
-                  className={cn(
-                    "not-italic font-semibold",
-                    onAccent ? undefined : "text-foreground/80",
-                  )}
-                >
-                  Why:{" "}
-                </span>
-                {lanes.why}
-              </span>
-            </p>
-          ) : null}
-          {lanes.do ? (
-            <p
-              className={cn(
-                "mt-1 flex items-start gap-1.5 text-[12px] leading-snug",
-                onAccent ? undefined : "text-foreground/90",
-              )}
-              aria-label="What we can do"
-            >
-              <Target
-                className={cn(
-                  "mt-[2px] h-3 w-3 shrink-0",
-                  onAccent ? "opacity-80" : "text-primary/70",
-                )}
-                aria-hidden="true"
-              />
-              <span>
-                <span className="font-semibold">Do: </span>
-                {lanes.do}
-              </span>
-            </p>
-          ) : null}
-        </>
-      ) : null}
-      {hasCommentary ? (
+      {lanes.headline ? <MarkdownRenderer content={lanes.headline} /> : null}
+      {lanes.why ? (
         <p
           className={cn(
-            "text-[12px] italic leading-snug",
-            onAccent
-              ? "mt-2 border-t border-current/15 pt-2"
-              : "rounded-brand-md border border-border/40 bg-muted/30 px-3 py-2 text-foreground/80",
+            "mt-1.5 flex items-start gap-1.5 leading-snug",
+            onAccent ? "opacity-90" : "text-muted-foreground",
           )}
-          aria-label="Business commentary"
+          aria-label="Why it might be happening"
         >
-          <span
+          <HelpCircle
             className={cn(
-              "not-italic font-semibold mr-1",
-              onAccent ? "opacity-70" : "text-muted-foreground",
+              "mt-[3px] h-3.5 w-3.5 shrink-0",
+              onAccent ? "opacity-80" : "text-primary/70",
             )}
-          >
-            Business context:
+            aria-hidden="true"
+          />
+          <span>
+            <span
+              className={cn(
+                "font-semibold",
+                onAccent ? undefined : "text-foreground/80",
+              )}
+            >
+              Why:{" "}
+            </span>
+            {lanes.why}
           </span>
-          {businessCommentary}
+        </p>
+      ) : null}
+      {lanes.do ? (
+        <p
+          className={cn(
+            "mt-1 flex items-start gap-1.5 leading-snug",
+            onAccent ? undefined : "text-foreground/90",
+          )}
+          aria-label="What we can do"
+        >
+          <Target
+            className={cn(
+              "mt-[3px] h-3.5 w-3.5 shrink-0",
+              onAccent ? "opacity-80" : "text-primary/70",
+            )}
+            aria-hidden="true"
+          />
+          <span>
+            <span className="font-semibold">Do: </span>
+            {lanes.do}
+          </span>
         </p>
       ) : null}
     </>

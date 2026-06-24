@@ -43,6 +43,9 @@ const EXPECTED_CATEGORY: Record<LlmCallPurpose, "MINI" | "PRIMARY"> = {
   [LLM_PURPOSE.SUGGEST_FOLLOW_UPS]: "MINI",
   [LLM_PURPOSE.VERIFIER_SIMPLE]: "MINI",
   [LLM_PURPOSE.BUSINESS_ACTIONS]: "MINI",
+  // Auto-title (commit 8efdbeab) — a short, cheap generation routed MINI in
+  // llmCallPurpose's category map. Declared here so the routing stays reviewed.
+  [LLM_PURPOSE.ANALYSIS_TITLE]: "MINI",
   // PRIMARY — reasoning / synthesis / quality-sensitive output
   [LLM_PURPOSE.HYPOTHESIS]: "PRIMARY",
   [LLM_PURPOSE.PLANNER]: "PRIMARY",
@@ -112,12 +115,13 @@ describe("W3.11 · model-routing regression guard", () => {
 
   it("MINI purpose count is within the expected range (a big swing is suspicious)", () => {
     const miniCount = Object.values(EXPECTED_CATEGORY).filter((c) => c === "MINI").length;
-    // Current baseline: 16 MINI purposes. Allow small drift (12–22) without
-    // failing, but big moves require a deliberate test update that documents
-    // the category shift in review.
+    // Current baseline: 23 MINI purposes (latest addition: analysis_title for
+    // the auto-title feature). Allow small drift (12–26) without failing, but
+    // big moves require a deliberate test update that documents the category
+    // shift in review.
     assert.ok(
-      miniCount >= 12 && miniCount <= 22,
-      `expected 12–22 MINI purposes, got ${miniCount} — a big shift here changes cost significantly; confirm and update this bound`
+      miniCount >= 12 && miniCount <= 26,
+      `expected 12–26 MINI purposes, got ${miniCount} — a big shift here changes cost significantly; confirm and update this bound`
     );
   });
 

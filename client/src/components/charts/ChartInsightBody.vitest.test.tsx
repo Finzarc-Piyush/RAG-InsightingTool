@@ -12,27 +12,8 @@ describe("ChartInsightBody — the shared insight presentation", () => {
     expect(screen.getByText("West leads on sales.")).toBeTruthy();
   });
 
-  test("renders the business-context block when commentary is provided", () => {
-    render(<ChartInsightBody businessCommentary="Haircare premiumisation tailwind." />);
-    expect(screen.getByText("Business context:")).toBeTruthy();
-    expect(screen.getByText("Haircare premiumisation tailwind.")).toBeTruthy();
-  });
-
-  test("renders BOTH prose and commentary together when both are provided", () => {
-    render(
-      <ChartInsightBody
-        keyInsight="North grew fastest."
-        businessCommentary="Distribution expansion likely."
-      />,
-    );
-    expect(screen.getByText("North grew fastest.")).toBeTruthy();
-    expect(screen.getByText("Distribution expansion likely.")).toBeTruthy();
-  });
-
-  test("renders nothing when both are empty/whitespace (callers can drop their own guard)", () => {
-    const { container } = render(
-      <ChartInsightBody keyInsight="   " businessCommentary="" />,
-    );
+  test("renders nothing when the key insight is empty/whitespace (callers can drop their own guard)", () => {
+    const { container } = render(<ChartInsightBody keyInsight="   " />);
     expect(container.textContent).toBe("");
   });
 
@@ -41,32 +22,7 @@ describe("ChartInsightBody — the shared insight presentation", () => {
     expect(container.textContent).toBe("");
   });
 
-  test("on-accent tone still renders the commentary but drops the neutral muted card (harmonizes on colored panels)", () => {
-    const { container } = render(
-      <ChartInsightBody
-        keyInsight="North grew fastest."
-        businessCommentary="Distribution expansion likely."
-        tone="on-accent"
-      />,
-    );
-    // Content still renders.
-    expect(screen.getByText("Business context:")).toBeTruthy();
-    expect(screen.getByText("Distribution expansion likely.")).toBeTruthy();
-    // The neutral muted-card background is NOT applied (so it inherits the host).
-    const commentary = container.querySelector('[aria-label="Business commentary"]');
-    expect(commentary).toBeTruthy();
-    expect(commentary!.className.includes("bg-muted/30")).toBe(false);
-  });
-
-  test("default tone keeps the neutral muted card", () => {
-    const { container } = render(
-      <ChartInsightBody businessCommentary="Domain framing." />,
-    );
-    const commentary = container.querySelector('[aria-label="Business commentary"]');
-    expect(commentary!.className.includes("bg-muted/30")).toBe(true);
-  });
-
-  test("renders a tagged HEADLINE / WHY / DO as labelled compact lanes", () => {
+  test("renders a tagged HEADLINE / WHY / DO as labelled lanes", () => {
     const { container } = render(
       <ChartInsightBody
         keyInsight={
@@ -88,6 +44,25 @@ describe("ChartInsightBody — the shared insight presentation", () => {
     expect(container.textContent).not.toContain("DO:");
   });
 
+  test("Why / Do render at NORMAL text size — no compact 12px, no italic", () => {
+    const { container } = render(
+      <ChartInsightBody
+        keyInsight={
+          "North grew fastest.\nWHY: likely wider distribution.\nDO: audit South coverage."
+        }
+      />,
+    );
+    const why = container.querySelector('[aria-label="Why it might be happening"]');
+    const doLane = container.querySelector('[aria-label="What we can do"]');
+    expect(why).toBeTruthy();
+    expect(doLane).toBeTruthy();
+    // The lanes inherit the host's base size (headline size) — they no longer
+    // carry the smaller `text-[12px]` footnote treatment, and Why is no longer italic.
+    expect(why!.className.includes("text-[12px]")).toBe(false);
+    expect(why!.className.includes("italic")).toBe(false);
+    expect(doLane!.className.includes("text-[12px]")).toBe(false);
+  });
+
   test("an untagged legacy string renders as a plain headline with no Why/Do chrome", () => {
     const { container } = render(
       <ChartInsightBody keyInsight="Some older multi-sentence prose with no lane markers." />,
@@ -95,18 +70,6 @@ describe("ChartInsightBody — the shared insight presentation", () => {
     expect(screen.getByText("Some older multi-sentence prose with no lane markers.")).toBeTruthy();
     expect(container.querySelector('[aria-label="Why it might be happening"]')).toBeNull();
     expect(container.querySelector('[aria-label="What we can do"]')).toBeNull();
-  });
-
-  test("tagged lanes still render the business-context block alongside (no regression)", () => {
-    render(
-      <ChartInsightBody
-        keyInsight={"North grew fastest.\nWHY: likely wider distribution."}
-        businessCommentary="Premiumisation tailwind."
-      />,
-    );
-    expect(screen.getByText(/North grew fastest/)).toBeTruthy();
-    expect(screen.getByText("likely wider distribution.")).toBeTruthy();
-    expect(screen.getByText("Business context:")).toBeTruthy();
   });
 
   test("on-accent tone renders the Why lane inheriting the host (drops the neutral muted text)", () => {

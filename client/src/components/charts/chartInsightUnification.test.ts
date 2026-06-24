@@ -37,9 +37,6 @@ describe("CI7 · ChartOnlyModal (dashboard zoom) shows insight via shared body",
   it("renders <ChartInsightBody> with the chart's keyInsight (previously showed none)", () => {
     assert.match(chartOnlyModal, /<ChartInsightBody[\s\S]*?keyInsight=\{chart\.keyInsight\}/);
   });
-  it("forwards businessCommentary too (full insight, matching the tile footer)", () => {
-    assert.match(chartOnlyModal, /<ChartInsightBody[\s\S]*?businessCommentary=/);
-  });
 });
 
 describe("CI9 · AnalyticalDashboardResponse multi-chart footer uses shared body", () => {

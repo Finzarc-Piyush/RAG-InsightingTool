@@ -70,7 +70,7 @@ export interface InsightEnrichmentDeps {
 }
 
 /**
- * Enrich a single chart with `keyInsight` (+ optional `businessCommentary`).
+ * Enrich a single chart with `keyInsight`.
  * Idempotent: a chart with a usable `keyInsight` is returned unchanged (no LLM
  * call), aside from the optional `data` attachment.
  */
@@ -121,18 +121,10 @@ export async function enrichChartWithInsight(
       )
     : null;
 
-  // W12 · prefer existing businessCommentary on the chart, then the newly
-  // generated one, then leave undefined.
-  const businessCommentary =
-    (typeof c.businessCommentary === 'string' && c.businessCommentary.trim().length > 0
-      ? c.businessCommentary
-      : insights?.businessCommentary) ?? undefined;
-
   return {
     ...c,
     ...(attachData ? { data: dataForChart } : {}),
     keyInsight: hasUsableKeyInsight ? c.keyInsight : (insights?.keyInsight ?? c.keyInsight),
-    ...(businessCommentary ? { businessCommentary } : {}),
   };
 }
 

@@ -433,11 +433,10 @@ function ChartBody({ entry }: { entry: AnalysisMemoryEntry }) {
   const y = asString(body.y);
   const aggregate = asString(body.aggregate);
   const seriesColumn = asString(body.seriesColumn);
-  // AMR7 · richer body — per-chart insight + commentary survive into the
-  // journal, so the AnalysisMemory page reads as the narrator's voice over
-  // the original chart rather than just axis identifiers.
+  // AMR7 · richer body — the per-chart insight survives into the journal, so
+  // the AnalysisMemory page reads as the narrator's voice over the original
+  // chart rather than just axis identifiers.
   const keyInsight = asString(body.keyInsight);
-  const businessCommentary = asString(body.businessCommentary);
   const config = [
     chartType,
     y && x ? `${y} by ${x}` : y || x,
@@ -456,11 +455,6 @@ function ChartBody({ entry }: { entry: AnalysisMemoryEntry }) {
       ) : entry.summary && entry.summary !== entry.title ? (
         <p className="mt-1 text-sm text-foreground break-words whitespace-pre-wrap">
           {entry.summary}
-        </p>
-      ) : null}
-      {businessCommentary ? (
-        <p className="mt-1 text-xs italic text-muted-foreground break-words whitespace-pre-wrap">
-          {businessCommentary}
         </p>
       ) : null}
       {config ? (

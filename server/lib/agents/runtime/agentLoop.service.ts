@@ -170,7 +170,6 @@ import {
   isBudgetRedistributeOperationResult,
   buildRecommendationsFromBudgetOptimizer,
   buildMagnitudesFromBudgetOptimizer,
-  buildDomainLensFromBudgetOptimizer,
 } from "./budgetOptimizerAdapter.js";
 import { buildSynthesisContext } from "./buildSynthesisContext.js";
 import { buildInvestigationSummary } from "./buildInvestigationSummary.js";
@@ -2462,9 +2461,8 @@ export async function runAgentTurn(
             envUnexplained = narResult.unexplained;
             if (answer.trim()) answerSource = "narrator";
             // W5 + W8 · synthesis telemetry — narrator branch. W8 adds
-            // bodyWordCount / implicationsCount / recommendationsCount /
-            // domainLensLen so we can confirm the new envelope sections are
-            // actually being produced post-rollout.
+            // bodyWordCount / implicationsCount / recommendationsCount so we can
+            // confirm the envelope sections are actually being produced.
             agentLog("synthesis_result", {
               turnId,
               source: "narrator",
@@ -2475,7 +2473,6 @@ export async function runAgentTurn(
               magnitudesCount: narResult.magnitudes?.length ?? 0,
               implicationsCount: narResult.implications?.length ?? 0,
               recommendationsCount: narResult.recommendations?.length ?? 0,
-              domainLensLen: narResult.domainLens?.length ?? 0,
               questionShape: ctx.analysisBrief?.questionShape ?? "none",
               observationsCount: observations.length,
               observationsTotalLen: observations.reduce(
@@ -2484,8 +2481,8 @@ export async function runAgentTurn(
               ),
             });
             // W3 + W8 · capture the structured AnswerEnvelope. W8 adds
-            // implications, recommendations, and domainLens so the AnswerCard
-            // can render decision-grade sections.
+            // implications + recommendations so the AnswerCard can render
+            // decision-grade sections.
             const env: NonNullable<import("../../../shared/schema.js").Message["answerEnvelope"]> = {};
             if (narResult.tldr) env.tldr = narResult.tldr;
             if (narResult.findings?.length) env.findings = narResult.findings;
@@ -2508,7 +2505,6 @@ export async function runAgentTurn(
             if (narResult.recommendations?.length && !suppressFollowUps) {
               env.recommendations = narResult.recommendations;
             }
-            if (narResult.domainLens) env.domainLens = narResult.domainLens;
             // W-CP1 · the hedged "Why this might be happening" lane. Sanitize at
             // emit (drop unhedged / number-bearing drivers, demote falsely
             // data-grounded ones) so a bad mechanism can never persist even if it
@@ -2527,7 +2523,6 @@ export async function runAgentTurn(
             if (isBudgetRedistributeOperationResult(operationResult)) {
               const payload = operationResult.payload;
               env.recommendations = buildRecommendationsFromBudgetOptimizer(payload);
-              if (!env.domainLens) env.domainLens = buildDomainLensFromBudgetOptimizer(payload);
               const detMags = buildMagnitudesFromBudgetOptimizer(payload);
               envMagnitudes = [...detMags, ...(envMagnitudes ?? [])].slice(0, 6);
             }
@@ -2577,7 +2572,6 @@ export async function runAgentTurn(
             if (env.recommendations?.length && !suppressFollowUps) {
               synthEnv.recommendations = env.recommendations;
             }
-            if (env.domainLens) synthEnv.domainLens = env.domainLens;
             // W-CP1 · synthesizer-fallback path emits the same sanitized causal
             // lane so the AnswerCard "Why" section renders identically.
             {
@@ -2592,8 +2586,6 @@ export async function runAgentTurn(
             if (isBudgetRedistributeOperationResult(operationResult)) {
               const payload = operationResult.payload;
               synthEnv.recommendations = buildRecommendationsFromBudgetOptimizer(payload);
-              if (!synthEnv.domainLens)
-                synthEnv.domainLens = buildDomainLensFromBudgetOptimizer(payload);
               const detMags = buildMagnitudesFromBudgetOptimizer(payload);
               envMagnitudes = [...detMags, ...(envMagnitudes ?? [])].slice(0, 6);
             }
@@ -2613,7 +2605,6 @@ export async function runAgentTurn(
             magnitudesCount: env.magnitudes?.length ?? 0,
             implicationsCount: env.implications?.length ?? 0,
             recommendationsCount: env.recommendations?.length ?? 0,
-            domainLensLen: env.domainLens?.length ?? 0,
             questionShape: ctx.analysisBrief?.questionShape ?? "none",
             observationsCount: synthObservations.length,
             observationsTotalLen: synthObservations.reduce(
@@ -2687,10 +2678,11 @@ export async function runAgentTurn(
       envelopeAnswerEnvelope &&
       ctx.analysisBrief?.questionShape
     ) {
-      const domainSupplied = Boolean(ctx.domainContext?.trim());
       // W22 · pack-id list extracted once from the supplied domain context;
       // the citation check (anti-hallucination) compares envelope citations
-      // against this list. Empty when no domain context was supplied.
+      // against this list. Empty when no domain context was supplied. (domainLens
+      // is no longer generated, so the citation check now no-ops in practice; the
+      // call is kept as a defensive guard for any legacy/persisted lens.)
       const suppliedPackIds = extractSuppliedPackIds(ctx.domainContext);
       let completenessRound = 0;
       while (completenessRound < config.maxVerifierRoundsFinal) {
@@ -2699,8 +2691,7 @@ export async function runAgentTurn(
         // alternating issues over rounds is bounded by maxVerifierRoundsFinal.
         const completenessGap = checkEnvelopeCompleteness(
           envelopeAnswerEnvelope,
-          ctx.analysisBrief.questionShape,
-          domainSupplied
+          ctx.analysisBrief.questionShape
         );
         const citationGap = completenessGap.ok
           ? checkDomainLensCitations(envelopeAnswerEnvelope, suppliedPackIds)
@@ -2864,7 +2855,6 @@ export async function runAgentTurn(
         if (repaired.implications?.length) envFresh.implications = repaired.implications;
         if (repaired.recommendations?.length && !minimalDepth)
           envFresh.recommendations = repaired.recommendations;
-        if (repaired.domainLens) envFresh.domainLens = repaired.domainLens;
         // W-CP1 · re-emit the sanitized causal lane on the verifier-revise path.
         {
           const drivers = sanitizeLikelyDrivers(

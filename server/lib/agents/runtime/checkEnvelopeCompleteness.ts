@@ -78,14 +78,10 @@ const HARD_COMPLETENESS_SHAPES: ReadonlySet<string> = new Set([
  *   other shape — `undefined`, `"none"`, `"descriptive"`, `"comparison"`,
  *   `"trend"`, `"exploration"` — passes: forcing padded implications/
  *   recommendations on them is the manufactured-content bloat we avoid.
- * @param domainContextWasSupplied `Boolean(ctx.domainContext?.trim())` at the
- *   call site. Required so we don't demand `domainLens` on turns where no
- *   pack was loaded — the narrator would have nothing to cite.
  */
 export function checkEnvelopeCompleteness(
   envelope: AnswerEnvelope | undefined,
-  questionShape: string | undefined,
-  domainContextWasSupplied: boolean
+  questionShape: string | undefined
 ): CompletenessResult {
   if (!envelope) return { ok: true };
   if (!questionShape || !HARD_COMPLETENESS_SHAPES.has(questionShape)) {
@@ -95,7 +91,6 @@ export function checkEnvelopeCompleteness(
   const missing: string[] = [];
   const implCount = envelope.implications?.length ?? 0;
   const recCount = envelope.recommendations?.length ?? 0;
-  const hasDomainLens = Boolean(envelope.domainLens?.trim());
 
   if (implCount < MIN_IMPLICATIONS) {
     missing.push(
@@ -107,20 +102,11 @@ export function checkEnvelopeCompleteness(
       `recommendations (have ${recCount}, need ≥${MIN_RECOMMENDATIONS}; each {action, rationale, horizon?})`
     );
   }
-  if (domainContextWasSupplied && !hasDomainLens) {
-    missing.push(
-      "domainLens (one paragraph framing findings against the FMCG/Marico domain context; cite the pack id verbatim)"
-    );
-  }
 
   if (missing.length === 0) return { ok: true };
 
   const description = `The previous draft is missing required decision-grade sections for an analytical question (questionShape=${questionShape}): ${missing.join("; ")}.`;
-  const courseCorrection = `Re-emit the JSON envelope with these sections populated using the existing findings and the supplied CONTEXT BUNDLE — do not invent new numbers, and keep the body / TL;DR / findings / methodology / caveats / magnitudes you already produced. ${
-    domainContextWasSupplied
-      ? "Cite the relevant FMCG/Marico domain pack id (e.g. `marico-haircare-portfolio`) verbatim in `domainLens`."
-      : ""
-  }`.trim();
+  const courseCorrection = `Re-emit the JSON envelope with these sections populated using the existing findings and the supplied CONTEXT BUNDLE — do not invent new numbers, and keep the body / TL;DR / findings / methodology / caveats / magnitudes you already produced.`;
 
   return {
     ok: false,

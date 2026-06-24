@@ -36,6 +36,7 @@ import {
 } from '@/lib/charts/chartFilterHelpers';
 import { ChartInsightBody } from '@/components/charts/ChartInsightBody';
 import { ChartSortControl } from '@/components/charts/ChartSortControl';
+import { ChartLimitControl, type ChartLimit } from '@/components/charts/ChartLimitControl';
 import { useChartSort, chartSupportsSort } from '@/lib/charts/useChartSort';
 import { applyChartSort } from '@/shared/chartSort';
 import { RechartsWideLegendContent } from '@/lib/rechartsWideLegend';
@@ -177,6 +178,10 @@ export function ChartModal({
   const { sort, setSort } = useChartSort(chart);
   const showSortControl = chartSupportsSort(chart);
 
+  // Top-N / Bottom-N view limiter for bar charts with many categories. Ephemeral
+  // (view-only; not persisted), decoupled from the display sort above.
+  const [limit, setLimit] = useState<ChartLimit>(null);
+
   const parseTableV1KeyInsight = (keyInsight: string | undefined): DashboardTableSpec | null => {
     if (!keyInsight || typeof keyInsight !== 'string' || !keyInsight.startsWith(TABLE_V1_PREFIX)) return null;
 
@@ -305,16 +310,18 @@ export function ChartModal({
   }, [type, allData, hideOutliers, x, y]);
   
   // Wave B3 · re-order bar rows by the active sort; other marks keep their order.
+  // Top/Bottom-N selection (limit) is applied first, decoupled from the sort.
   const barData = useMemo(() => {
-    if (type !== 'bar' || !sort || typeof x !== 'string' || typeof y !== 'string') {
+    if (type !== 'bar' || typeof x !== 'string' || typeof y !== 'string') {
       return allData;
     }
+    if (!sort && !limit) return allData;
     return applyChartSort(
       allData as Array<Record<string, unknown>>,
-      sort,
-      { xCol: x, yCol: y, seriesKeys: specSeriesKeys },
+      sort ?? { by: 'value', direction: 'desc' },
+      { xCol: x, yCol: y, seriesKeys: specSeriesKeys, limit: limit ?? undefined },
     );
-  }, [type, sort, allData, x, y, specSeriesKeys]);
+  }, [type, sort, limit, allData, x, y, specSeriesKeys]);
 
   const data = type === 'scatter' ? processedScatterData : allData;
 
@@ -360,6 +367,17 @@ export function ChartModal({
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
   const specSeriesKeysSig = specSeriesKeys?.join(',');
   useEffect(() => { setHiddenSeries(new Set()); }, [specSeriesKeysSig]); // reset on chart change
+
+  // Distinct category count drives the Top/Bottom-N "Show" control (>10 only).
+  const barCategoryCount = useMemo(() => {
+    if (type !== 'bar' || typeof x !== 'string') return 0;
+    const seen = new Set<string>();
+    for (const r of allData as Array<Record<string, unknown>>) seen.add(String(r[x] ?? ''));
+    return seen.size;
+  }, [type, x, allData]);
+  const showLimitControl = barCategoryCount > 10;
+  // Drop a stale Top/Bottom-N selection when the chart identity changes.
+  useEffect(() => { setLimit(null); }, [type, x, y, specSeriesKeysSig]);
 
   const handleToggleSeriesLegend = useCallback((key: string) => {
     setHiddenSeries((prev) => {
@@ -1072,6 +1090,13 @@ export function ChartModal({
                   axisLabel={xLabel || (typeof x === 'string' ? x : '')}
                 />
               )}
+              {showSortControl && showLimitControl && effectiveView === 'chart' && (
+                <ChartLimitControl
+                  value={limit}
+                  onChange={setLimit}
+                  total={barCategoryCount}
+                />
+              )}
               {canPivot && (
                 <div
                   className="inline-flex rounded-md border border-border overflow-hidden"
@@ -1603,14 +1628,11 @@ export function ChartModal({
                         return (
                           <div className="text-sm leading-relaxed text-blue-800 dark:text-blue-200 break-words">
                             {/* CI10 · prose renders through the shared
-                                <ChartInsightBody> (key insight + business
-                                context); the 'Next' follow-up chip below stays
-                                surface chrome, not part of the shared body. */}
+                                <ChartInsightBody> (key insight); the 'Next'
+                                follow-up chip below stays surface chrome, not
+                                part of the shared body. */}
                             <ChartInsightBody
                               keyInsight={nextStep ? body : displayKeyInsight}
-                              businessCommentary={
-                                (chart as { businessCommentary?: string }).businessCommentary
-                              }
                               tone="on-accent"
                             />
                             {nextStep && onSuggestedQuestionClick && composerText ? (

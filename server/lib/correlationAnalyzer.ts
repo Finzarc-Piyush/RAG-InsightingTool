@@ -348,9 +348,6 @@ export async function analyzeCorrelations(
         return {
           ...c,
           keyInsight: chartInsights.keyInsight,
-          ...(chartInsights.businessCommentary
-            ? { businessCommentary: chartInsights.businessCommentary }
-            : {}),
         } as ChartSpec;
       })
     );

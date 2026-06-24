@@ -125,9 +125,8 @@ interface SlimChart {
   y?: string;
   z?: string;
   seriesColumn?: string;
-  /** Pre-existing per-chart commentary (businessCommentary), surfaced verbatim. */
+  /** Pre-existing per-chart key insight, surfaced verbatim. */
   insight?: string;
-  businessCommentary?: string;
 }
 
 interface SlimSheet {
@@ -170,8 +169,8 @@ function trimToLength(value: string | undefined, max: number): string | undefine
 
 function slimChartFromSpec(c: ChartSpec, id: string): SlimChart {
   // We deliberately accept the cast; ChartSpec carries optional fields like
-  // `keyInsight` / `businessCommentary` declared in chartSpecSchema.
-  const spec = c as ChartSpec & { keyInsight?: string; businessCommentary?: string };
+  // `keyInsight` declared in chartSpecSchema.
+  const spec = c as ChartSpec & { keyInsight?: string };
   return {
     id,
     type: spec.type,
@@ -181,7 +180,6 @@ function slimChartFromSpec(c: ChartSpec, id: string): SlimChart {
     z: spec.z,
     seriesColumn: spec.seriesColumn,
     insight: trimToLength(spec.keyInsight, 400),
-    businessCommentary: trimToLength(spec.businessCommentary, 400),
   };
 }
 
@@ -329,7 +327,7 @@ YOUR CONTRACT
 
 6. CHART REFERENCES — \`slots.chartId\` MUST exactly match an id in the dashboard's chart inventory (formatted "s{sheetIdx}c{chartIdx}"). Do not invent ids. Do not refer to charts that aren't in the inventory.
 
-7. CONTENT FROM DOMAIN — when the dashboard has \`capturedActiveFilter\`, mention the filter scope in the TitleSlide subtitle or speaker notes ("filtered to: Region ∈ {North}"). When \`answerEnvelope.domainLens\` is populated, weave one phrase from it into the ExecSummary or relevant findings — never as decoration, only when it sharpens the takeaway.
+7. CONTENT FROM DOMAIN — when the dashboard has \`capturedActiveFilter\`, mention the filter scope in the TitleSlide subtitle or speaker notes ("filtered to: Region ∈ {North}").
 
 8. WHAT NOT TO DO
    - Never embed raw chart data in the plan (the renderer loads it via chartId).
@@ -391,9 +389,6 @@ function formatSlimDashboardForPrompt(slim: SlimDashboard): string {
     if (slim.answerEnvelope.caveats?.length) {
       lines.push(`Caveats: ${slim.answerEnvelope.caveats.slice(0, 6).join(" · ")}`);
     }
-    if (slim.answerEnvelope.domainLens) {
-      lines.push(`\nDomain lens: ${trimToLength(slim.answerEnvelope.domainLens, 800)}`);
-    }
   }
   if (slim.businessActions?.length) {
     lines.push(`\n# BUSINESS ACTIONS (decisions to make in the world, distinct from analytical recommendations above)\n`);
@@ -411,7 +406,6 @@ function formatSlimDashboardForPrompt(slim: SlimDashboard): string {
         .join(", ");
       lines.push(`  - ${c.id}: ${c.type} · "${c.title}"${cap ? ` (${cap})` : ""}`);
       if (c.insight) lines.push(`      insight: ${c.insight}`);
-      if (c.businessCommentary) lines.push(`      commentary: ${c.businessCommentary}`);
     }
     for (const t of sheet.tables) {
       lines.push(`  - ${t.id}: table · "${t.caption}" (${t.columnCount} cols, ${t.rowCount} rows)`);

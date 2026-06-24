@@ -9,12 +9,10 @@ import { resolve } from "node:path";
  * aligns it with the answer envelope's hedged causal lane: the "why" must be a
  * clearly-hedged hypothesis and must never carry a number.
  *
- * NOTE (deliberate deviation from the sketch): the "why" is NOT relocated to
- * businessCommentary, because that field is domain-pack-gated
- * (`wantsBusinessCommentary = Boolean(domainBlock)`) — moving it there would
- * DROP the "why" for non-FMCG datasets (e.g. Titanic). Tightening the existing
- * in-keyInsight reason to the same hedge + no-number rails closes the safety gap
- * without that regression. This source-inspection test pins the discipline.
+ * NOTE: the "why" lives INSIDE keyInsight (the WHY: lane), not in a separate
+ * field — so it survives for non-FMCG datasets (e.g. Titanic). Tightening the
+ * in-keyInsight reason to a hedge + no-number rails closes the safety gap. This
+ * source-inspection test pins the discipline.
  */
 const src = readFileSync(
   resolve(new URL("../lib/insightGenerator.ts", import.meta.url).pathname),

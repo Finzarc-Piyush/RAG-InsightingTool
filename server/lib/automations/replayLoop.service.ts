@@ -423,8 +423,6 @@ const executeReplayTurn = async (args: {
         env.implications = narratorOutput.implications;
       if (narratorOutput.recommendations)
         env.recommendations = narratorOutput.recommendations;
-      if (narratorOutput.domainLens)
-        env.domainLens = narratorOutput.domainLens;
       if (Object.keys(env).length > 0) answerEnvelope = env;
     }
   } catch (err) {

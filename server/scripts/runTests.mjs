@@ -25,14 +25,20 @@
  *      timeout, etc.) we SIGKILL the WHOLE group, killing per-file worker
  *      subprocesses too rather than orphaning them.
  *   3. wall-clock watchdog (`TEST_RUN_TIMEOUT_MS`, default 20 min) — if the run
- *      wedges anyway (a SYNC infinite loop can't be interrupted by
- *      `--test-timeout`), SIGKILL the group and exit 124.
- * `--test-timeout` (per-test) is opt-in via `TEST_TIMEOUT_MS` so it can't fail
- * legitimately-slow live-integration tests on the default CI path.
+ *      wedges anyway (a SYNC infinite loop, or a node:test runner-side TAP-drain
+ *      spin, neither interruptible by `--test-timeout`), it NAMES the still-
+ *      running file(s) in our process group, then SIGKILLs the group and exits 124.
+ *   4. per-test timeout — now DEFAULT-ON (`--test-timeout`, default 4 min,
+ *      override/disable via `TEST_TIMEOUT_MS`) so a hung test BODY fails fast and
+ *      NAMED instead of riding up to the wall clock. The default is generous so
+ *      it can't fail a legitimately-slow live test; set `TEST_TIMEOUT_MS=0` off.
+ *   5. pre-run STRAY SWEEP — reap orphaned `--import tsx --test` workers left by
+ *      a prior SIGKILLed run (the case signal-forwarding can't cover) so they
+ *      can't starve this run into spurious timeouts.
  */
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 
 const SKIP_DIRS = new Set(["node_modules", "__pycache__", "dist", ".git"]);
 
@@ -89,11 +95,52 @@ const coverageArgs =
     ? ["--experimental-test-coverage"]
     : [];
 
-const timeoutArgs = process.env.TEST_TIMEOUT_MS
-  ? [`--test-timeout=${Number(process.env.TEST_TIMEOUT_MS)}`]
-  : [];
+// Per-test timeout — now DEFAULT-ON (was opt-in). A hung test BODY fails fast
+// with node:test's own named "test timed out" line instead of riding the run
+// up to the wall-clock watchdog. The default is generous (4 min) so it can't
+// fail a legitimately-slow live-integration test; override with TEST_TIMEOUT_MS,
+// or set TEST_TIMEOUT_MS=0 to disable entirely for a live run with slower tests.
+const DEFAULT_TEST_TIMEOUT_MS = 4 * 60 * 1000;
+const perTestTimeoutMs =
+  process.env.TEST_TIMEOUT_MS != null && process.env.TEST_TIMEOUT_MS !== ""
+    ? Number(process.env.TEST_TIMEOUT_MS)
+    : DEFAULT_TEST_TIMEOUT_MS;
+const timeoutArgs =
+  Number.isFinite(perTestTimeoutMs) && perTestTimeoutMs > 0
+    ? [`--test-timeout=${perTestTimeoutMs}`]
+    : [];
 
 const RUN_TIMEOUT_MS = Number(process.env.TEST_RUN_TIMEOUT_MS || 20 * 60 * 1000);
+
+// STRAY SWEEP — orphaned node:test workers from a prior aborted run (Ctrl-C, an
+// agent Bash-tool timeout that kills the wrapper but not the detached group)
+// peg cores and starve THIS run, manifesting as spurious slowness/timeouts in
+// late-scheduled files. Reap any leftover `--import tsx --test` workers before
+// we start. Best-effort and self-excluding (our own group doesn't exist yet);
+// never touches a `tsx watch` dev server. See docs/conventions/managed-dev-processes.md.
+function sweepStrayTestWorkers(phase) {
+  try {
+    const out = execSync(
+      "ps -axo pid=,command= | grep -E 'node .*--import tsx --test' | grep -v 'tsx watch' | grep -v grep || true",
+      { encoding: "utf8" },
+    );
+    const pids = out
+      .split("\n")
+      .map((l) => l.trim().split(/\s+/)[0])
+      .filter((p) => p && /^\d+$/.test(p) && Number(p) !== process.pid);
+    for (const pid of pids) {
+      try {
+        process.kill(Number(pid), "SIGKILL");
+      } catch {
+        /* gone */
+      }
+    }
+    if (pids.length) console.error(`▶ stray-sweep (${phase}): reaped ${pids.length} orphaned test worker(s)`);
+  } catch {
+    /* ps unavailable (non-POSIX) — skip; the watchdog group-kill is the backstop */
+  }
+}
+sweepStrayTestWorkers("pre-run");
 
 const child = spawn(
   "node",
@@ -117,9 +164,32 @@ function nukeGroup(signal) {
 let timedOut = false;
 const watchdog = setTimeout(() => {
   timedOut = true;
+  // NEVER MASK: name the culprit. node:test runs one worker process per file in
+  // OUR process group (pgid === child.pid); a worker still alive at the wall
+  // clock is the wedged/incomplete file. Print those paths so the failure is
+  // actionable instead of a blind exit-124. (A pure node:test runner-side spin —
+  // e.g. its TAP `processRawBuffer` drain — surfaces as the file whose worker
+  // never finished.)
+  let wedged = "";
+  try {
+    // Match WORKER processes in our group only: same pgid as the detached child,
+    // but NOT the child itself (the parent's argv lists every file, which would
+    // mis-name completed files as wedged). Each worker carries a single
+    // *.test.ts in its argv — that's the file still running.
+    const out = execSync(
+      `ps -axo pid=,pgid=,command= | awk '$2==${child.pid} && $1!=${child.pid}' | grep -oE '[^ ]+\\.test\\.ts' | sort -u || true`,
+      { encoding: "utf8" },
+    ).trim();
+    if (out)
+      wedged =
+        `\n  Wedged / incomplete file(s):\n` +
+        out.split("\n").map((f) => `    • ${f}`).join("\n");
+  } catch {
+    /* ps unavailable — skip naming */
+  }
   console.error(
-    `\n✖ Test run exceeded ${RUN_TIMEOUT_MS}ms — SIGKILLing process group ${child.pid} (a test is wedged). ` +
-      `Override with TEST_RUN_TIMEOUT_MS.`,
+    `\n✖ Test run exceeded ${RUN_TIMEOUT_MS}ms — SIGKILLing process group ${child.pid} (a test is wedged).` +
+      `${wedged}\n  Bisect with \`npm test -- <file>\`; raise the budget with TEST_RUN_TIMEOUT_MS.`,
   );
   nukeGroup("SIGKILL");
 }, RUN_TIMEOUT_MS);
