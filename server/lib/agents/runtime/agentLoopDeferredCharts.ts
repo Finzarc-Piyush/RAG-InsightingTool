@@ -35,6 +35,7 @@ import {
 } from "./chartProposalValidation.js";
 import { processChartData } from "../../chartGenerator.js";
 import { finishChartSpec } from "../../chartSpecFinish.js";
+import { bucketContinuousXForSpec } from "../../continuousDimensionBucket.js";
 
 /** Shape needed to rebuild a plan-time build_chart after synthesis (same frame as narrative). */
 export type DeferredBuildChartTemplate = Pick<
@@ -140,8 +141,17 @@ export function materializeDeferredBuildCharts(
         aggregate: tmpl.aggregate ?? "none",
         ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
       });
+      // Bin continuous time dimensions (Clock-In Time, Working Hrs) before processing so
+      // a bar keyed on a per-second column shows hour-of-day / duration ranges, not one
+      // bar per value. No-op for non-continuous x.
+      let chartRows = rows as Record<string, any>[];
+      if (spec.type === "bar") {
+        const b = bucketContinuousXForSpec(chartRows, spec, ctx.summary);
+        chartRows = b.rows as Record<string, any>[];
+        if (b.axisReason && !spec.axisReason) spec.axisReason = b.axisReason;
+      }
       const processed = processChartData(
-        rows as Record<string, any>[],
+        chartRows,
         spec,
         ctx.summary.dateColumns,
         { chartQuestion: ctx.question }

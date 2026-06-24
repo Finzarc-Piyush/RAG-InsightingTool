@@ -10,6 +10,7 @@ import {
   parseFlexibleDate,
 } from './dateUtils.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
+import { pickTrendGrainForSpan } from './temporalGrainAuthority.js';
 import { logger } from "./logger.js";
 
 const MAX_CHART_POINTS = 5000;
@@ -220,13 +221,21 @@ function determineOptimalPeriod(data: Record<string, any>[], xColumn: string): D
   if (dates.length < 2) return null;
 
   dates.sort((a, b) => a.getTime() - b.getTime());
-  const timeSpan = dates[dates.length - 1]!.getTime() - dates[0]!.getTime();
-  const days = timeSpan / (1000 * 60 * 60 * 24);
+  const spanDays =
+    (dates[dates.length - 1]!.getTime() - dates[0]!.getTime()) / 86_400_000;
+  // Distinct calendar days from LOCAL Y/M/D components (matches the authority's
+  // day-key math) so a degenerate single-day span is recognised as such.
+  const distinctDayCount = new Set(
+    dates.map((d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`),
+  ).size;
 
-  if (days > 365 * 2) return 'year';
-  if (days > 90) return 'month';
-  if (days > 14) return 'week';
-  return 'day';
+  // Invariant #11: the span→grain ladder has ONE home — temporalGrainAuthority.
+  // Delegate to its exported span primitive instead of re-deriving a local
+  // `days > 14 → week` rule. The old local ladder bucketed a single month of
+  // daily data to WEEKS, diverging from every agent-built trend chart (which
+  // keep ≤90-day spans at day grain). pickTrendGrainForSpan returns a token that
+  // is a strict subset of DatePeriod (day | week | month | quarter).
+  return pickTrendGrainForSpan(spanDays, distinctDayCount);
 }
 
 function downsampleLTTB(

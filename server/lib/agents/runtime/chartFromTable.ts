@@ -46,6 +46,10 @@ import { finishChartSpec } from "../../chartSpecFinish.js";
 import { resolvePeriodAxis } from "../../periodColumnResolver.js";
 import { resolveFactsMetric } from "../../factsMetricResolver.js";
 import { resolveChartType } from "../../chartTypeAuthority.js";
+import {
+  planContinuousDimensionBucket,
+  applyContinuousDimensionBucket,
+} from "../../continuousDimensionBucket.js";
 import { isNumericishOnSample, scoreMeasure } from "./chartMeasurePick.js";
 
 const X_LABEL_CARDINALITY_CAP = 60;
@@ -159,6 +163,22 @@ export function buildChartFromAnalyticalTable(
   const y = numericCols
     .slice()
     .sort((a, b) => scoreMeasure(b) - scoreMeasure(a))[0]!;
+
+  // Continuous time dimensions (Clock-In Time, Working Hrs, …) must be BINNED before the
+  // cardinality guard below — otherwise their hundreds of distinct per-second values
+  // either trip X_LABEL_CARDINALITY_CAP (chart suppressed) or render one bar per value.
+  // The authority rewrites the dim cells to hour-of-day / duration-range labels; a
+  // non-continuous x is returned untouched. See
+  // docs/conventions/continuous-dimension-bucketing.md.
+  const bucketPlan = planContinuousDimensionBucket({
+    column: x,
+    rows: workingRows,
+    summaryColumn: summary.columns.find((c) => c.name === x),
+  });
+  if (bucketPlan && bucketPlan.orderedKeys.length >= 2) {
+    workingRows = applyContinuousDimensionBucket(workingRows, bucketPlan);
+    axisReason = axisReason ? `${axisReason} · ${bucketPlan.reason}` : bucketPlan.reason;
+  }
 
   const workingSample = workingRows.slice(0, 80);
   const xUnique = new Set(workingSample.map((r) => String(r?.[x] ?? ""))).size;

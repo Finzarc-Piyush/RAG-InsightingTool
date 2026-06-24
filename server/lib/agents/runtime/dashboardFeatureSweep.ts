@@ -49,6 +49,10 @@ import {
   buildDateRangeByColumn,
 } from "../../temporalGrainAuthority.js";
 import { isTemporalFacetColumnKey } from "../../temporalFacetColumns.js";
+import {
+  planContinuousDimensionBucket,
+  applyContinuousDimensionBucket,
+} from "../../continuousDimensionBucket.js";
 import { isFlagOn } from "../../featureFlags.js";
 import type { DepthBudget } from "./queryIntentAuthority.js";
 
@@ -213,6 +217,30 @@ export function enumerateMissingDashboardCharts(
       const line = tryBuildChart(ctx, sourceRows, "line", dim, outcome, aggregate);
       if (line) {
         out.push(line);
+        coveredX.add(dim);
+      }
+      continue;
+    }
+    // Continuous time dimensions (Clock-In Time, Working Hrs) are BINNED into
+    // hour-of-day / duration-range bars — never ranked as categories or top-N/Other
+    // bucketed (which would make a meaningless leaderboard of per-second values).
+    // Runs BEFORE the cardinality regime below, since a per-second column trips the
+    // high-cardinality skip. See docs/conventions/continuous-dimension-bucketing.md.
+    const contPlan = planContinuousDimensionBucket({
+      column: dim,
+      rows: sourceRows,
+      summaryColumn: ctx.summary.columns.find((c) => c.name === dim),
+    });
+    if (contPlan && contPlan.orderedKeys.length >= 2) {
+      const built = tryBuildChart(
+        ctx,
+        applyContinuousDimensionBucket(sourceRows, contPlan),
+        "bar",
+        dim,
+        outcome
+      );
+      if (built) {
+        out.push(built);
         coveredX.add(dim);
       }
       continue;

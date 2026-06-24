@@ -97,6 +97,7 @@ import { composeFindingDetail } from "../formatFindingEvidence.js";
 import type { FindingEvidence } from "../scaleNarrativeByConfidence.js";
 import { processChartData } from "../../../chartGenerator.js";
 import { compileChartSpec } from "../../../chartSpecCompiler.js";
+import { bucketContinuousXForSpec } from "../../../continuousDimensionBucket.js";
 import { isTemporalChartX } from "../../../chartTypeAuthority.js";
 import { chartSpecSchema, type AgentWorkbenchEntry } from "../../../../shared/schema.js";
 import {
@@ -1683,8 +1684,17 @@ export function registerDefaultTools(registry: ToolRegistry) {
         ...(a.y2 ? { y2: a.y2 } : {}),
         aggregate: defaultAgg,
       });
+      // Bin continuous time dimensions (Clock-In Time, Working Hrs) so a bar keyed on a
+      // per-second column shows hour-of-day / duration ranges, not one bar per value.
+      // No-op for non-continuous x. See docs/conventions/continuous-dimension-bucketing.md.
+      let chartRows = ctx.exec.data;
+      if (spec.type === "bar" && ctx.exec.summary) {
+        const b = bucketContinuousXForSpec(chartRows, spec, ctx.exec.summary);
+        chartRows = b.rows as typeof ctx.exec.data;
+        if (b.axisReason && !spec.axisReason) spec.axisReason = b.axisReason;
+      }
       const processed = processChartData(
-        ctx.exec.data,
+        chartRows,
         spec,
         ctx.exec.summary?.dateColumns,
         { chartQuestion: ctx.exec.question, grain: grainHint }

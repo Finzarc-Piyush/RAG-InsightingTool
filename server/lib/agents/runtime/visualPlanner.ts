@@ -53,6 +53,7 @@ import { chartSpecSchema } from "../../../shared/schema.js";
 import { processChartData } from "../../chartGenerator.js";
 import { compileChartSpec } from "../../chartSpecCompiler.js";
 import { finishChartSpec } from "../../chartSpecFinish.js";
+import { bucketContinuousXForSpec } from "../../continuousDimensionBucket.js";
 import type { ChartSpec } from "../../../shared/schema.js";
 import { validateChartProposal, chartRowsForProposal } from "./chartProposalValidation.js";
 import { buildChartFromAnalyticalTable } from "./chartFromTable.js";
@@ -493,7 +494,16 @@ export async function proposeAndBuildExtraCharts(
         ...(refined.axisReason ? { axisReason: refined.axisReason } : {}),
         ...(useAnalyticalOnly ? { _useAnalyticalDataOnly: true as const } : {}),
       });
-      const processed = processChartData(rowSource as Record<string, any>[], spec, ctx.summary.dateColumns, {
+      // Bin continuous time dimensions (Clock-In Time, Working Hrs) so a bar keyed on a
+      // per-second column shows hour-of-day / duration ranges, not one bar per value.
+      // No-op for any non-continuous x. See docs/conventions/continuous-dimension-bucketing.md.
+      let chartRows = rowSource as Record<string, any>[];
+      if (spec.type === "bar") {
+        const b = bucketContinuousXForSpec(chartRows, spec, ctx.summary);
+        chartRows = b.rows as Record<string, any>[];
+        if (b.axisReason && !spec.axisReason) spec.axisReason = b.axisReason;
+      }
+      const processed = processChartData(chartRows, spec, ctx.summary.dateColumns, {
         chartQuestion: ctx.question,
       });
       built.push(finishChartSpec(spec, processed));
