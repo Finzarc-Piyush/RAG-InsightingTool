@@ -77,8 +77,9 @@ export interface DateRange {
 export type DateRangeByColumn = ReadonlyMap<string, DateRange>;
 
 /** Coarse→fine ordinal so we only ever refine to / coarsen toward a known rank.
- *  Sub-day grains are FINER than `date` (negative). `hour_of_day` is cyclical —
- *  it has a rank for completeness but never participates in the absolute ladder. */
+ *  Sub-day grains are FINER than `date` (negative). `hour_of_day` and `day_of_week`
+ *  are cyclical — they have a rank for completeness but never participate in the
+ *  absolute ladder. */
 export const GRAIN_RANK: Record<TemporalFacetGrain, number> = {
   minute: -2,
   hour: -1,
@@ -89,13 +90,13 @@ export const GRAIN_RANK: Record<TemporalFacetGrain, number> = {
   half_year: 4,
   year: 5,
   hour_of_day: -3,
+  day_of_week: -4,
 };
 
-/** MATERIALIZED facet grains, fine → coarse. Sub-day grains are intentionally
- *  ABSENT: they are never pre-materialized (no "Hour · X" column), so they can't
- *  be picked by the cardinality/refinement tiers (which require a materialized
- *  facet). Sub-day grain comes only from the INTENT tier and the dedicated
- *  intraday-span branch, both gated on `temporalResolution === 'sub_day'`. */
+/** MATERIALIZED facet grains usable as a TIMELINE trend axis, fine → coarse.
+ *  Sub-day grains are intentionally ABSENT (never pre-materialized). `day_of_week`
+ *  is materialized but CYCLICAL (Mon…Sun is not a timeline) — also absent here, so
+ *  the cardinality/refinement tiers never pick "Day of week · X" as a trend grain. */
 const GRAINS_FINE_TO_COARSE: TemporalFacetGrain[] = [
   "date",
   "week",

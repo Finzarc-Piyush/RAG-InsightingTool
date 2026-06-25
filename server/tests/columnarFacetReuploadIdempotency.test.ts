@@ -48,8 +48,8 @@ describe("columnar convertToDataSummary · facet columns are not date sources", 
       !summary.dateColumns.some(isTemporalFacetColumnKey),
       `dateColumns must contain no facet columns: ${summary.dateColumns.join(", ")}`
     );
-    // …and the derived facet metadata is the single clean generation for "Date".
-    assert.equal(summary.temporalFacetColumns?.length, 6);
+    // …and the derived facet metadata is the single clean generation for "Date" (7 grains, incl. day_of_week).
+    assert.equal(summary.temporalFacetColumns?.length, 7);
     assert.ok(
       summary.temporalFacetColumns?.every((m) => m.sourceColumn === "Date"),
       "all facet metadata must be sourced from the real Date column"

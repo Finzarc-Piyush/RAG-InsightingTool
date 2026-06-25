@@ -24,6 +24,9 @@ function isConditionEffective(c: ActiveFilterCondition): boolean {
   // (the user opened the filter and unchecked every value). The condition only
   // becomes a no-op if the array is missing entirely (defensive).
   if (c.kind === "in") return Array.isArray(c.values);
+  // `notIn` is effective only with ≥1 excluded value (empty = no-op, the natural
+  // mirror of empty `in` = exclude-all).
+  if (c.kind === "notIn") return Array.isArray(c.values) && c.values.length > 0;
   if (c.kind === "range") return c.min !== undefined || c.max !== undefined;
   if (c.kind === "dateRange") return Boolean(c.from) || Boolean(c.to);
   return false;
@@ -38,6 +41,11 @@ function rowMatchesCondition(
     if (c.values.length === 0) return false; // empty IN ⇒ matches nothing (mirrors SQL `1=0`)
     const key = pivotDimensionStringKeyForChartFilter(raw);
     return c.values.includes(key);
+  }
+  if (c.kind === "notIn") {
+    if (c.values.length === 0) return true; // empty NOT IN ⇒ matches everything
+    const key = pivotDimensionStringKeyForChartFilter(raw);
+    return !c.values.includes(key);
   }
   if (c.kind === "range") {
     const num = coerceNumber(raw);

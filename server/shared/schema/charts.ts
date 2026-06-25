@@ -145,6 +145,28 @@ export const chartSpecSchema = z.object({
    * primary dashboard breakdowns never silently truncate.
    */
   maxRows: z.number().int().positive().max(10_000).optional(),
+  /**
+   * Off-day handling · weekday names (e.g. ["Sunday"]) to EXCLUDE from this
+   * chart before aggregation. Set when the user accepts the non-blocking
+   * "exclude Sundays?" affordance on a daily date-axis chart whose recurring
+   * off-day (≈0) was detected. Filtering rows upstream of aggregation makes the
+   * average working-day-aware with no special math. Per-chart scope; the
+   * session-wide escalation uses the active filter instead.
+   */
+  excludedWeekdays: z
+    .array(
+      z.enum([
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+      ])
+    )
+    .max(7)
+    .optional(),
   data: z.array(z.record(z.union([z.string(), z.number(), z.null()]))).optional(),
   xDomain: z.tuple([z.number(), z.number()]).optional(), // [min, max] for X-axis
   yDomain: z.tuple([z.number(), z.number()]).optional(), // [min, max] for Y-axis
@@ -1940,6 +1962,9 @@ export const temporalFacetGrainSchema = z.enum([
   'hour',
   'hour_of_day',
   'minute',
+  // Cyclical weekday facet — MATERIALIZED (pure-text "Monday"…"Sunday"), so the
+  // "Day of week · X" column is real + filterable.
+  'day_of_week',
 ]);
 
 export const temporalFacetColumnMetaSchema = z.object({
@@ -2696,6 +2721,15 @@ export const activeFilterConditionSchema = z.discriminatedUnion("kind", [
     column: z.string().min(1).max(200),
     from: z.string().optional(),
     to: z.string().optional(),
+  }),
+  // Exclude specific category values (the inverse of `in`). Used by the off-day
+  // "Apply to all charts" escalation to exclude a weekday session-wide on the
+  // materialized "Day of week · X" column — chip reads "… excludes Sunday" and
+  // is robust if new values appear (vs. enumerating every kept value).
+  z.object({
+    kind: z.literal("notIn"),
+    column: z.string().min(1).max(200),
+    values: z.array(z.string()).max(5000),
   }),
 ]);
 export type ActiveFilterCondition = z.infer<typeof activeFilterConditionSchema>;

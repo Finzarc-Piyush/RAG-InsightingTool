@@ -23,6 +23,12 @@ function buildConditionSql(c: ActiveFilterCondition): string | null {
     const inList = c.values.map((v) => escapeSqlStringLiteral(String(v))).join(", ");
     return `${colExpr} IN (${inList})`;
   }
+  if (c.kind === "notIn") {
+    if (!c.values || c.values.length === 0) return null; // empty NOT IN ⇒ keep all
+    const colExpr = `COALESCE(CAST(${quoteIdent(c.column)} AS VARCHAR), '')`;
+    const inList = c.values.map((v) => escapeSqlStringLiteral(String(v))).join(", ");
+    return `${colExpr} NOT IN (${inList})`;
+  }
   if (c.kind === "range") {
     if (c.min === undefined && c.max === undefined) return null;
     const ident = quoteIdent(c.column);

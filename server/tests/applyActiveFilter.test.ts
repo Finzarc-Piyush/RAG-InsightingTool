@@ -129,3 +129,30 @@ test("effectiveConditionCount counts only narrowing conditions", () => {
   ]);
   assert.equal(effectiveConditionCount(s), 2);
 });
+
+test("notIn-condition: excludes the named weekday values (off-day exclusion)", () => {
+  const wdRows = [
+    { "Day of week · Date": "Monday", Visits: 10 },
+    { "Day of week · Date": "Sunday", Visits: 0 },
+    { "Day of week · Date": "Saturday", Visits: 8 },
+    { "Day of week · Date": "Sunday", Visits: 0 },
+  ];
+  const out = applyActiveFilter(
+    wdRows,
+    spec([{ kind: "notIn", column: "Day of week · Date", values: ["Sunday"] }])
+  );
+  assert.equal(out.length, 2);
+  assert.ok(out.every((r) => r["Day of week · Date"] !== "Sunday"));
+});
+
+test("notIn with empty values is a no-op (keeps all rows; not effective)", () => {
+  const s = spec([{ kind: "notIn", column: "Region", values: [] }]);
+  assert.equal(applyActiveFilter(rows, s), rows);
+  assert.equal(isActiveFilterEffective(s), false);
+});
+
+test("notIn is counted as an effective (narrowing) condition", () => {
+  const s = spec([{ kind: "notIn", column: "Region", values: ["East"] }]);
+  assert.equal(isActiveFilterEffective(s), true);
+  assert.equal(effectiveConditionCount(s), 1);
+});

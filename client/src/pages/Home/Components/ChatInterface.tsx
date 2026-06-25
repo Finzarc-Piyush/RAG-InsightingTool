@@ -643,6 +643,22 @@ export function ChatInterface({
     [activeFilter?.conditions, pushConditions]
   );
 
+  // Off-day handling · escalate a per-chart weekday exclusion to a session-wide
+  // active-filter `notIn` on the materialized "Day of week · X" column. Renders
+  // as a removable "… excludes Sunday" chip and every chart/average then honours
+  // it (reversible by removing the chip).
+  const handleExcludeWeekdaysGlobally = useCallback(
+    (column: string, weekdays: string[]) => {
+      if (!column || !weekdays.length) return;
+      const others = (activeFilter?.conditions ?? []).filter((c) => c.column !== column);
+      void pushConditions([
+        ...others,
+        { kind: 'notIn', column, values: weekdays },
+      ]);
+    },
+    [activeFilter?.conditions, pushConditions]
+  );
+
   const activeConditionCount = activeFilter?.conditions.length ?? 0;
 
   // Debounced mention state update function
@@ -1345,8 +1361,10 @@ export function ChatInterface({
                   columns={columns}
                   numericColumns={numericColumns ?? []}
                   dateColumns={dateColumns ?? []}
+                  temporalFacetColumns={temporalFacetColumns}
                   sampleRows={sampleRows}
                   onChartAdded={onAppendAssistantChart}
+                  onExcludeWeekdaysGlobally={handleExcludeWeekdaysGlobally}
                 />
               ) : null}
               {columns && columns.length > 0 && onAppendAssistantPivot ? (

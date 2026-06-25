@@ -1,6 +1,7 @@
 /**
  * Single shared authority for ORDERING chart rows (bar / column / stacked /
- * grouped). Pure — no imports — so it runs byte-identically on the server
+ * grouped). Pure — its only dependency is the equally-pure sibling `weekday.ts`
+ * (constants, no I/O) — so it runs byte-identically on the server
  * (`chartGenerator.processChartData`) and the client (`useChartSort`, pivot
  * preview). It absorbs the temporal-label comparator that used to live in
  * `client/src/lib/temporalAxisSort.ts` (now a one-line re-export of this file)
@@ -11,6 +12,8 @@
  *
  * See docs/decisions/centralized-chart-sort.md.
  */
+
+import { weekdayRank } from "./weekday.js";
 
 export type ChartSortBy = "value" | "category";
 export type ChartSortDirection = "asc" | "desc";
@@ -125,6 +128,10 @@ export function compareTemporalOrLexicalLabels(a: string, b: string): number {
   if (ta != null && tb != null) return ta - tb;
   if (ta != null) return -1;
   if (tb != null) return 1;
+  // Ordered categorical: weekday names sort Mon→Sun (FMCG week), not A→Z.
+  const wa = weekdayRank(a);
+  const wb = weekdayRank(b);
+  if (wa != null && wb != null) return wa - wb;
   return a.localeCompare(b, undefined, { numeric: true });
 }
 
@@ -215,6 +222,14 @@ function categoryCompareCore(a: unknown, b: unknown): number {
   const an = asPureNumber(a);
   const bn = asPureNumber(b);
   if (an != null && bn != null) return an - bn;
+
+  // Ordered categorical: the day_of_week facet stores pure text ("Monday"…
+  // "Sunday"); rank Mon→Sun so a weekday axis isn't alphabetized (Friday first).
+  // Placed before the temporal/bucket/lexical branches — weekday names match none
+  // of them, so this is the only path that orders them correctly.
+  const aw = weekdayRank(as);
+  const bw = weekdayRank(bs);
+  if (aw != null && bw != null) return aw - bw;
 
   const ak = canonicalTemporalKey(as);
   const bk = canonicalTemporalKey(bs);

@@ -84,3 +84,20 @@ test("multi-condition AND across columns", () => {
     `(COALESCE(CAST("Region" AS VARCHAR), '') IN ('North')) AND (TRY_CAST("Sales" AS DOUBLE) >= 100)`
   );
 });
+
+test("notIn-condition produces COALESCE/CAST NOT IN list (parity with applyActiveFilter)", () => {
+  const sql = buildActiveFilterWhereSql(
+    spec([{ kind: "notIn", column: "Day of week · Date", values: ["Sunday"] }])
+  );
+  assert.equal(
+    sql,
+    `(COALESCE(CAST("Day of week · Date" AS VARCHAR), '') NOT IN ('Sunday'))`
+  );
+});
+
+test("notIn with empty values is dropped (keeps all rows)", () => {
+  assert.equal(
+    buildActiveFilterWhereSql(spec([{ kind: "notIn", column: "Region", values: [] }])),
+    null
+  );
+});

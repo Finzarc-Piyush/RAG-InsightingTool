@@ -32,6 +32,11 @@ function chipLabel(c: ActiveFilterCondition): string {
     if (hi !== "") return `${c.column} ≤ ${hi}`;
     return c.column;
   }
+  if (c.kind === "notIn") {
+    if (c.values.length === 0) return c.column;
+    if (c.values.length <= 3) return `${c.column} excludes {${c.values.join(", ")}}`;
+    return `${c.column} excludes ${c.values.length} values`;
+  }
   const f = c.from ?? "";
   const t = c.to ?? "";
   if (f && t) return `${c.column}: ${f} → ${t}`;

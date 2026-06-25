@@ -2,6 +2,8 @@
  * Date utilities with flexible parsing and light heuristics.
  */
 
+import { WEEKDAY_NAMES } from '../shared/weekday.js';
+
 export type DatePeriod =
   | 'day'
   | 'week'
@@ -15,7 +17,11 @@ export type DatePeriod =
   // Snake_case to stay string-identical to the facet-grain + executor period tokens.
   | 'hour'
   | 'minute'
-  | 'hour_of_day';
+  | 'hour_of_day'
+  // Cyclical weekday bucket. Key/label is the PURE TEXT weekday name ("Monday"…),
+  // not a numeric/prefixed key — ordering Mon→Sun is supplied by the sort
+  // authorities via weekdayRank (server/shared/weekday.ts).
+  | 'day_of_week';
 
 /**
  * Per-column intraday detection (Wave H1). A date column carries sub-day detail
@@ -465,6 +471,15 @@ export function normalizeDateToPeriod(
       const hh = String(date.getHours()).padStart(2, '0');
       normalizedKey = hh;
       displayLabel = `${hh}:00`;
+      break;
+    }
+    case 'day_of_week': {
+      // Cyclical weekday, aggregated across weeks. Stored as the PURE TEXT name
+      // ("Monday"…"Sunday") per "categorical text, not numeric"; Mon→Sun ordering
+      // comes from the sort authorities' weekdayRank, not from a numeric prefix.
+      const name = WEEKDAY_NAMES[date.getDay()]!;
+      normalizedKey = name;
+      displayLabel = name;
       break;
     }
     default:

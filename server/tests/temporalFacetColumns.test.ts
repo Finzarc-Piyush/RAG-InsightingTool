@@ -22,11 +22,12 @@ describe("temporalFacetColumns", () => {
     );
   });
 
-  it("metadata lists six grains per source (incl. half_year)", () => {
+  it("metadata lists seven grains per source (incl. half_year + day_of_week)", () => {
     const m = temporalFacetMetadataForDateColumns(["Ship Date"]);
-    assert.equal(m.length, 6);
+    assert.equal(m.length, 7);
     assert.ok(m.some((x) => x.grain === "year" && x.sourceColumn === "Ship Date"));
     assert.ok(m.some((x) => x.grain === "half_year" && x.sourceColumn === "Ship Date"));
+    assert.ok(m.some((x) => x.grain === "day_of_week" && x.sourceColumn === "Ship Date"));
   });
 
   it("resolveFacetSourceBindings maps logical Order Date to Cleaned_* when raw key missing", () => {

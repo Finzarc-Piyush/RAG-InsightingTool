@@ -248,11 +248,14 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
     'year',
   ];
   if (raw?.dateAggregationPeriod && validPeriods.includes(raw.dateAggregationPeriod as DatePeriod)) {
-    parsed.dateAggregationPeriod = raw.dateAggregationPeriod as DatePeriod;
+    // raw.dateAggregationPeriod is already the narrow ParsedQuery field type; the
+    // validPeriods gate excludes the facet-only 'day_of_week'.
+    parsed.dateAggregationPeriod = raw.dateAggregationPeriod;
   } else if (raw?.rawQuestion) {
     // Fallback: try to detect from the query if AI didn't detect it
     const detected = detectPeriodFromQuery(raw.rawQuestion);
-    if (detected) {
+    // 'day_of_week' is a facet grain, never an NL date-aggregation period.
+    if (detected && detected !== 'day_of_week') {
       parsed.dateAggregationPeriod = detected;
     }
   }

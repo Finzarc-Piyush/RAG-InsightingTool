@@ -125,6 +125,9 @@ export interface ParsedQuery {
     | 'hour'
     | 'hour_of_day'
     | 'minute'
+    // NOTE: 'day_of_week' is a materialized FACET grain (accessed via a
+    // "Day of week · X" groupBy column), NOT a date-aggregation period — it is
+    // intentionally absent here and from the executor's queryPlanBodySchema.
     | null;
   timeFilters?: TimeFilter[];
   valueFilters?: ValueFilter[];

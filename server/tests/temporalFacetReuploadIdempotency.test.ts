@@ -42,11 +42,11 @@ describe("temporal facet re-upload idempotency", () => {
     const keys = Object.keys(out[0]!);
     const facetKeys = keys.filter(isTemporalFacetColumnKey);
 
-    // (a) exactly 6 facet columns, all sourced from "Date"
+    // (a) exactly 7 facet columns (incl. day_of_week), all sourced from "Date"
     assert.equal(
       facetKeys.length,
-      6,
-      `expected 6 facet columns, got ${facetKeys.length}: ${facetKeys.join(", ")}`
+      7,
+      `expected 7 facet columns, got ${facetKeys.length}: ${facetKeys.join(", ")}`
     );
     for (const g of GRAINS) {
       assert.ok(keys.includes(facetColumnKey("Date", g)), `missing ${g} facet for Date`);
@@ -66,9 +66,9 @@ describe("temporal facet re-upload idempotency", () => {
     assert.equal(out[0]!.Region, "North");
     assert.equal(out[0]!.Date, "2024-01-15");
 
-    // summary agrees: facet metadata also collapses to 6
+    // summary agrees: facet metadata also collapses to 7 (incl. day_of_week)
     const summaryFacets = summary.columns.filter((c) => isTemporalFacetColumnKey(c.name));
-    assert.equal(summaryFacets.length, 6, "summary should expose exactly 6 facet columns");
+    assert.equal(summaryFacets.length, 7, "summary should expose exactly 7 facet columns");
   });
 
   it("does not facet a composite 'Combo' key (e.g. TSOE-Date Combo) while still faceting a real date", () => {
@@ -89,8 +89,8 @@ describe("temporal facet re-upload idempotency", () => {
     const { data: out, summary } = applyUploadPipelineWithProfile(data, profile);
     const facetKeys = Object.keys(out[0]!).filter(isTemporalFacetColumnKey);
 
-    // Real date "Date" is faceted (6); the composite combo column is not.
-    assert.equal(facetKeys.length, 6, `only Date should be faceted: ${facetKeys.join(", ")}`);
+    // Real date "Date" is faceted (7, incl. day_of_week); the composite combo column is not.
+    assert.equal(facetKeys.length, 7, `only Date should be faceted: ${facetKeys.join(", ")}`);
     assert.ok(
       facetKeys.every((k) => k.endsWith("· Date")),
       `no "· TSOE-Date Combo" facet should exist: ${facetKeys.join(", ")}`

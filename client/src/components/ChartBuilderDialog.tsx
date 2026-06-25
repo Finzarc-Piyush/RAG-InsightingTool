@@ -27,6 +27,7 @@ import type {
   ChartEncoding,
   ChartEncodingChannel,
   ChartAggOp,
+  TemporalFacetColumnMeta,
 } from '@/shared/schema';
 import { isChartSpecV2 } from '@/shared/schema';
 import { ChartRenderer } from '@/pages/Home/Components/ChartRenderer';
@@ -34,6 +35,7 @@ import { PremiumChart } from '@/components/charts/PremiumChart';
 import { ChartShim } from '@/components/charts/ChartShim';
 import { Skeleton } from '@/components/ui/skeleton';
 import { MarkGallery } from '@/components/charts/MarkGallery';
+import { OffDayAffordance } from '@/components/charts/OffDayAffordance';
 import { MARKS } from '@/lib/charts/markMeta';
 import { buildV2Spec } from '@/lib/charts/specBuilder';
 
@@ -61,17 +63,42 @@ interface ChartBuilderDialogProps {
   columns: string[];
   numericColumns: string[];
   dateColumns: string[];
+  /**
+   * Derived temporal facet columns ("Month · Date", "Day of week · Date", …).
+   * Threaded so they are selectable as X / Series axes (the base `columns` list
+   * excludes them). Mirrors PivotBuilderLauncher.
+   */
+  temporalFacetColumns?: TemporalFacetColumnMeta[];
   sampleRows?: Record<string, unknown>[];
   onChartAdded: (chart: ChartSpec | ChartSpecV2) => void;
+  /**
+   * Off-day handling · escalate a per-chart weekday exclusion to a session-wide
+   * active-filter `notIn` (the "Apply to all charts" action). Omitted → only the
+   * per-chart exclusion is offered.
+   */
+  onExcludeWeekdaysGlobally?: (column: string, weekdays: string[]) => void;
+}
+
+/** Transient off-day hint returned by the chart-preview / key-insight endpoints. */
+interface OffDayHint {
+  offWeekdays: string[];
+  summary?: string;
+  weekdayColumn?: string;
 }
 
 function inferFieldType(
   col: string,
   numericColumns: string[],
   dateColumns: string[],
+  facetGrainByName?: Map<string, string>,
 ): ChartFieldType {
   if (numericColumns.includes(col)) return 'q';
   if (dateColumns.includes(col)) return 't';
+  // Derived temporal facets: calendar grains are temporal; the cyclical
+  // day_of_week is an ordered category (its Mon→Sun order is handled by the
+  // shared chart-sort authority, not a date axis).
+  const grain = facetGrainByName?.get(col);
+  if (grain) return grain === 'day_of_week' ? 'n' : 't';
   return 'n';
 }
 
@@ -138,9 +165,30 @@ export function ChartBuilderDialog({
   columns,
   numericColumns,
   dateColumns,
+  temporalFacetColumns = [],
   sampleRows,
   onChartAdded,
+  onExcludeWeekdaysGlobally,
 }: ChartBuilderDialogProps) {
+  // grain lookup for field-type inference; merged X/Series option list = base
+  // columns + derived facet columns (which the base `columns` prop omits).
+  const facetGrainByName = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const f of temporalFacetColumns) if (f?.name) m.set(f.name, f.grain);
+    return m;
+  }, [temporalFacetColumns]);
+  const dimensionColumns = useMemo(() => {
+    const seen = new Set(columns);
+    const merged = [...columns];
+    for (const f of temporalFacetColumns) {
+      if (f?.name && !seen.has(f.name)) {
+        seen.add(f.name);
+        merged.push(f.name);
+      }
+    }
+    return merged;
+  }, [columns, temporalFacetColumns]);
+
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<'pick' | 'configure'>('pick');
   const [selectedMark, setSelectedMark] = useState<ChartV2Mark | null>(null);
@@ -159,6 +207,17 @@ export function ChartBuilderDialog({
   const [v1Loading, setV1Loading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Off-day handling · detected hint + the weekday(s) this chart currently
+  // excludes + whether the user dismissed the offer ("Keep all days") /
+  // escalated it session-wide ("Apply to all charts").
+  const [offDayHint, setOffDayHint] = useState<OffDayHint | null>(null);
+  const [excludedWeekdays, setExcludedWeekdays] = useState<string[]>([]);
+  // Captured at exclude time so it survives the re-preview (which returns a null
+  // hint once the off-day rows are gone) — needed for the session-wide escalation.
+  const [excludedWeekdayColumn, setExcludedWeekdayColumn] = useState<string | null>(null);
+  const [offDayDismissed, setOffDayDismissed] = useState(false);
+  const [offDayAppliedToAll, setOffDayAppliedToAll] = useState(false);
+
   const disabled = !columns.length || !sessionId;
   const fields = selectedMark ? fieldsForMark(selectedMark) : null;
 
@@ -172,6 +231,11 @@ export function ChartBuilderDialog({
     setTitle('Custom chart');
     setV1Preview(null);
     setError(null);
+    setOffDayHint(null);
+    setExcludedWeekdays([]);
+    setExcludedWeekdayColumn(null);
+    setOffDayDismissed(false);
+    setOffDayAppliedToAll(false);
   }, []);
 
   const handleMarkSelect = useCallback(
@@ -220,11 +284,11 @@ export function ChartBuilderDialog({
     if (xCol) {
       enc.x = {
         field: xCol,
-        type: inferFieldType(xCol, numericColumns, dateColumns),
+        type: inferFieldType(xCol, numericColumns, dateColumns, facetGrainByName),
       };
     }
     if (yCol) {
-      const yType = inferFieldType(yCol, numericColumns, dateColumns);
+      const yType = inferFieldType(yCol, numericColumns, dateColumns, facetGrainByName);
       enc.y = {
         field: yCol,
         type: yType,
@@ -234,19 +298,19 @@ export function ChartBuilderDialog({
     if (y2Col && fields.showY2) {
       enc.y2 = {
         field: y2Col,
-        type: inferFieldType(y2Col, numericColumns, dateColumns),
+        type: inferFieldType(y2Col, numericColumns, dateColumns, facetGrainByName),
       };
     }
     if (colorCol && fields.showColor) {
       enc.color = {
         field: colorCol,
-        type: inferFieldType(colorCol, numericColumns, dateColumns),
+        type: inferFieldType(colorCol, numericColumns, dateColumns, facetGrainByName),
       };
     }
     if (sizeCol && fields.showSize) {
       enc.size = {
         field: sizeCol,
-        type: inferFieldType(sizeCol, numericColumns, dateColumns),
+        type: inferFieldType(sizeCol, numericColumns, dateColumns, facetGrainByName),
       };
     }
 
@@ -269,7 +333,10 @@ export function ChartBuilderDialog({
   const isV1CapableMark = !!selectedMark && selectedMark in V1_MARKS;
 
   // Request a full-dataset v1 ChartSpec from the server for the selected mark.
-  const requestV1Spec = useCallback(async (): Promise<ChartSpec | null> => {
+  const requestV1Spec = useCallback(async (): Promise<{
+    chart: ChartSpec;
+    offDayHint: OffDayHint | null;
+  } | null> => {
     if (!sessionId || !xCol || !yCol || !selectedMark) return null;
     const v1Type = V1_MARKS[selectedMark];
     if (!v1Type) return null;
@@ -290,22 +357,27 @@ export function ChartBuilderDialog({
       body.seriesColumn = colorCol;
       if (v1Type === 'bar') body.barLayout = 'grouped';
     }
-    const res = await api.post<{ chart: ChartSpec }>(
+    // Off-day handling · carry the per-chart weekday exclusion so the server
+    // filters those rows before aggregation (working-day-aware average).
+    if (excludedWeekdays.length) body.excludedWeekdays = excludedWeekdays;
+    const res = await api.post<{ chart: ChartSpec; offDayHint?: OffDayHint | null }>(
       `/api/sessions/${sessionId}/chart-preview`,
       { chart: body },
     );
-    return res.chart;
-  }, [sessionId, selectedMark, xCol, yCol, colorCol, title, aggOp]);
+    return { chart: res.chart, offDayHint: res.offDayHint ?? null };
+  }, [sessionId, selectedMark, xCol, yCol, colorCol, title, aggOp, excludedWeekdays]);
 
   const runV1Preview = useCallback(async () => {
     setV1Loading(true);
     setError(null);
     try {
-      const chart = await requestV1Spec();
-      setV1Preview(chart);
-      if (!chart) setError('Preview failed');
+      const result = await requestV1Spec();
+      setV1Preview(result?.chart ?? null);
+      setOffDayHint(result?.offDayHint ?? null);
+      if (!result?.chart) setError('Preview failed');
     } catch (e: unknown) {
       setV1Preview(null);
+      setOffDayHint(null);
       setError(e instanceof Error ? e.message : 'Preview failed');
     } finally {
       setV1Loading(false);
@@ -334,7 +406,7 @@ export function ChartBuilderDialog({
       setV1Loading(true);
       setError(null);
       try {
-        const chart = v1Preview ?? (await requestV1Spec());
+        const chart = v1Preview ?? (await requestV1Spec())?.chart ?? null;
         if (chart) {
           onChartAdded(chart);
           handleOpenChange(false);
@@ -440,14 +512,16 @@ export function ChartBuilderDialog({
                         <SelectValue placeholder="Column" />
                       </SelectTrigger>
                       <SelectContent>
-                        {columns.map((c) => (
+                        {dimensionColumns.map((c) => (
                           <SelectItem key={c} value={c}>
                             {c}
                             {dateColumns.includes(c)
                               ? ' (date)'
                               : numericColumns.includes(c)
                                 ? ' (numeric)'
-                                : ''}
+                                : facetGrainByName.has(c)
+                                  ? ' (derived)'
+                                  : ''}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -535,11 +609,12 @@ export function ChartBuilderDialog({
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none">None</SelectItem>
-                        {columns
+                        {dimensionColumns
                           .filter((c) => c !== xCol && c !== yCol)
                           .map((c) => (
                             <SelectItem key={c} value={c}>
                               {c}
+                              {facetGrainByName.has(c) ? ' (derived)' : ''}
                             </SelectItem>
                           ))}
                       </SelectContent>
@@ -598,6 +673,45 @@ export function ChartBuilderDialog({
                 Add to chat
               </Button>
             </div>
+
+            {(() => {
+              const excluded = excludedWeekdays.length > 0;
+              const showOffer =
+                !offDayDismissed && !excluded && !!offDayHint?.offWeekdays.length;
+              if (!excluded && !showOffer) return null;
+              const weekdays = excluded ? excludedWeekdays : offDayHint!.offWeekdays;
+              const weekdayColumn = excluded
+                ? excludedWeekdayColumn
+                : offDayHint?.weekdayColumn ?? null;
+              return (
+                <OffDayAffordance
+                  className="mb-3"
+                  offWeekdays={weekdays}
+                  summary={offDayHint?.summary}
+                  excluded={excluded}
+                  appliedToAll={offDayAppliedToAll}
+                  busy={v1Loading}
+                  onExclude={() => {
+                    setExcludedWeekdays(offDayHint?.offWeekdays ?? []);
+                    setExcludedWeekdayColumn(offDayHint?.weekdayColumn ?? null);
+                  }}
+                  onKeepAll={() => setOffDayDismissed(true)}
+                  onApplyToAll={
+                    onExcludeWeekdaysGlobally && weekdayColumn && weekdays.length
+                      ? () => {
+                          onExcludeWeekdaysGlobally(weekdayColumn, weekdays);
+                          setOffDayAppliedToAll(true);
+                        }
+                      : undefined
+                  }
+                  onUndo={() => {
+                    setExcludedWeekdays([]);
+                    setExcludedWeekdayColumn(null);
+                    setOffDayAppliedToAll(false);
+                  }}
+                />
+              );
+            })()}
 
             <div className="rounded-xl border border-border bg-muted/20 p-4 min-h-[350px]">
               {v1Loading && (

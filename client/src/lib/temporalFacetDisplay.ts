@@ -1,7 +1,7 @@
 import type { TemporalFacetColumnMeta } from "@/shared/schema";
 
 /** Matches server `isTemporalFacetColumnKey`: legacy `__tf_*` or UI header `Month · …`. */
-const DISPLAY_FACET_HEADER_RE = /^(Day|Week|Month|Quarter|Half-year|Year) · /;
+const DISPLAY_FACET_HEADER_RE = /^(Day of week|Day|Week|Month|Quarter|Half-year|Year) · /;
 
 export function isTemporalFacetFieldId(name: string): boolean {
   if (name.startsWith("__tf_")) return true;
@@ -15,6 +15,7 @@ const FACET_GRAIN_LABEL: Record<string, string> = {
   quarter: "Quarter",
   half_year: "Half-year",
   year: "Year",
+  day_of_week: "Day of week",
 };
 
 const MONTH_SHORT_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -92,6 +93,9 @@ export function formatTemporalFacetValue(
     }
     case "year":
       return yearOnly ? yearOnly[0]! : null;
+    case "day_of_week":
+      // Stored as the pure-text weekday name ("Monday"…"Sunday") — render as-is.
+      return s;
     default:
       return null;
   }

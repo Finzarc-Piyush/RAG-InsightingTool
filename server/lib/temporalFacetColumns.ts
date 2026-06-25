@@ -30,7 +30,12 @@ export type TemporalFacetGrain =
   // 0–23 bucket aggregated across days ("peak/typical hour"), like `monthOnly`.
   | "hour"
   | "hour_of_day"
-  | "minute";
+  | "minute"
+  // Cyclical weekday facet (Monday…Sunday). Unlike the sub-day grains this IS
+  // materialized (in `GRAINS`) so "Day of week · X" is a real, filterable column
+  // storing the pure-text weekday name. Ordering Mon→Sun is provided by the chart
+  // /pivot sort authorities (weekdayRank), not a numeric sort-prefix.
+  | "day_of_week";
 
 export interface TemporalFacetColumnMeta {
   name: string;
@@ -59,6 +64,7 @@ const GRAINS: TemporalFacetGrain[] = [
   "quarter",
   "half_year",
   "year",
+  "day_of_week",
 ];
 
 export const GRAIN_TO_PERIOD: Record<TemporalFacetGrain, DatePeriod> = {
@@ -71,6 +77,7 @@ export const GRAIN_TO_PERIOD: Record<TemporalFacetGrain, DatePeriod> = {
   hour: "hour",
   hour_of_day: "hour_of_day",
   minute: "minute",
+  day_of_week: "day_of_week",
 };
 
 /** Same grain labels as client `temporalFacetDisplay.ts`. */
@@ -84,9 +91,13 @@ const FACET_GRAIN_LABEL: Record<TemporalFacetGrain, string> = {
   hour: "Hour",
   hour_of_day: "Hour of day",
   minute: "Minute",
+  // Distinct from `date` ("Day") — this is the cyclical weekday name column.
+  day_of_week: "Day of week",
 };
 
-const DISPLAY_FACET_HEADER_RE = /^(Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · /;
+// "Day of week" MUST precede "Day" in every facet-header alternation below so the
+// engine matches the longer label first (defensive — both require " · " after).
+const DISPLAY_FACET_HEADER_RE = /^(Day of week|Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · /;
 
 const LABEL_TO_GRAIN_TOKEN: Record<string, string> = {
   Day: "date",
@@ -98,6 +109,7 @@ const LABEL_TO_GRAIN_TOKEN: Record<string, string> = {
   Hour: "hour",
   "Hour of day": "hour_of_day",
   Minute: "minute",
+  "Day of week": "day_of_week",
 };
 
 /**
@@ -135,10 +147,11 @@ const PERIOD_ISO_GRAIN_RE: Record<TemporalFacetGrain, RegExp> = {
   month: /^\d{4}-\d{2}$/,
   week: /^\d{4}-W\d{2}$/,
   date: /^\d{4}-\d{2}-\d{2}$/,
-  // Melted wide-format periods have no sub-day shape — never match.
+  // Melted wide-format periods have no sub-day / weekday shape — never match.
   hour: NEVER_MATCH_RE,
   hour_of_day: NEVER_MATCH_RE,
   minute: NEVER_MATCH_RE,
+  day_of_week: NEVER_MATCH_RE,
 };
 
 /**
@@ -232,7 +245,7 @@ export function isTemporalFacetColumnKey(name: string): boolean {
 export function parseTemporalFacetDisplayKey(
   key: string
 ): { sourceColumn: string; grain: TemporalFacetGrain } | null {
-  const m = key.match(/^(Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · (.+)$/);
+  const m = key.match(/^(Day of week|Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · (.+)$/);
   if (!m) return null;
   const grain = LABEL_TO_GRAIN_TOKEN[m[1]!] as TemporalFacetGrain | undefined;
   if (!grain) return null;
@@ -276,7 +289,7 @@ export function temporalFacetGrainTokenFromFacetColumnName(name: string): string
     if (i <= 0) return null;
     return without.slice(0, i);
   }
-  const m = name.match(/^(Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · /);
+  const m = name.match(/^(Day of week|Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · /);
   return m ? LABEL_TO_GRAIN_TOKEN[m[1]!] ?? null : null;
 }
 
@@ -344,7 +357,7 @@ export function facetColumnInlineDuckDbExpr(
   tableColumns: Set<string>,
   periodDimension?: PeriodDimensionBinding
 ): string | null {
-  const m = logical.match(/^(Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · (.+)$/);
+  const m = logical.match(/^(Day of week|Day|Week|Month|Quarter|Half-year|Year|Hour of day|Hour|Minute) · (.+)$/);
   if (!m) return null;
   const grainLabel = m[1]!;
   const sourceCol = m[2]!;
@@ -417,6 +430,10 @@ export function facetColumnInlineDuckDbExpr(
       return `COALESCE(strftime(date_trunc('minute', ${ts}), '%Y-%m-%d %H:%M'), printf('%02d:%02d', EXTRACT(hour FROM ${tm}), EXTRACT(minute FROM ${tm})))`;
     case "hour_of_day":
       return `COALESCE(printf('%02d', EXTRACT(hour FROM ${ts})), printf('%02d', EXTRACT(hour FROM ${tm})))`;
+    case "day_of_week":
+      // Full weekday name ("Monday"…"Sunday"), byte-identical to the in-JS
+      // normalizeDateToPeriod('day_of_week') key so DuckDB and JS paths agree.
+      return `strftime(${src}, '%A')`;
     default:
       return null;
   }

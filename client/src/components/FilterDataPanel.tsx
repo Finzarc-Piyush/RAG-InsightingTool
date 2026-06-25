@@ -94,6 +94,7 @@ function conditionsByColumn(
 
 function describeCondition(c: ActiveFilterCondition): string {
   if (c.kind === "in") return `${c.values.length} selected`;
+  if (c.kind === "notIn") return `${c.values.length} excluded`;
   if (c.kind === "range") {
     const lo = c.min ?? "";
     const hi = c.max ?? "";

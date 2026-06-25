@@ -26,6 +26,12 @@ function chipLabel(c: ActiveFilterCondition): string {
     if (c.values.length <= 3) return `${c.column} ∈ {${c.values.join(", ")}}`;
     return `${c.column} ∈ ${c.values.length} values`;
   }
+  if (c.kind === "notIn") {
+    if (c.values.length === 0) return c.column;
+    if (c.values.length === 1) return `${c.column} excludes ${c.values[0]}`;
+    if (c.values.length <= 3) return `${c.column} excludes {${c.values.join(", ")}}`;
+    return `${c.column} excludes ${c.values.length} values`;
+  }
   if (c.kind === "range") {
     const lo = c.min ?? "";
     const hi = c.max ?? "";

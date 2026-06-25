@@ -24,17 +24,15 @@
  *   and the narrator hint block (main answer narrative). Reuses parseRowDate
  *   from temporalFacetColumns so date parsing matches the rest of the app.
  */
-import { parseRowDate } from "../temporalFacetColumns.js";
-
-const WEEKDAY_NAMES = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-] as const;
+import {
+  parseRowDate,
+  parseTemporalFacetDisplayKey,
+  facetColumnKey,
+} from "../temporalFacetColumns.js";
+import { formatCompactNumber } from "../formatCompactNumber.js";
+// Single source of truth for weekday naming/order (shared with the day_of_week
+// facet + chart/pivot sort authorities).
+import { WEEKDAY_NAMES } from "../../shared/weekday.js";
 
 // Calendar display order: Monday-first, Sunday last (FMCG week convention).
 const DISPLAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
@@ -52,6 +50,11 @@ export interface WeekdayPattern {
   offWeekdays: string[];
   /** The specific x-labels (dates) that fall on an off-day, e.g. ["2026-04-05", …]. */
   offDates: string[];
+  /**
+   * One-line, UI-ready comparison (no prompt scaffolding) for the off-day
+   * affordance chip, e.g. "Sunday averages 0 vs 4.2K on other days".
+   */
+  summary: string;
 }
 
 function coerceNumber(raw: unknown): number {
@@ -112,6 +115,12 @@ export function deriveWeekdayPattern(
   const offWeekdays = offWeekdayIdx.map((i) => WEEKDAY_NAMES[i]!);
   const offSet = new Set(offWeekdayIdx);
 
+  // Off-day vs working-day averages — for the UI-ready one-liner.
+  const offMean = mean(offWeekdayIdx.flatMap((wd) => byWeekday[wd]!.values));
+  const otherMean = mean(
+    byWeekday.filter((_, i) => !offSet.has(i)).flatMap((o) => o.values)
+  );
+
   // The dates that fall on an off-day, chronologically, capped for prompt budget.
   const offDates = [...DISPLAY_ORDER]
     .filter((wd) => offSet.has(wd))
@@ -137,5 +146,98 @@ export function deriveWeekdayPattern(
     `- So the regular rise-and-fall is the normal weekly work cycle, not a demand swing or a data gap.`,
   ].join("\n");
 
-  return { block, offWeekdays, offDates };
+  const summary = `${offNames} ${
+    offWeekdays.length === 1 ? "averages" : "average"
+  } ${format(offMean)} vs ${format(otherMean)} on other days`;
+
+  return { block, offWeekdays, offDates, summary };
+}
+
+/** Transient, UI-facing off-day hint surfaced on chart responses (not persisted). */
+export interface OffDayHint {
+  /** Detected recurring off-day weekday name(s), e.g. ["Sunday"]. */
+  offWeekdays: string[];
+  /** One-line comparison for the affordance chip. */
+  summary: string;
+  /**
+   * Materialized "Day of week · <date>" column to target for a SESSION-WIDE
+   * exclusion (the active-filter `notIn`). Undefined when the chart's x can't be
+   * resolved to a date source (then only per-chart exclusion is offered).
+   */
+  weekdayColumn?: string;
+}
+
+/** Resolve the materialized weekday column to exclude on for a session-wide filter. */
+function resolveWeekdayColumn(
+  x: string,
+  dateColumns: string[] | undefined
+): string | undefined {
+  const facet = parseTemporalFacetDisplayKey(x);
+  if (facet?.grain === "day_of_week") return x; // x already IS the weekday column
+  const src = facet?.sourceColumn ?? (dateColumns?.includes(x) ? x : undefined);
+  return src ? facetColumnKey(src, "day_of_week") : undefined;
+}
+
+/**
+ * Detect an off-day pattern for a chart and return a compact UI hint, or null.
+ * Shared by the chart-preview and key-insight endpoints so detection is byte-
+ * identical. Guards mirror the insight generator: only single-measure,
+ * non-dual-axis, non-heatmap date-axis charts (the off-day detector itself
+ * self-guards on series length / weekday rhythm).
+ */
+export function computeOffDayHint(
+  rows: Record<string, any>[],
+  spec: {
+    x?: string | null;
+    y?: string | null;
+    type?: string | null;
+    seriesKeys?: unknown[] | null;
+    y2?: unknown;
+  },
+  dateColumns?: string[]
+): OffDayHint | null {
+  if (!spec.x || !spec.y) return null;
+  if (spec.type === "heatmap") return null;
+  if (Array.isArray(spec.seriesKeys) && spec.seriesKeys.length) return null;
+  if (spec.y2) return null;
+  const pattern = deriveWeekdayPattern(rows, spec.x, spec.y, formatCompactNumber);
+  if (!pattern) return null;
+  return {
+    offWeekdays: pattern.offWeekdays,
+    summary: pattern.summary,
+    weekdayColumn: resolveWeekdayColumn(spec.x, dateColumns),
+  };
+}
+
+/**
+ * Drop rows that fall on an excluded weekday (per-chart off-day exclusion),
+ * applied BEFORE aggregation so the average divides by working-day count only.
+ * Resolves the weekday three ways from the chart's x column:
+ *   1. x is the "Day of week · Y" facet → its value IS the weekday name;
+ *   2. x is another facet ("Day · Date") → use its source date column;
+ *   3. x is a raw date column → parse it directly.
+ * Rows whose date can't be parsed are KEPT (never silently dropped). A no-op
+ * when there is nothing to exclude or x is not date-shaped.
+ */
+export function filterRowsByExcludedWeekdays(
+  rows: Record<string, any>[],
+  xColumn: string | null | undefined,
+  dateColumns: string[],
+  excludedWeekdays: string[] | null | undefined
+): Record<string, any>[] {
+  if (!rows.length || !xColumn || !excludedWeekdays?.length) return rows;
+  const excluded = new Set(excludedWeekdays);
+
+  const facet = parseTemporalFacetDisplayKey(xColumn);
+  if (facet?.grain === "day_of_week") {
+    return rows.filter((r) => !excluded.has(String(r[xColumn])));
+  }
+
+  const dateCol = facet?.sourceColumn ?? (dateColumns.includes(xColumn) ? xColumn : null);
+  if (!dateCol) return rows;
+  return rows.filter((r) => {
+    const d = parseRowDate(r[dateCol]);
+    if (!d) return true;
+    return !excluded.has(WEEKDAY_NAMES[d.getDay()]!);
+  });
 }

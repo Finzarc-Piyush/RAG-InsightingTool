@@ -348,6 +348,7 @@ function formatSlimDashboardForPrompt(slim: SlimDashboard): string {
   if (slim.capturedActiveFilter) {
     const conds = slim.capturedActiveFilter.conditions.map((c) => {
       if (c.kind === "in") return `${c.column} ∈ {${c.values.slice(0, 6).join(", ")}${c.values.length > 6 ? ", …" : ""}}`;
+      if (c.kind === "notIn") return `${c.column} ∉ {${c.values.slice(0, 6).join(", ")}${c.values.length > 6 ? ", …" : ""}}`;
       if (c.kind === "range") return `${c.column} ${c.min ?? "−∞"}…${c.max ?? "+∞"}`;
       return `${c.column} ${c.from ?? "−∞"}…${c.to ?? "+∞"}`;
     });

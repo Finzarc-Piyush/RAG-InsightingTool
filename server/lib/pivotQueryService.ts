@@ -1,5 +1,6 @@
 import type { ChatDocument } from "../models/chat.model.js";
 import { parseNumericCell } from "../shared/parseNumericCell.js";
+import { weekdayRank } from "../shared/weekday.js";
 import { ColumnarStorageService } from "./columnarStorage.js";
 import { ensureAuthoritativeDataTable } from "./ensureSessionDuckdbMaterialized.js";
 import { resolveSessionDataTable } from "./activeFilter/resolveSessionDataTable.js";
@@ -261,6 +262,11 @@ function compareTemporalOrLocale(a: string, b: string): number {
   if (ta != null && tb != null) return ta - tb;
   if (ta != null) return -1;
   if (tb != null) return 1;
+  // Ordered categorical: a "Day of week · X" pivot row/col stores pure weekday
+  // text — order Mon→Sun, not alphabetically (matches chartSort).
+  const wa = weekdayRank(a);
+  const wb = weekdayRank(b);
+  if (wa != null && wb != null) return wa - wb;
   return localeNumericSort(a, b);
 }
 

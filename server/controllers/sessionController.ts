@@ -54,6 +54,10 @@ import {
 import { compileChartSpec } from "../lib/chartSpecCompiler.js";
 import { emptySessionAnalysisContext } from "../lib/sessionAnalysisContext.js";
 import { generateChartInsights } from "../lib/insightGenerator.js";
+import {
+  computeOffDayHint,
+  filterRowsByExcludedWeekdays,
+} from "../lib/insightGenerator/weekdayPattern.js";
 import { parsePagination } from "../lib/pagination.js";
 import { logger } from "../lib/logger.js";
 import { errorMessage, getErrorStatus } from "../utils/errorMessage.js";
@@ -1200,6 +1204,8 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       // Wave S7 · honour an explicit sort (e.g. seeded from the pivot's row
       // sort). Absent → processChartData bakes the auto axis-order default.
       sort: body.sort,
+      // Off-day handling · per-chart weekday exclusion (filtered before aggregation).
+      excludedWeekdays: body.excludedWeekdays,
     });
 
     const dataVersion =
@@ -1287,6 +1293,23 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
     if (!data?.length) {
       return res.status(400).json({ error: "No rows match the current pivot filters" });
     }
+
+    // Off-day handling · drop excluded weekdays BEFORE aggregation + sampling so
+    // the average is working-day-aware and the sample is drawn from working days.
+    if (spec.excludedWeekdays?.length) {
+      data = filterRowsByExcludedWeekdays(
+        data as Record<string, any>[],
+        spec.x,
+        session.dataSummary.dateColumns,
+        spec.excludedWeekdays
+      ) as Record<string, any>[];
+      if (!data.length) {
+        return res
+          .status(400)
+          .json({ error: "No rows remain after excluding the selected weekday(s)" });
+      }
+    }
+
     const MAX = 50000;
     if (data.length > MAX) {
       const step = Math.floor(data.length / MAX);
@@ -1394,7 +1417,12 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       xLabel: spec.xLabel || spec.x,
       yLabel: spec.yLabel || spec.y,
     };
-    return res.json({ chart: out });
+    // Off-day detection (transient hint; drives the non-blocking "exclude
+    // Sundays?" affordance). Runs on the aggregated chart rows, same as the
+    // insight generator, so a daily date axis with a recurring near-zero
+    // weekday surfaces an offer to exclude it.
+    const offDayHint = computeOffDayHint(processed, out, session.dataSummary.dateColumns);
+    return res.json({ chart: out, offDayHint });
   } catch (error) {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
@@ -1470,10 +1498,25 @@ export const postChartKeyInsightEndpoint = async (req: Request, res: Response) =
     // Empty data is a valid user-driven state (zero-row filter). Return an empty
     // insight so the client can preserve prior text rather than seeing an error.
     if (rows.length === 0) {
-      return res.json({ keyInsight: "" });
+      return res.json({ keyInsight: "", offDayHint: null });
     }
 
-    const capped = rows.slice(0, CHART_KEY_INSIGHT_MAX_ROWS) as Record<string, any>[];
+    // Off-day handling · honour the chart's per-chart weekday exclusion so the
+    // Key Insight (Why/Do) describes the working-days view, not the off-day dip.
+    // Idempotent when the client already posted filtered data.
+    const cappedAll = rows.slice(0, CHART_KEY_INSIGHT_MAX_ROWS) as Record<string, any>[];
+    const capped = chart.excludedWeekdays?.length
+      ? filterRowsByExcludedWeekdays(
+          cappedAll,
+          chart.x,
+          session.dataSummary.dateColumns,
+          chart.excludedWeekdays
+        )
+      : cappedAll;
+    if (capped.length === 0) {
+      return res.json({ keyInsight: "", offDayHint: null });
+    }
+    const offDayHint = computeOffDayHint(capped, chart, session.dataSummary.dateColumns);
     const chartForInsight: ChartSpec = {
       ...chart,
       data: capped,
@@ -1515,7 +1558,7 @@ export const postChartKeyInsightEndpoint = async (req: Request, res: Response) =
       )
     );
 
-    return res.json({ keyInsight });
+    return res.json({ keyInsight, offDayHint });
   } catch (error) {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });
