@@ -53,6 +53,7 @@ import { likelyDriversSchema } from "../../../shared/schema/charts.js";
 import { completeJson, completeJsonStreaming, isStreamingNarratorEnabled } from "./llmJson.js";
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { ANALYST_PREAMBLE, ANSWER_ENVELOPE_CONTRACT } from "./sharedPrompts.js";
+import { stripOrQuestions } from "../../suggestedQuestionGuard.js";
 import { UNTRUSTED_CONTENT_RULE } from "./untrustedContent.js";
 import { agentLog } from "./agentLogger.js";
 import {
@@ -193,7 +194,8 @@ function stripFindingRefs(out: NarratorOutput): NarratorOutput {
       expectedImpact: stripRef(r.expectedImpact),
     })),
     magnitudes: out.magnitudes?.map((m) => ({ ...m, label: stripRef(m.label) })),
-    ctas: out.ctas?.map(stripRef),
+    // CTAs are follow-up questions — drop any disjunctive ("... A or B ...") ask.
+    ctas: out.ctas ? stripOrQuestions(out.ctas.map(stripRef)) : undefined,
     // W-SR1 · scrub internal [fN] refs from the causal lane's prose too.
     likelyDrivers: out.likelyDrivers?.map((d) => ({
       ...d,

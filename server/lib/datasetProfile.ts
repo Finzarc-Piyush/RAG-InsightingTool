@@ -5,6 +5,7 @@ import {
 } from '../shared/schema.js';
 import { completeJson } from './agents/runtime/llmJson.js';
 import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
+import { stripOrQuestions } from './suggestedQuestionGuard.js';
 import { AMBIGUOUS_SYMBOLS } from './wideFormat/currencyVocabulary.js';
 import { logger } from "./logger.js";
 
@@ -176,7 +177,12 @@ export async function inferDatasetProfile(
     // (tolerant coercion), so its input type differs from its output type and
     // completeJson<T>(ZodType<T>) surfaces the input-shaped T. The runtime value
     // IS the validated output, so this cast is sound.
-    return result.data as DatasetProfile;
+    const profile = result.data as DatasetProfile;
+    // Backstop the prompt's no-"or" rule for the suggested starter questions.
+    return {
+      ...profile,
+      suggestedQuestions: stripOrQuestions(profile.suggestedQuestions),
+    };
   };
 
   try {

@@ -14,6 +14,7 @@ export {
   patchDashboardController,
   listDashboardsController,
   getDashboardController,
+  ensureDashboardInsightsController,
   deleteDashboardController,
   addChartToDashboardController,
   removeChartFromDashboardController,

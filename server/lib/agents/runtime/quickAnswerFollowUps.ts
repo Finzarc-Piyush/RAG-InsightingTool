@@ -32,6 +32,7 @@
  */
 
 import { suggestedFollowUpsFromDataSummary } from "../../suggestedFollowUpsFromSummary.js";
+import { hasDisjunctiveOr } from "../../suggestedQuestionGuard.js";
 import { isLikelyIdentifierColumnName } from "../../columnIdHeuristics.js";
 import type { DataSummary } from "../../../shared/schema.js";
 import type { QueryPlanBody } from "../../queryPlanExecutor.js";
@@ -101,6 +102,8 @@ function measureLabel(plan: QueryPlanBody): string | undefined {
 function pushIfNew(out: string[], q: string): void {
   const norm = q.trim();
   if (!norm) return;
+  // Product rule: a suggested question must never contain the ambiguous "or".
+  if (hasDisjunctiveOr(norm)) return;
   if (out.some((x) => x.toLowerCase() === norm.toLowerCase())) return;
   out.push(norm);
 }

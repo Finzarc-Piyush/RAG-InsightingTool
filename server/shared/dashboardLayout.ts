@@ -128,7 +128,7 @@ export interface ChartHeightGeometry {
   maxRows?: number;
 }
 
-const ASPECT_DEFAULTS = { containerWidth: 1200, ratio: 0.62, minRows: 9, maxRows: 16 } as const;
+const ASPECT_DEFAULTS = { containerWidth: 1200, ratio: 0.72, minRows: 11, maxRows: 16 } as const;
 
 /**
  * Height (in grid rows) a chart tile should reserve for a given column `span`,
@@ -157,6 +157,34 @@ export function chartRowsForSpan(span: number, geo: ChartHeightGeometry = {}): n
   const targetHeightPx = tileWidthPx * ratio;
   const rows = Math.round((targetHeightPx + marginY) / (rowHeight + marginY));
   return Math.max(minRows, Math.min(maxRows, rows));
+}
+
+// Bar charts read top-to-bottom across many x-axis categories, so a span-derived
+// aspect height (tuned for time-series/landscape) leaves them too short to tell
+// adjacent bars apart without fullscreen. They get a taller FLOOR; a chart with
+// many categories (cf. MANY_CATEGORIES) gets taller still. Non-bar types keep the
+// pure aspect height. Floors only ever RAISE the aspect result and never exceed
+// maxRows, so the pixel math in `chartRowsForSpan` stays the one authority.
+const BAR_MIN_ROWS = 12; // ≈ 448px at rowHeight 32 + marginY 16
+const MANY_CATEGORY_BAR_MIN_ROWS = 14; // ≈ 512px
+
+/**
+ * Height (in grid rows) a chart tile should reserve, aware of the chart TYPE.
+ * Delegates the width→height pixel math to `chartRowsForSpan` (the one authority)
+ * and applies a type-specific floor on top: bar charts get a taller minimum so
+ * many-category bars stay readable on the dashboard grid without expanding.
+ */
+export function chartRowsForChart(
+  chart: Pick<ChartSpec, "type" | "data" | "seriesKeys">,
+  span: number,
+  geo: ChartHeightGeometry = {},
+): number {
+  const base = chartRowsForSpan(span, geo); // the ONE pixel authority
+  if (chart.type !== "bar") return base;
+  const categories = chart.data?.length ?? 0;
+  const floor = categories > MANY_CATEGORIES ? MANY_CATEGORY_BAR_MIN_ROWS : BAR_MIN_ROWS;
+  const maxRows = geo.maxRows ?? ASPECT_DEFAULTS.maxRows;
+  return Math.min(maxRows, Math.max(base, floor));
 }
 
 /**

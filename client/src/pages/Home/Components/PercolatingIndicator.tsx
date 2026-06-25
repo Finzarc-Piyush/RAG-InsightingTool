@@ -1,12 +1,14 @@
 /**
  * Subtle "still working" indicator placed just above the chat composer when
  * a turn is in flight. Matches the muted, monochrome design language of the
- * thinking strip — a single accent asterisk plus a quiet "Percolating…"
- * label whose dots wave to signal liveness without competing with the
- * thinking panel above.
+ * thinking strip — a single accent asterisk plus a quiet phase label whose
+ * dots wave to signal liveness without competing with the thinking panel
+ * above. The label is phase-aware (e.g. "Investigating further", "Building
+ * your dashboard") so the bottom-left signal says WHAT is still happening,
+ * not just that something is.
  */
 
-export function PercolatingIndicator() {
+export function PercolatingIndicator({ label = "Percolating" }: { label?: string }) {
   return (
     <div
       className="mb-2 flex items-center gap-2 px-1 text-xs text-muted-foreground"
@@ -21,7 +23,7 @@ export function PercolatingIndicator() {
         *
       </span>
       <span className="font-medium tracking-tight">
-        Percolating
+        {label}
         <span className="inline-flex">
           <span
             className="animate-pulse"

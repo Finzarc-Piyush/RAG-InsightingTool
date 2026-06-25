@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { chartAspectRows } from "./chartTileHeight";
+import { chartAspectRows, chartAspectRowsForChart } from "./chartTileHeight";
+import type { ChartSpec } from "@/shared/schema";
 
 const COLS = 12;
 const ROW_HEIGHT = 32;
 const MARGIN: [number, number] = [16, 16];
+
+const chart = (p: Partial<ChartSpec>): ChartSpec =>
+  ({ type: "bar", title: "c", x: "Region", y: "Sales", ...p }) as ChartSpec;
 
 describe("Wave S2 · chartAspectRows", () => {
   it("floors a narrow chart at minRows (kills the fixed-h14 dead space)", () => {
@@ -48,5 +52,29 @@ describe("Wave S2 · chartAspectRows", () => {
     const full = chartAspectRows(12, COLS, ROW_HEIGHT, MARGIN);
     const over = chartAspectRows(20, COLS, ROW_HEIGHT, MARGIN);
     expect(over).toBe(full);
+  });
+});
+
+describe("chartAspectRowsForChart · bar floor", () => {
+  it("makes a narrow bar taller than the same-width line", () => {
+    const line = chartAspectRowsForChart(chart({ type: "line" }), 4, COLS, ROW_HEIGHT, MARGIN);
+    const bar = chartAspectRowsForChart(chart({ type: "bar", data: [{}, {}] }), 4, COLS, ROW_HEIGHT, MARGIN);
+    // line keeps the pure aspect height; bar is floored taller.
+    expect(line).toBe(chartAspectRows(4, COLS, ROW_HEIGHT, MARGIN));
+    expect(bar).toBeGreaterThan(line);
+    expect(bar).toBeGreaterThanOrEqual(12);
+  });
+
+  it("makes a many-category bar tallest", () => {
+    const few = chartAspectRowsForChart(chart({ type: "bar", data: [{}, {}] }), 4, COLS, ROW_HEIGHT, MARGIN);
+    const many = chartAspectRowsForChart(
+      chart({ type: "bar", data: Array.from({ length: 20 }, () => ({})) }),
+      4,
+      COLS,
+      ROW_HEIGHT,
+      MARGIN,
+    );
+    expect(many).toBeGreaterThan(few);
+    expect(many).toBeGreaterThanOrEqual(14);
   });
 });

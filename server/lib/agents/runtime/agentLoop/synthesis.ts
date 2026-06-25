@@ -38,6 +38,7 @@ import {
   formatSynthesisContextBundle,
 } from "../buildSynthesisContext.js";
 import { ANALYST_PREAMBLE, ANSWER_ENVELOPE_CONTRACT } from "../sharedPrompts.js";
+import { stripOrQuestions } from "../../../suggestedQuestionGuard.js";
 import { completeJson } from "../llmJson.js";
 import {
   getInsightModel,
@@ -153,7 +154,7 @@ Required:
 - "body": main markdown answer. Lead with the direct answer. LENGTH — calibrate to the question, not to a fixed band. A "descriptive" lookup is one or two sentences with the number. A "comparison" between segments is a few short paragraphs. A "driver_discovery" / "variance_diagnostic" / open "exploration" may warrant a multi-paragraph dive. Every paragraph must add a finding, a number, an interpretation grounded in the domain context, or a recommendation — no padding. Brevity is a feature; match length to what the user actually asked. Do not duplicate the full keyInsight inside body.
   HARD CONSTRAINTS on body content: (1) Do NOT open with a methodology recap — phrases like "X has been calculated by grouping…", "the analysis was performed by summing…", "we computed X by aggregating…" are banned. The first sentence must state the headline finding with its number. (2) Do NOT include a paragraph describing dataset shape (rows × columns), data-quality assessments ("the dataset is clean", "well-structured for this purpose"), or hypothesis-confirmation language ("the findings align with the hypothesis"). The reader assumes the data was usable; surface genuine limitations only in implications/recommendations, not body prose.
 - "keyInsight": optional substantive takeaway (1–4 sentences, or null if nothing beyond the body adds value). Interpret what the numbers imply for decisions — segments, risk, opportunity, or "so what" for the business. Use general knowledge only where it does not contradict the data. Do not repeat the question. If the result is purely descriptive with no extra implication, use null.
-- "ctas": 0 to 3 short, actionable follow-up prompts (different angles from body; no numbering in strings). Use empty array if none fit.
+- "ctas": 0 to 3 short, actionable follow-up prompts (different angles from body; no numbering in strings). Use empty array if none fit. Each MUST ask exactly ONE thing — NEVER use the word "or" or combine clauses with "and"; split any compound ask into separate questions.
 Numeric claims, extremes, and trends must match tool output (aggregated tables, formatted results, chart summaries). Do not invent order-level or row-level numbers that do not appear in observations.
 If data is insufficient, say what is missing in body and use minimal ctas. Respect the CONTEXT BUNDLE when it does not contradict the data.
 If observations mention zero analytical results, "0 rows", or "Diagnostic:" with distinct value samples, explain that concretely in body (likely filter/label mismatch or missing column) using those samples — do NOT ask vague clarification when the user question was already specific.
@@ -210,7 +211,8 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
 
   const { body, keyInsight, ctas, magnitudes, unexplained, implications, recommendations, likelyDrivers } = out.data;
   const ki = keyInsight?.trim() || undefined;
-  const ctaList = (ctas ?? []).map((c) => c.trim()).filter(Boolean).slice(0, 3);
+  // CTAs are follow-up questions — drop any disjunctive ("... A or B ...") ask.
+  const ctaList = stripOrQuestions((ctas ?? []).map((c) => c.trim())).slice(0, 3);
   const cleanedMagnitudes =
     Array.isArray(magnitudes) && magnitudes.length > 0
       ? magnitudes

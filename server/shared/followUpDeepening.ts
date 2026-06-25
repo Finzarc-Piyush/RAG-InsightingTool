@@ -66,6 +66,15 @@ const AGG_SUFFIX =
 // Trailing dimension nouns dropped for readability ("Cluster Name" → "Cluster").
 const DIM_TRAILER = /\s+(name|id|code|key)$/i;
 
+// A standalone "or" makes a suggested question ambiguous ("…by cluster or
+// state?") — the app can't resolve the choice, so the question is never
+// surfaced. Mirrors suggestedQuestionGuard.hasDisjunctiveOr (the server-side
+// single authority); kept INLINE here to preserve this module's zero-import,
+// client-bundleable design (the client re-exports this very file). It catches
+// legacy stored prompts (frozen before the rule existed) at render time, plus
+// the rare generated question whose column label contains "or".
+const DISJUNCTIVE_OR = /\bor\b/i;
+
 // A question that already carries one of these signals is a DEEPER ask (why /
 // driver / interaction / outlier / correlation / trend). It is never treated as
 // "already answered by a flat breakdown chart" — this keeps the filter
@@ -235,6 +244,7 @@ export function filterAnsweredFollowUps(
   return candidates
     .map((c) => (typeof c === "string" ? c.trim() : ""))
     .filter(Boolean)
+    .filter((c) => !DISJUNCTIVE_OR.test(c)) // no ambiguous "or" questions
     .filter((c) => !isAnsweredByExistingCharts(c, charts));
 }
 
@@ -344,7 +354,8 @@ export function deepenFollowUps(
   const limit = opts.limit ?? DEFAULT_LIMIT;
   const cleanStored = (stored ?? [])
     .map((s) => (typeof s === "string" ? s.trim() : ""))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((s) => !DISJUNCTIVE_OR.test(s)); // no ambiguous "or" questions
 
   if (!charts?.length) return cleanStored.slice(0, limit);
 
@@ -354,6 +365,7 @@ export function deepenFollowUps(
   const seen = new Set<string>();
   const out: string[] = [];
   for (const q of [...kept, ...generated]) {
+    if (DISJUNCTIVE_OR.test(q)) continue; // no ambiguous "or" questions
     const k = questionKey(q);
     if (!k || seen.has(k)) continue;
     seen.add(k);

@@ -257,6 +257,29 @@ export function ChatInterface({
     }
     prevIsLoadingRef.current = isLoading;
   }, [isLoading]);
+
+  // Early "this is a multi-minute deep run" signal for the live thinking timer:
+  // the most recent user turn explicitly asked for a dashboard. Lets the band
+  // read "~2–4 min" from second one, before any sub-question/server step lands.
+  const dashboardAsked = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m?.role === "user") return /\bdashboard/i.test(m.content);
+    }
+    return false;
+  }, [messages]);
+
+  // Phase-aware "still working" label for the bottom-left indicator, so it says
+  // WHAT is happening (not just that something is) — especially during the long
+  // post-answer dashboard build, where the answer text is already on screen.
+  const percolatingLabel = useMemo(() => {
+    const buildingDashboard = (thinkingSteps ?? []).some(
+      (s) => s.step === "Building dashboard" && s.status === "active"
+    );
+    if (buildingDashboard) return "Building your dashboard";
+    if ((spawnedSubQuestions?.length ?? 0) > 0) return "Investigating further";
+    return "Percolating";
+  }, [thinkingSteps, spawnedSubQuestions]);
   const { toast } = useToast();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pendingComposerCaretRef = useRef<number | null>(null);
@@ -1238,6 +1261,7 @@ export function ChatInterface({
                       investigatedSubQuestions={investigatedSubQuestions}
                       isStreaming
                       startedAtMs={turnStartedAtMs}
+                      dashboardAsked={dashboardAsked}
                       sessionId={sessionId ?? null}
                     />
                   </div>
@@ -1317,7 +1341,7 @@ export function ChatInterface({
             </div>
           )}
           
-          {isLoading && <PercolatingIndicator />}
+          {isLoading && <PercolatingIndicator label={percolatingLabel} />}
 
           <form onSubmit={handleSubmit} className="flex items-end gap-2">
             {columns && columns.length > 0 && (

@@ -211,6 +211,13 @@ const persistLayouts = (dashboardId: string, layouts: Layouts, sheetId?: string)
   }
 };
 
+// The pre-S2 chart auto-seed floor (old ASPECT_DEFAULTS.minRows). A persisted
+// chart tile at or below this height is provably auto-seeded — a user never
+// deliberately shrank a chart below the floor the grid itself enforced — so it
+// is safe to clamp UP to the taller new floor on hydrate without stomping a
+// deliberate resize.
+const OLD_CHART_AUTOSEED_FLOOR = 9;
+
 const ensureLayoutsForTiles = (
   layouts: Layouts,
   tiles: DashboardTile[],
@@ -219,7 +226,13 @@ const ensureLayoutsForTiles = (
   // tiles DOWN to their content-fit height so a stale persisted `h` (e.g. the
   // old 10-row default) no longer floats text in an oversized box. Off during
   // live drag/resize so a deliberate resize is never stomped mid-gesture.
-  opts?: { clampNarrativeToContent?: boolean },
+  //
+  // clampChartToFloor · companion retrofit: chart tiles seeded under the OLD
+  // (shorter) aspect floor are clamped UP to the current taller floor on
+  // hydrate, so pre-existing dashboards (e.g. squished many-category bars) get
+  // the readable heights without a regenerate. Only raises, and only when the
+  // persisted `h` is at/below OLD_CHART_AUTOSEED_FLOOR. Also off during gestures.
+  opts?: { clampNarrativeToContent?: boolean; clampChartToFloor?: boolean },
 ): Layouts => {
   const tileIds = new Set(tiles.map((tile) => tile.id));
   const tileById = new Map(tiles.map((tile) => [tile.id, tile]));
@@ -258,17 +271,30 @@ const ensureLayoutsForTiles = (
       }
     });
 
-    if (opts?.clampNarrativeToContent) {
+    if (opts?.clampNarrativeToContent || opts?.clampChartToFloor) {
       next[key] = filtered.map((item) => {
         const tile = tileById.get(item.i);
-        if (tile?.kind !== "narrative") return item;
-        const fitH = contentDrivenHeight(tile, TILE_CONFIG.narrative, item.w, {
-          cols: COLS[key],
-          rowHeight: ROW_HEIGHT,
-          gridMargin: GRID_MARGIN,
-        });
-        const nextH = Math.max(TILE_CONFIG.narrative.minH, Math.min(item.h, fitH));
-        return nextH === item.h ? item : { ...item, h: nextH };
+        if (opts?.clampNarrativeToContent && tile?.kind === "narrative") {
+          const fitH = contentDrivenHeight(tile, TILE_CONFIG.narrative, item.w, {
+            cols: COLS[key],
+            rowHeight: ROW_HEIGHT,
+            gridMargin: GRID_MARGIN,
+          });
+          const nextH = Math.max(TILE_CONFIG.narrative.minH, Math.min(item.h, fitH));
+          return nextH === item.h ? item : { ...item, h: nextH };
+        }
+        // Retrofit: raise an under-floor (auto-seeded) chart tile to the current
+        // taller aspect/bar floor. Never lowers; leaves user-resized charts alone.
+        if (opts?.clampChartToFloor && tile?.kind === "chart" && item.h <= OLD_CHART_AUTOSEED_FLOOR) {
+          const floorH = contentDrivenHeight(tile, TILE_CONFIG.chart, item.w, {
+            cols: COLS[key],
+            rowHeight: ROW_HEIGHT,
+            gridMargin: GRID_MARGIN,
+          });
+          const nextH = Math.max(item.h, floorH);
+          return nextH === item.h ? item : { ...item, h: nextH };
+        }
+        return item;
       });
     } else {
       next[key] = filtered;
@@ -393,6 +419,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     layoutMigrateAttemptedRef.current.add(migrateKey);
     const merged = ensureLayoutsForTiles(stored, visibleTiles, fallbackLayouts, {
       clampNarrativeToContent: true,
+      clampChartToFloor: true,
     });
     void onSeedLayoutFromLocalStorage(merged)
       .then(() => {
@@ -419,6 +446,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     if (serverGridLayout && Object.keys(serverGridLayout).length > 0) {
       const merged = ensureLayoutsForTiles(serverGridLayout, visibleTiles, fallbackLayouts, {
         clampNarrativeToContent: true,
+        clampChartToFloor: true,
       });
       setLayouts(merged);
       return;
@@ -427,6 +455,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     if (stored) {
       const merged = ensureLayoutsForTiles(stored, visibleTiles, fallbackLayouts, {
         clampNarrativeToContent: true,
+        clampChartToFloor: true,
       });
       setLayouts(merged);
     } else {
@@ -438,6 +467,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
     setLayouts((prev) =>
       ensureLayoutsForTiles(prev, visibleTiles, fallbackLayouts, {
         clampNarrativeToContent: true,
+        clampChartToFloor: true,
       }),
     );
   }, [visibleTiles, fallbackLayouts]);

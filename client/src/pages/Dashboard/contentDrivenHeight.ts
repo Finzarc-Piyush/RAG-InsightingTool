@@ -1,5 +1,5 @@
 import type { DashboardTile } from "./types";
-import { chartAspectRows } from "./lib/chartTileHeight";
+import { chartAspectRowsForChart } from "./lib/chartTileHeight";
 
 /** Grid geometry needed to size chart tiles by aspect ratio (Wave S2/S3). */
 export interface GridGeometry {
@@ -86,8 +86,15 @@ export function contentDrivenHeight(
     case "chart":
       // Aspect-ratio height when grid geometry is known; otherwise keep the
       // fixed default (back-compat for callers that don't pass geometry).
-      return grid
-        ? chartAspectRows(effectiveW, grid.cols, grid.rowHeight, grid.gridMargin)
+      // Type-aware so bar charts get the taller floor (chartRowsForChart).
+      return grid && tile.chart
+        ? chartAspectRowsForChart(
+            tile.chart,
+            effectiveW,
+            grid.cols,
+            grid.rowHeight,
+            grid.gridMargin,
+          )
         : baseConfig.h;
     default:
       // pivot keeps its fixed default (intrinsic pivot-grid sizing).

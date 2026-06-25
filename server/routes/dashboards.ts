@@ -9,6 +9,7 @@ import {
   createDashboardFromSpecController,
   createReportDashboardController,
   deleteDashboardController,
+  ensureDashboardInsightsController,
   patchDashboardController,
   exportDashboardController,
   getDashboardController,
@@ -35,6 +36,8 @@ router.post('/dashboards/from-spec', createDashboardFromSpecController);
 router.post('/dashboards/:dashboardId/patch', patchDashboardController);
 router.get('/dashboards', listDashboardsController);
 router.get('/dashboards/:dashboardId', getDashboardController);
+// Self-heal missing per-chart insights (reuse from chat + generate gaps + persist).
+router.post('/dashboards/:dashboardId/ensure-insights', ensureDashboardInsightsController);
 router.patch('/dashboards/:dashboardId', renameDashboardController);
 router.delete('/dashboards/:dashboardId', deleteDashboardController);
 

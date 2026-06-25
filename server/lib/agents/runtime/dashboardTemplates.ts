@@ -36,7 +36,7 @@ import type {
   DashboardSpec,
   DashboardTemplate,
 } from "../../../shared/schema.js";
-import { planChartLayout, chartRowsForSpan } from "../../../shared/dashboardLayout.js";
+import { planChartLayout, chartRowsForChart } from "../../../shared/dashboardLayout.js";
 
 type GridItem = {
   i: string;
@@ -53,13 +53,14 @@ const CHART_MIN = { minW: 3, minH: 6 };
 
 // Monitoring tiles are intentionally compact (a denser KPI wall); every other
 // template sizes each chart's height to its placed WIDTH via the shared
-// aspect-ratio authority (chartRowsForSpan) — identical to what the client
-// renderer computes — so a wide hero is tall and a third-width box is short,
-// with no fixed tall slot leaving dead space.
+// type-aware authority (chartRowsForChart) — identical to what the client
+// renderer computes — so a wide hero is tall, a third-width box is short, and
+// a (many-category) bar gets its taller floor, with no fixed tall slot wasting
+// space.
 const COMPACT_ROWS = 8; // monitoring template
 
-function seedRows(span: number, compact: boolean): number {
-  return compact ? COMPACT_ROWS : chartRowsForSpan(span);
+function seedRows(chart: ChartSpec, span: number, compact: boolean): number {
+  return compact ? COMPACT_ROWS : chartRowsForChart(chart, span);
 }
 
 /**
@@ -90,7 +91,7 @@ export function chartGridItemsForTemplate(
       y += rowHeight;
       rowHeight = 0;
     }
-    const h = seedRows(p.span, compact);
+    const h = seedRows(charts[i]!, p.span, compact);
     items.push({ i: `chart-${i}`, x, y, w: p.span, h, ...CHART_MIN });
     x += p.span;
     rowHeight = Math.max(rowHeight, h);

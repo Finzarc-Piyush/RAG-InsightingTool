@@ -2,6 +2,7 @@ import { MODEL } from './openai.js';
 import { callLlm } from './agents/runtime/callLlm.js';
 import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { Message, DataSummary } from '../shared/schema.js';
+import { stripOrQuestions } from './suggestedQuestionGuard.js';
 import { logger } from "./logger.js";
 
 function normalizeForDedup(s: string): string {
@@ -108,7 +109,8 @@ Output JSON only:
     
     if (Array.isArray(parsed.suggestions) && parsed.suggestions.length > 0) {
       const raw = parsed.suggestions.slice(0, 4);
-      return filterSuggestionsAgainstHints(raw, avoidOverlap ?? []);
+      // Backstop the prompt's no-"or" rule: drop any disjunctive question the LLM slipped in.
+      return stripOrQuestions(filterSuggestionsAgainstHints(raw, avoidOverlap ?? []));
     }
   } catch (error) {
     logger.error('Failed to generate AI suggestions:', error);

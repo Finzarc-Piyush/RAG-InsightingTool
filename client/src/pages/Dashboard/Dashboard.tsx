@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useDashboardContext } from './context/DashboardContext';
 import { DashboardData } from './modules/useDashboardState';
@@ -8,6 +8,7 @@ import { DeleteDashboardDialog } from './Components/DeleteDashboardDialog';
 import { PendingInvitesBanner } from './Components/PendingInvitesBanner';
 import { Dashboard as ServerDashboard } from '@/shared/schema';
 import { normalizeDashboard } from './modules/useDashboardState';
+import { useEnsureDashboardInsights } from './hooks/useEnsureDashboardInsights';
 import { logger } from "@/lib/logger";
 
 export default function Dashboard() {
@@ -82,6 +83,23 @@ export default function Dashboard() {
   const handleBackToList = () => {
     setCurrentDashboard(null);
   };
+
+  // Self-heal missing per-chart insights when an open dashboard has bare tiles:
+  // reuse the chat's insights + generate the gaps server-side, then swap in the
+  // healed charts/sheets (preserving live shared/permission metadata).
+  const handleHealed = useCallback(
+    (healed: ServerDashboard) => {
+      if (!currentDashboard || currentDashboard.id !== healed.id) return;
+      const normalized = normalizeDashboard(healed);
+      setCurrentDashboard({
+        ...currentDashboard,
+        charts: normalized.charts,
+        sheets: normalized.sheets,
+      });
+    },
+    [currentDashboard, setCurrentDashboard],
+  );
+  useEnsureDashboardInsights(currentDashboard, handleHealed);
 
   const handleDeleteClick = (dashboardId: string) => {
     setDashboardToDelete(dashboardId);

@@ -13,11 +13,26 @@ import type { AgentMidTurnSessionPayload } from "./agents/runtime/types.js";
 import { withImmutableUserIntentFromPrevious } from "./sessionAnalysisContextGuards.js";
 import { buildDeterministicScopeFacts } from "./datasetScopeFacts.js";
 import { withSessionWriteLock } from "./sessionWriteLock.js";
+import { stripOrQuestions } from "./suggestedQuestionGuard.js";
 import { logger } from "./logger.js";
 
 export { withImmutableUserIntentFromPrevious };
 
 const ISO = () => new Date().toISOString();
+
+/**
+ * Drop any `suggestedFollowUps` that contain a standalone "or" (ambiguous
+ * disjunction the app can't answer). Applied to every LLM-built SAC before it
+ * is returned, since `suggestedFollowUps` feeds the rendered starter chips on
+ * paths that bypass `mergeSuggestedQuestions`. Returns the input unchanged when
+ * nothing is dropped, to keep object identity stable for cheap equality checks.
+ */
+function withGuardedFollowUps(ctx: SessionAnalysisContext): SessionAnalysisContext {
+  const current = ctx.suggestedFollowUps ?? [];
+  const cleaned = stripOrQuestions(current);
+  if (cleaned.length === current.length) return ctx;
+  return { ...ctx, suggestedFollowUps: cleaned };
+}
 
 export function emptySessionAnalysisContext(): SessionAnalysisContext {
   return {
@@ -51,7 +66,7 @@ Nested field types (all required — do not deviate):
 const SEED_SYSTEM = `You output only a JSON object matching the given schema (version 1).
 Build the initial session analysis context from the provided dataset profile and numeric summary.
 Populate dataset.* from the profile and column list. Leave userIntent mostly empty unless the input includes user notes.
-Add suggestedFollowUps (short analytical questions) inferred from the data — do not copy a fixed template; base them on actual columns and description. Do NOT suggest questions about identifier/key columns (listed in datasetProfile.idColumns — they are row keys, not analysis dimensions). For date columns, ask how a numeric metric changes over time rather than asking the date column itself to "trend".
+Add suggestedFollowUps (short analytical questions) inferred from the data — do not copy a fixed template; base them on actual columns and description. Do NOT suggest questions about identifier/key columns (listed in datasetProfile.idColumns — they are row keys, not analysis dimensions). For date columns, ask how a numeric metric changes over time rather than asking the date column itself to "trend". Each question MUST ask exactly ONE thing — NEVER use the word "or" to offer alternatives (BAD: "sales by cluster or state"); split any compound ask into separate single questions.
 Set lastUpdated.reason to "seed" and lastUpdated.at to the current ISO-8601 timestamp.
 
 Required top-level shape (all fields mandatory, no extras at the top level):
@@ -131,13 +146,14 @@ export async function seedSessionAnalysisContextLLM(params: {
   }
   // out.data is z.infer<typeof sessionAnalysisContextSchema> === SessionAnalysisContext;
   // the cast restores the identity TS loses through completeJson's generic param.
-  return out.data as SessionAnalysisContext;
+  return withGuardedFollowUps(out.data as SessionAnalysisContext);
 }
 
 const REGENERATE_STARTER_QUESTIONS_SYSTEM = `You output only a JSON object of the exact shape { "suggestedFollowUps": ["..."] }.
 You will be given DATASET_PROFILE, DATA_SUMMARY, and USER_NOTES describing the analyst's goals/domain context.
 Produce 5–8 short, concrete analytical questions that an analyst with these goals would actually want answered from this data. Tailor the questions to the user's stated intent.
 Do NOT copy a fixed template. Do NOT ask about identifier/key columns (listed in datasetProfile.idColumns — they are row keys, not analysis dimensions). For date columns, ask how a numeric metric changes over time rather than asking the date column itself to "trend".
+Each question MUST ask exactly ONE thing — NEVER use the word "or" to offer alternatives (BAD: "sales by cluster or state"); split any compound ask into separate single questions.
 Questions must be answerable from the columns present in DATA_SUMMARY.`;
 
 const starterQuestionsSchema = z.object({
@@ -176,7 +192,7 @@ export async function regenerateStarterQuestionsLLM(params: {
     logger.warn("⚠️ regenerateStarterQuestionsLLM failed:", out.error);
     return [];
   }
-  return out.data.suggestedFollowUps.filter((q) => q?.trim()).slice(0, 8);
+  return stripOrQuestions(out.data.suggestedFollowUps).slice(0, 8);
 }
 
 export async function mergeSessionAnalysisContextUserLLM(params: {
@@ -204,7 +220,7 @@ export async function mergeSessionAnalysisContextUserLLM(params: {
     logger.warn("⚠️ mergeSessionAnalysisContextUserLLM failed:", out.error);
     return prev;
   }
-  return out.data as SessionAnalysisContext;
+  return withGuardedFollowUps(out.data as SessionAnalysisContext);
 }
 
 /**
@@ -422,7 +438,7 @@ export async function mergeSessionAnalysisContextAssistantLLM(params: {
     return prev;
   }
   const merged = out.data as SessionAnalysisContext;
-  return withImmutableUserIntentFromPrevious(prev, merged);
+  return withGuardedFollowUps(withImmutableUserIntentFromPrevious(prev, merged));
 }
 
 /** Lightweight rolling merge during the agent turn (throttled by caller). */

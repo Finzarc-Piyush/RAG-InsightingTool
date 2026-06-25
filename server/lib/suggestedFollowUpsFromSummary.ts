@@ -1,4 +1,5 @@
 import { isLikelyIdentifierColumnName } from "./columnIdHeuristics.js";
+import { stripOrQuestions } from "./suggestedQuestionGuard.js";
 import type { DataSummary } from "../shared/schema.js";
 
 /**
@@ -37,7 +38,8 @@ export function suggestedFollowUpsFromDataSummary(
     );
   }
   for (const col of otherCols.slice(0, 4)) {
-    out.push(`What are the top categories or values for ${col}?`);
+    // No "or": a suggested question must offer a single, answerable ask.
+    out.push(`What are the most common values for ${col}?`);
   }
   if (numeric.length >= 2) {
     out.push(
@@ -51,5 +53,6 @@ export function suggestedFollowUpsFromDataSummary(
     out.push(`What are the key insights in ${fileHint}?`);
   }
 
-  return [...new Set(out)].slice(0, 12);
+  // Backstop: drop any disjunctive ("... A or B ...") phrasing before surfacing.
+  return stripOrQuestions([...new Set(out)]).slice(0, 12);
 }

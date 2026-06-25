@@ -9,7 +9,10 @@
  *   reps can be sampled…") — never actionable; (2) DUPLICATES (the same
  *   breakdown emitted twice across reflector calls); (3) per-IDENTIFIER
  *   groupings ("… by <rep name/code>") that rank thousands of row-identifiers.
- *   This pure function drops all three before the chips reach the user.
+ *   It also drops (4) DISJUNCTIVE questions containing a standalone "or"
+ *   ("… by cluster or state?") — an ambiguous choice the app can't resolve
+ *   (delegated to suggestedQuestionGuard). This pure function drops all four
+ *   before the chips reach the user.
  *
  * WHY IT MATTERS
  *   "Never show random samples" is a hard product rule, and the LLM does not
@@ -24,6 +27,7 @@
  *   Reuses isLikelyIdentifierColumnName (../../columnIdHeuristics.js).
  */
 import { isLikelyIdentifierColumnName } from "../../columnIdHeuristics.js";
+import { hasDisjunctiveOr } from "../../suggestedQuestionGuard.js";
 
 /** HARD RULE — random-sample shapes are never shown to the user. */
 const RANDOM_SAMPLE_RE =
@@ -141,6 +145,7 @@ export function filterSpawnedQuestions<T extends SpawnedQuestionLike>(
     const raw = (sq?.question ?? "").trim();
     if (!raw) continue;
     if (RANDOM_SAMPLE_RE.test(raw)) continue; // hard rule
+    if (hasDisjunctiveOr(raw)) continue; // hard rule — "or" makes the ask ambiguous
     const norm = normalize(raw);
     if (!norm) continue;
     if (excludedNorms.some((col) => norm.includes(col))) continue; // identifier grouping

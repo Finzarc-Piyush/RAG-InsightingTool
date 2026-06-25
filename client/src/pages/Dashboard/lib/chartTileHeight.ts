@@ -19,7 +19,8 @@
  * wrapper just adapts the client's (cols, rowHeight, [marginX, marginY]) call
  * shape to that authority.
  */
-import { chartRowsForSpan } from "@/shared/dashboardLayout";
+import { chartRowsForSpan, chartRowsForChart } from "@/shared/dashboardLayout";
+import type { ChartSpec } from "@/shared/schema";
 
 export interface ChartAspectOptions {
   /** target height / width ratio (landscape < 1). */
@@ -38,6 +39,31 @@ export function chartAspectRows(
   opts: ChartAspectOptions = {},
 ): number {
   return chartRowsForSpan(effectiveW, {
+    columns: cols,
+    rowHeight,
+    marginX: gridMargin[0],
+    marginY: gridMargin[1],
+    containerWidth: opts.containerWidth,
+    ratio: opts.ratio,
+    minRows: opts.minRows,
+    maxRows: opts.maxRows,
+  });
+}
+
+/**
+ * Type-aware variant: same aspect math, but applies the shared bar-chart height
+ * floor (`chartRowsForChart`) so many-category bar tiles seed taller than the
+ * landscape aspect would alone. Adapts the client's call shape to the authority.
+ */
+export function chartAspectRowsForChart(
+  chart: Pick<ChartSpec, "type" | "data" | "seriesKeys">,
+  effectiveW: number,
+  cols: number,
+  rowHeight: number,
+  gridMargin: [number, number],
+  opts: ChartAspectOptions = {},
+): number {
+  return chartRowsForChart(chart, effectiveW, {
     columns: cols,
     rowHeight,
     marginX: gridMargin[0],

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Sparkles } from 'lucide-react';
+import { motion } from 'framer-motion';
 import type { EnrichmentStep } from '@/lib/api/uploadStatus';
 import { categoryForEnrichmentStep, wittyPoolFor } from './wittyCopy';
+import { ThinkingPulseIcon, RotatingLine } from './ThinkingPulse';
 
 export function estimateBand(rows: number, cols: number, step?: EnrichmentStep) {
   // PVT6 · recalibrated to observed wall-clock (~15s for a 10k × 44 dataset).
@@ -118,27 +118,7 @@ export function DatasetEnrichmentLoader({
 
         <div className="relative px-4 py-4 sm:px-6 sm:py-4">
           <div className="mx-auto flex max-w-4xl flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
-            <div className="relative flex h-14 w-14 shrink-0 items-center justify-center sm:h-16 sm:w-16">
-              <motion.div
-                className="absolute inset-0 rounded-full border border-primary/20 bg-primary/[0.07]"
-                animate={{ scale: [1, 1.06, 1], opacity: [0.85, 1, 0.85] }}
-                transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
-              />
-              <motion.div
-                className="absolute inset-1 rounded-full border border-primary/10"
-                style={{ borderStyle: 'dashed' }}
-                animate={{ rotate: 360 }}
-                transition={{ duration: 28, repeat: Infinity, ease: 'linear' }}
-              />
-              <motion.div
-                className="absolute inset-0 flex items-center justify-center"
-                animate={{ rotate: 360 }}
-                transition={{ duration: 5, repeat: Infinity, ease: 'linear' }}
-              >
-                <div className="h-2 w-2 -translate-y-[22px] rounded-full bg-primary shadow-[0_0_12px_hsl(var(--primary)/0.55)] sm:-translate-y-[26px]" />
-              </motion.div>
-              <Sparkles className="relative z-10 h-6 w-6 text-primary/90 sm:h-7 sm:w-7" strokeWidth={1.25} />
-            </div>
+            <ThinkingPulseIcon size="lg" />
 
             <div className="min-w-0 flex-1 space-y-1.5">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -152,20 +132,7 @@ export function DatasetEnrichmentLoader({
                 )}
               </div>
 
-              <div className="relative min-h-[2.5rem] text-sm leading-relaxed text-muted-foreground">
-                <AnimatePresence mode="wait">
-                  <motion.p
-                    key={activeLine}
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -4 }}
-                    transition={{ duration: 0.35 }}
-                    className="text-pretty"
-                  >
-                    {activeLine}
-                  </motion.p>
-                </AnimatePresence>
-              </div>
+              <RotatingLine line={activeLine} size="lg" className="text-muted-foreground" />
 
               <p className="text-xs leading-relaxed text-muted-foreground">
                 We are improving dataset understanding and preparing suggested analysis questions. You can type below; we will answer after enrichment.

@@ -17,7 +17,6 @@ import {
   GitBranch,
   Loader2,
 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useRotatingMessage } from "@/hooks/useRotatingMessage";
 import {
@@ -27,7 +26,8 @@ import {
   wittyPoolFor,
   type WittyCategory,
 } from "./wittyCopy";
-import { estimateAnswerBand, formatSeconds } from "./answerTimeEstimate";
+import { estimateAnswerBand, formatBand, formatSeconds } from "./answerTimeEstimate";
+import { ThinkingPulseIcon, RotatingLine } from "./ThinkingPulse";
 import { FeedbackButtons } from "./FeedbackButtons";
 import type { Feedback, FeedbackTarget } from "@/lib/api/feedback";
 
@@ -47,6 +47,9 @@ interface ThinkingPanelProps {
   readOnly?: boolean;
   /** Epoch ms the turn started (isLoading rising edge). Drives the live timer. */
   startedAtMs?: number | null;
+  /** The current turn was an explicit dashboard ask — lets the time band read
+   *  "~2–4 min" from second one, before any sub-question/server step arrives. */
+  dashboardAsked?: boolean;
   spawnedQuestionFeedback?: Record<string, { feedback: Feedback; comment?: string }>;
 }
 
@@ -112,6 +115,7 @@ export function ThinkingPanel({
   turnId,
   readOnly = false,
   startedAtMs,
+  dashboardAsked = false,
   spawnedQuestionFeedback,
 }: ThinkingPanelProps) {
   const [open, setOpen] = useState(false);
@@ -159,24 +163,34 @@ export function ThinkingPanel({
     return { catOrder: order, catMap: map };
   }, [steps]);
 
-  // The single active step rotates through its whole bank during the wait, so a
-  // long stage surfaces many of the witty lines — the dashboard build is simply
-  // the `dashboard` category special case of this (header still says so below).
+  // Keep the header line ALIVE for the whole live turn — not just while a server
+  // step is `active`. Between steps (and during the long post-answer dashboard
+  // build before its step lands) we still rotate, picking the most relevant
+  // bank: the dashboard build if active, else the active step, else a
+  // deep-investigation flavor once sub-questions exist, else the last stage's
+  // bank, else generic. This is what makes chat feel like the enrichment loader.
   let activeCategory: WittyCategory | null = null;
   for (const cat of catOrder) {
     if (catMap.get(cat)!.status === "active") activeCategory = cat;
   }
-  const rotating = variant === "live" && isStreaming && activeCategory != null;
-  const activeSeed = activeCategory != null ? catMap.get(activeCategory)!.seed : 0;
-  const activeLine = useRotatingMessage(
-    activeCategory != null ? wittyPoolFor(activeCategory) : wittyPoolFor("generic"),
-    {
-      enabled: rotating,
-      startIndex: activeCategory != null ? startIndexFor(activeCategory, activeSeed) : 0,
-    }
-  );
+  const rotating = variant === "live" && isStreaming;
+  const lastCategory = catOrder[catOrder.length - 1] ?? null;
+  const headerCategory: WittyCategory =
+    catMap.get("dashboard")?.status === "active"
+      ? "dashboard"
+      : activeCategory != null
+        ? activeCategory
+        : spawnedSubQuestions.length > 0
+          ? "tool"
+          : lastCategory ?? "generic";
+  const headerSeed = activeCategory != null ? catMap.get(activeCategory)!.seed : 0;
+  const headerLine = useRotatingMessage(wittyPoolFor(headerCategory), {
+    enabled: rotating,
+    startIndex: startIndexFor(headerCategory, headerSeed),
+  });
   const buildingActive =
     variant === "live" && isStreaming && catMap.get("dashboard")?.status === "active";
+  const livePulse = variant === "live" && isStreaming;
 
   // Live "time to get an answer" timer (mirrors the enrichment loader's box):
   // elapsed since the turn started + a coarse "usually about X–Ys" band.
@@ -191,9 +205,15 @@ export function ThinkingPanel({
     const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
   }, [startedAtMs, variant, isStreaming]);
+  const deepInvestigation = spawnedSubQuestions.length > 0 || dashboardAsked;
   const { low: etaLow, high: etaHigh } = useMemo(
-    () => estimateAnswerBand({ dashboardActive: catMap.has("dashboard"), stepCount: catOrder.length }),
-    [catMap, catOrder.length]
+    () =>
+      estimateAnswerBand({
+        dashboardActive: catMap.has("dashboard"),
+        deepInvestigation,
+        stepCount: catOrder.length,
+      }),
+    [catMap, deepInvestigation, catOrder.length]
   );
   const showTimer = variant === "live" && isStreaming && startedAtMs != null;
   const takingLong = elapsed > etaHigh * 1.5;
@@ -215,7 +235,8 @@ export function ThinkingPanel({
     >
       <CollapsibleTrigger
         className={cn(
-          "flex w-full items-center gap-2 rounded-brand-lg border px-4 py-2.5 text-left",
+          "flex w-full items-center rounded-brand-lg border px-4 text-left",
+          livePulse ? "gap-3 py-3" : "gap-2 py-2.5",
           "border-border/80 bg-gradient-to-r from-primary/10 via-background to-primary/5",
           "backdrop-blur supports-[backdrop-filter]:bg-background/60",
           "hover:border-primary/20 transition-all duration-base ease-standard text-xs font-semibold text-foreground/90",
@@ -224,38 +245,40 @@ export function ThinkingPanel({
         )}
         aria-expanded={open}
       >
-        <ChevronDown
-          className={cn(
-            "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
-            open && "rotate-180"
-          )}
-        />
-        <span className="flex-1 min-w-0">
-          <span className="text-foreground">
-            {buildingActive ? "Building dashboard" : "Thinking"}
-          </span>
-          <span className="block text-[10px] font-normal text-muted-foreground mt-0.5 truncate">
-            {rotating ? (
-              <AnimatePresence mode="wait">
-                <motion.span
-                  key={activeLine}
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.25 }}
-                  className="text-primary/80"
-                >
-                  {activeLine}
-                </motion.span>
-              </AnimatePresence>
-            ) : (
-              summary
-            )}
-          </span>
-        </span>
+        {livePulse ? (
+          // Prominent enrichment-style centerpiece: animated icon + one large,
+          // continuously-rotating line. The chevron moves to the far right.
+          <>
+            <ThinkingPulseIcon size="lg" />
+            <span className="flex-1 min-w-0">
+              <span className="block text-sm font-semibold text-foreground">
+                {buildingActive ? "Building dashboard" : "Thinking"}
+              </span>
+              <RotatingLine line={headerLine} size="lg" className="text-primary/80" />
+            </span>
+          </>
+        ) : (
+          // Archived / settled: compact static header with a step-count summary.
+          <>
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                open && "rotate-180"
+              )}
+            />
+            <span className="flex-1 min-w-0">
+              <span className="text-foreground">
+                {buildingActive ? "Building dashboard" : "Thinking"}
+              </span>
+              <span className="block text-[10px] font-normal text-muted-foreground mt-0.5 truncate">
+                {summary}
+              </span>
+            </span>
+          </>
+        )}
         {showTimer && (
           <span
-            className="flex shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-card/70 px-2 py-1 text-[10px] font-normal tabular-nums text-muted-foreground"
+            className="flex shrink-0 items-center gap-1.5 self-start rounded-full border border-border/70 bg-card/70 px-2 py-1 text-[10px] font-normal tabular-nums text-muted-foreground"
             title="Time so far · typical answer time"
           >
             <Clock className="h-3 w-3 text-muted-foreground/80" />
@@ -263,11 +286,17 @@ export function ThinkingPanel({
             {takingLong ? (
               <span className="text-muted-foreground/70">· a little longer…</span>
             ) : (
-              <span className="text-muted-foreground/60">
-                / ~{etaLow}–{etaHigh}s
-              </span>
+              <span className="text-muted-foreground/60">/ {formatBand(etaLow, etaHigh)}</span>
             )}
           </span>
+        )}
+        {livePulse && (
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 shrink-0 self-start text-muted-foreground transition-transform",
+              open && "rotate-180"
+            )}
+          />
         )}
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-3 space-y-4 overflow-hidden">
@@ -279,8 +308,8 @@ export function ThinkingPanel({
             <div className="space-y-1.5">
               {catOrder.map((cat) => {
                 const entry = catMap.get(cat)!;
-                const isActiveRow = rotating && cat === activeCategory;
-                const label = isActiveRow ? activeLine : pickWittyLine(cat, entry.seed);
+                const isActiveRow = rotating && activeCategory != null && cat === activeCategory;
+                const label = isActiveRow ? headerLine : pickWittyLine(cat, entry.seed);
                 return (
                   <div key={cat} className="space-y-1.5">
                     <StepRow label={label} status={entry.status} />

@@ -91,9 +91,9 @@ describe("ThinkingPanel · pooled witty copy", () => {
         startedAtMs={Date.now() - 5000}
       />
     );
-    // The band chip renders "~low–highs"; match the numeric band token.
+    // The band chip renders "~low–high(s|min)"; match the band token.
     expect(
-      screen.getAllByText((content) => /~\s*\d+\D\d+s/.test(content)).length
+      screen.getAllByText((content) => /~\s*\d+\D\d+\s?(s|min)/.test(content)).length
     ).toBeGreaterThan(0);
   });
 
@@ -106,7 +106,54 @@ describe("ThinkingPanel · pooled witty copy", () => {
       />
     );
     expect(
-      screen.queryAllByText((content) => /~\s*\d+\D\d+s/.test(content)).length
+      screen.queryAllByText((content) => /~\s*\d+\D\d+\s?(s|min)/.test(content)).length
+    ).toBe(0);
+  });
+
+  test("a dashboard ask reads the band in minutes from the start", () => {
+    render(
+      <ThinkingPanel
+        steps={[step({ step: "Analyzing user intent", status: "active" })]}
+        workbench={[]}
+        isStreaming
+        startedAtMs={Date.now() - 3000}
+        dashboardAsked
+      />
+    );
+    // deepInvestigation → band widens to minutes ("~2–4 min"), not seconds.
+    expect(
+      screen.getAllByText((content) => /~\s*\d+\D\d+\s?min/.test(content)).length
+    ).toBeGreaterThan(0);
+  });
+
+  test("the live header keeps rotating even with no active step (all completed)", () => {
+    render(
+      <ThinkingPanel
+        steps={[step({ step: "Mapping columns from schema", status: "completed" })]}
+        workbench={[]}
+        isStreaming
+      />
+    );
+    // No active step, but streaming → a witty line still shows in the prominent
+    // header (it falls back to the last stage's bank), NOT a static count.
+    expect(aLineFromPoolIsOnScreen(wittyPoolFor("columns"))).toBe(true);
+    expect(screen.queryByText("1 step")).toBeNull();
+  });
+
+  test("archived variant shows a static summary and no live pulse/timer", () => {
+    render(
+      <ThinkingPanel
+        variant="archived"
+        steps={[step({ step: "Mapping columns from schema", status: "completed" })]}
+        workbench={[]}
+        isStreaming={false}
+        startedAtMs={Date.now() - 5000}
+      />
+    );
+    // Compact static header with the step-count summary; no answer-time band.
+    expect(screen.getByText("1 step")).toBeTruthy();
+    expect(
+      screen.queryAllByText((content) => /~\s*\d+\D\d+\s?(s|min)/.test(content)).length
     ).toBe(0);
   });
 });

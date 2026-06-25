@@ -9,6 +9,7 @@ import {
   selectFeaturedCharts,
   planChartLayout,
   chartRowsForSpan,
+  chartRowsForChart,
 } from "../shared/dashboardLayout.js";
 import type { ChartSpec } from "../shared/schema.js";
 
@@ -133,17 +134,49 @@ test("12-col executive: hero is full width, the rest tile and the last row fills
 
 // --- chart height by width --------------------------------------------------
 
-test("chartRowsForSpan: wider boxes are taller, clamped to [9,16]", () => {
+test("chartRowsForSpan: wider boxes are taller, clamped to [11,16]", () => {
   const narrow = chartRowsForSpan(4); // third-width
   const wide = chartRowsForSpan(8);
   const hero = chartRowsForSpan(12); // full-width
   assert.ok(narrow <= wide && wide <= hero, `monotonic: ${narrow} <= ${wide} <= ${hero}`);
   for (const span of [1, 2, 4, 6, 8, 12]) {
     const rows = chartRowsForSpan(span);
-    assert.ok(rows >= 9 && rows <= 16, `span ${span} → ${rows} in [9,16]`);
+    assert.ok(rows >= 11 && rows <= 16, `span ${span} → ${rows} in [11,16]`);
   }
   // A full-width hero reserves clearly more height than a third-width box.
   assert.ok(hero > narrow);
+});
+
+// --- chart height by TYPE (bar gets a taller floor) -------------------------
+
+test("chartRowsForChart: a narrow bar is taller than the same-width line", () => {
+  const span = 4; // third-width — where the aspect height is shortest
+  const lineRows = chartRowsForChart(chart({ type: "line" }), span);
+  const barRows = chartRowsForChart(chart({ type: "bar", data: [{}, {}] }), span);
+  // Non-bar keeps the pure aspect height.
+  assert.equal(lineRows, chartRowsForSpan(span));
+  // A bar is floored taller so its categories stay readable on the grid.
+  assert.ok(barRows > lineRows, `bar ${barRows} > line ${lineRows}`);
+  assert.ok(barRows >= 12, `bar floor ${barRows} >= 12`);
+});
+
+test("chartRowsForChart: a many-category bar is tallest", () => {
+  const span = 4;
+  const fewCats = chartRowsForChart(chart({ type: "bar", data: [{}, {}] }), span);
+  const manyCats = chartRowsForChart(
+    chart({ type: "bar", data: Array.from({ length: 20 }, () => ({})) }),
+    span,
+  );
+  assert.ok(manyCats > fewCats, `many ${manyCats} > few ${fewCats}`);
+  assert.ok(manyCats >= 14, `many-category bar floor ${manyCats} >= 14`);
+});
+
+test("chartRowsForChart: the bar floor never exceeds maxRows", () => {
+  // A tiny clamp window must still cap the bar floor.
+  const rows = chartRowsForChart(chart({ type: "bar", data: Array.from({ length: 20 }, () => ({})) }), 4, {
+    maxRows: 10,
+  });
+  assert.ok(rows <= 10, `bar floor respects maxRows: ${rows} <= 10`);
 });
 
 test("chartRowsForSpan: honours custom geometry + clamps", () => {

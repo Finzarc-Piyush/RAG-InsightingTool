@@ -9,14 +9,25 @@
 // it sets expectations without pretending to predict precisely.
 
 export interface AnswerBandInput {
-  /** True once the long post-answer dashboard build has begun. */
+  /** True once the long post-answer dashboard build has begun (LATE signal —
+   *  the server only emits the "Building dashboard" step after the whole
+   *  investigation + answer draft). */
   dashboardActive: boolean;
+  /** True as soon as we can tell this is a multi-minute deep run: a spawned
+   *  sub-question has arrived OR the user explicitly asked for a dashboard.
+   *  This is the EARLY signal that keeps the band honest from second one,
+   *  instead of waiting ~3 min for `dashboardActive`. */
+  deepInvestigation: boolean;
   /** Distinct thinking-step categories surfaced so far. */
   stepCount: number;
 }
 
-/** A coarse, clamped "usually about low–high seconds" band for an answer. */
-export function estimateAnswerBand({ dashboardActive, stepCount }: AnswerBandInput): {
+/** A coarse, clamped "usually about low–high" band for an answer (seconds). */
+export function estimateAnswerBand({
+  dashboardActive,
+  deepInvestigation,
+  stepCount,
+}: AnswerBandInput): {
   low: number;
   high: number;
 } {
@@ -24,14 +35,31 @@ export function estimateAnswerBand({ dashboardActive, stepCount }: AnswerBandInp
   // Each emitted step proxies a bit of work done; nudge the band up with depth.
   let low = 8 + Math.min(12, steps * 1.2);
   let high = low + 18 + Math.min(14, steps);
-  if (dashboardActive) {
-    // The dashboard build adds a long (~1 min), previously-silent phase.
-    low = Math.max(low, 38);
-    high = Math.max(high, 85);
+  if (deepInvestigation || dashboardActive) {
+    // A deep multi-question investigation plus the dashboard build runs ~2–4
+    // minutes in practice (observed 170–250s). The old 38–85s band undershot by
+    // 3–5×, so the timer flipped to "a little longer…" within a minute and
+    // stuck. Widen to minutes so the expectation matches reality.
+    low = Math.max(low, 120);
+    high = Math.max(high, 240);
   }
-  low = Math.round(Math.max(6, Math.min(low, 70)));
-  high = Math.round(Math.max(low + 8, Math.min(high, 120)));
+  low = Math.round(Math.max(6, Math.min(low, 240)));
+  high = Math.round(Math.max(low + 8, Math.min(high, 360)));
   return { low, high };
+}
+
+/**
+ * Format a band for display: compact seconds for short answers
+ * ("~18–44s") and rounded minutes once the band crosses ~1.5 min
+ * ("~2–4 min"), so a multi-minute deep run never reads as tens of seconds.
+ */
+export function formatBand(low: number, high: number): string {
+  if (high >= 90) {
+    const lo = Math.max(1, Math.round(low / 60));
+    const hi = Math.max(lo + 1, Math.round(high / 60));
+    return `~${lo}–${hi} min`;
+  }
+  return `~${low}–${high}s`;
 }
 
 /** Compact human duration: `8s`, `1m 4s`, `2m`. Shared by the answer timer. */

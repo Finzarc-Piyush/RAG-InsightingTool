@@ -177,6 +177,31 @@ export const getDashboardController = async (req: Request, res: Response) => {
   }
 };
 
+/**
+ * Self-heal a dashboard's per-chart insights on demand: reuse the linked chat's
+ * insights by signature, generate the gaps once, and persist — so saved
+ * dashboards stop showing "No insight yet" without the user clicking Generate.
+ * Idempotent + best-effort: an already-insighted dashboard returns patchedCount 0.
+ */
+export const ensureDashboardInsightsController = async (req: Request, res: Response) => {
+  try {
+    const username = requireUsername(req);
+    const { dashboardId } = req.params as { dashboardId: string };
+    const { ensureDashboardInsights } = await import("../lib/ensureDashboardInsights.js");
+    const result = await ensureDashboardInsights({ dashboardId, username });
+    if (!result.dashboard && result.reason === "dashboard_not_found") {
+      return res.status(404).json({ error: 'Dashboard not found' });
+    }
+    res.json({ patchedCount: result.patchedCount, dashboard: result.dashboard });
+  } catch (error: unknown) {
+    if (error instanceof AuthenticationError) {
+      res.status(401).json({ error: error.message });
+      return;
+    }
+    res.status(500).json({ error: errorMessage(error) || 'Failed to ensure dashboard insights' });
+  }
+};
+
 export const deleteDashboardController = async (req: Request, res: Response) => {
   try {
     const username = requireUsername(req);
