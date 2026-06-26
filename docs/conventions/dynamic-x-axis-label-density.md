@@ -18,7 +18,12 @@ recharts modals) delegates to the single authority
 
 The number of **data points** is never reduced by this — only the labels are thinned
 and/or rotated. Use `pickEvenlySpacedTicks` (visx) or `evenlySpacedDataKeys` (recharts)
-to thin to `max`.
+to thin to `max`. **Both thinners must spread the kept labels across the FULL index
+range with a rounded float stride** (`Math.round(i * (n-1)/(target-1))`), pinning the
+first and last bucket — never a floored integer stride. A floored stride collapses to 1
+when the budget lands in `(n/2, n)` (e.g. 25 of 48), which crams the labels onto a
+contiguous left-hand prefix with a blank gap before a lone final label. `evenlySpacedDataKeys`
+carried that defect until it was aligned to `pickEvenlySpacedTicks` — see [[L-035]].
 
 ## Why
 
