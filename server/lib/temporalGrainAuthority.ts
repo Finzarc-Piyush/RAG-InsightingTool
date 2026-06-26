@@ -190,6 +190,59 @@ export function distinctBucketsForGrain(
   return Math.max(1, keys.size);
 }
 
+/** A ladder grain must yield at least this many buckets — a 1- or 2-point line
+ *  isn't a meaningful trend, and this is also what drops the span-equal coarsest
+ *  level (a single month of data → no monthly line; a single year → no yearly). */
+export const MIN_LADDER_BUCKETS = 3;
+/** …and at most this many — drops over-fine grains (weekly on a year = 52, daily
+ *  on a year = 365) while keeping daily-on-a-month (~31) and monthly-on-a-year
+ *  (12). The boundary that separates "quarterly + monthly only" (1yr) from the
+ *  finer grains. */
+export const MAX_LADDER_BUCKETS = 45;
+/** Cap on how many grain levels one trend renders — keep the board legible. */
+export const LADDER_MAX_LEVELS = 3;
+
+/** The natural reading ladder, FINE→COARSE. `half_year` is deliberately omitted
+ *  — year → quarter → month → week → day is how people step through a trend; a
+ *  half-year tile in between reads as noise. Sub-day / cyclical grains are out
+ *  of scope (the ladder is for calendar spans). */
+const LADDER_GRAINS_FINE_TO_COARSE: TemporalFacetGrain[] = [
+  "date",
+  "week",
+  "month",
+  "quarter",
+  "year",
+];
+
+/**
+ * The ORDERED set of trend grains to render for a metric over `range`,
+ * COARSE→FINE. This is the multi-grain extension of the authority: instead of
+ * picking ONE grain (`resolveTrendGrain`), a dashboard / un-pinned trend shows a
+ * short ladder so the user can read the same metric at complementary
+ * resolutions.
+ *
+ * Rule (the user's "drop the coarsest 1-bucket level, go up to 3 levels"):
+ *   a grain is eligible ⇔ MIN_LADDER_BUCKETS ≤ buckets ≤ MAX_LADDER_BUCKETS;
+ *   return the COARSEST eligible grains, capped at LADDER_MAX_LEVELS.
+ *
+ * Worked examples (the acceptance cases):
+ *   • ~1 month of data  → [week, date]      (month/quarter/year collapse to <3;
+ *                                            hour/minute aren't materialized)
+ *   • ~1 year of data   → [quarter, month]  (year <3; week=52 & day=365 > 45)
+ * Returns [] for a degenerate/one-period span — the caller keeps its existing
+ * single-grain behaviour (`resolveTrendGrain` with `allowSingleBucket`).
+ */
+export function resolveTrendGrainLadder(range: DateRange): TemporalFacetGrain[] {
+  const eligible: TemporalFacetGrain[] = [];
+  for (const g of LADDER_GRAINS_FINE_TO_COARSE) {
+    const n = distinctBucketsForGrain(range, g);
+    if (n >= MIN_LADDER_BUCKETS && n <= MAX_LADDER_BUCKETS) eligible.push(g);
+  }
+  // Iterated fine→coarse; reverse to coarse→fine and keep the coarsest (most
+  // legible) up to the level cap.
+  return eligible.reverse().slice(0, LADDER_MAX_LEVELS);
+}
+
 /**
  * Derive a DateRange from actual rows by parsing one date/source column. This is
  * the metadata-free span fallback: even when `dateRange` was stripped (columnar

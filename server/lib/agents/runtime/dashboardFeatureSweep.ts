@@ -49,6 +49,7 @@ import {
   buildDateRangeByColumn,
 } from "../../temporalGrainAuthority.js";
 import { isTemporalFacetColumnKey } from "../../temporalFacetColumns.js";
+import { findMetricMentionedInQuestion } from "../utils/columnMatcher.js";
 import {
   planContinuousDimensionBucket,
   applyContinuousDimensionBucket,
@@ -577,6 +578,17 @@ export function resolveBreadthOutcomeMetric(
   if (tally.size > 0) {
     return [...tally.entries()].sort((a, b) => b[1] - a[1])[0]![0];
   }
+
+  // The numeric metric the user NAMED in the question, before any name-pattern
+  // last resort — so a "PJP" ask anchors on PJP rather than letting the generic
+  // rate/compliance regex below win by column order.
+  const named = findMetricMentionedInQuestion(
+    ctx.question,
+    ctx.summary.columns
+      .map((c) => c.name)
+      .filter((n) => numeric.has(n) && !isOrdinalLikeColumnName(n))
+  );
+  if (named) return named;
 
   // Rate/score-shaped numeric column, in dataset column order. Normalise
   // snake/kebab case first so `\brate\b` matches "pjp_adherence_rate".

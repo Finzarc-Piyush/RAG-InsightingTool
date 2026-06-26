@@ -64,10 +64,7 @@ import {
 import {
   parseTemporalFacetDisplayKey,
   isTemporalFacetColumnKey,
-  facetColumnKey,
-  parseRowDate,
 } from "../../temporalFacetColumns.js";
-import { normalizeDateToPeriod } from "../../dateUtils.js";
 
 export { validateChartProposal } from "./chartProposalValidation.js";
 
@@ -77,6 +74,7 @@ const chartProposalSchema = z.object({
   y: z.string(),
   z: z.string().optional(),
   seriesColumn: z.string().optional(),
+  barLayout: z.enum(["grouped", "stacked"]).optional(),
   title: z.string().optional(),
   rationale: z.string().optional(),
 });
@@ -98,6 +96,7 @@ Rules:
 - If no useful pair exists, return {“addCharts”:[]}.
 - When ANALYTICAL_RESULT_COLUMNS list **multiple categorical dimensions** plus a measure, prefer **bar** (or line/area for time-like X) so the server can bind a breakdown; you may omit \`seriesColumn\`—the chart compiler will bind a second dimension from the result rows.
 - **Series cardinality**: only propose seriesColumn when the column has ≤15 distinct values. For high-cardinality columns (states, customers, SKUs), use a single-series bar chart sorted by y (top N items) instead of multi-series.
+- **barLayout** (optional, multi-series bars only): use \`"grouped"\` (side-by-side) to COMPARE rates/percentages/scores or compare the anchor metric against another (the bars must be individually comparable); use \`"stacked"\` only for ADDITIVE parts that sum to a meaningful whole (counts/amounts). When unsure, omit it — the server defaults sensibly (rates → grouped, additive → stacked).
 Output JSON only matching the schema.`;
 
 /**
@@ -223,99 +222,6 @@ export function buildDeterministicFallbackChart(
   };
 }
 
-/** Coarser-than-daily companion grains, in order, with a span-gate threshold. */
-const TREND_COMPANION_GRAINS: ReadonlyArray<{
-  grain: "week" | "month";
-  /** Build only when the daily points span MORE than this many buckets. */
-  minBuckets: number;
-}> = [
-  { grain: "week", minBuckets: 2 }, // >2 weeks of data
-  { grain: "month", minBuckets: 2 }, // >2 months of data
-];
-
-/**
- * For a TREND question, build the SAME-MEASURE trend re-aggregated at coarser
- * grains (Day → Week → Month) — and nothing else. This is the deterministic
- * answer to "a pointed daily-trend ask should NOT fan out into cross-dimension
- * breakdowns or a different metric" (plan Wave 2). It REPLACES the LLM proposer
- * for trend turns.
- *
- * Self-contained + exact: it re-buckets the primary chart's OWN already-daily
- * data points (so it needs no raw-frame column lookup and never trips over an
- * analytical alias like `Total_Visited_OLs_sum` that isn't in the raw frame),
- * mirroring the primary's aggregate (sum/count summed; mean averaged). Restricted
- * to a daily-grain primary so the x values parse cleanly as calendar dates.
- *
- * Span gate: a coarser grain is emitted only when the data spans MORE than 2 of
- * its buckets (>2 weeks → weekly; >2 months → monthly) — exactly the user's rule.
- */
-export function buildTrendTemporalCompanions(
-  ctx: AgentExecutionContext,
-  existingCharts: ChartSpec[]
-): ChartSpec[] {
-  // 1. Find the primary daily-temporal chart to coarsen.
-  const primary = existingCharts.find((c) => {
-    if (!Array.isArray(c.data) || c.data.length === 0) return false;
-    const parsed = parseTemporalFacetDisplayKey(c.x);
-    if (parsed) return parsed.grain === "date";
-    return ctx.summary.dateColumns.includes(c.x); // a raw date column ⇒ daily
-  });
-  if (!primary?.y || !Array.isArray(primary.data)) return [];
-
-  const parsedX = parseTemporalFacetDisplayKey(primary.x);
-  const sourceColumn = parsedX?.sourceColumn ?? primary.x;
-  const y = primary.y;
-  const agg = primary.aggregate ?? "sum";
-
-  const out: ChartSpec[] = [];
-  for (const { grain, minBuckets } of TREND_COMPANION_GRAINS) {
-    const facetX = facetColumnKey(sourceColumn, grain);
-    if (existingCharts.some((c) => c.x === facetX && c.y === y)) continue;
-
-    // Re-bucket the daily points into this grain.
-    const period = grain; // "week" | "month" are valid DatePeriod values
-    const sums = new Map<string, { label: string; total: number; n: number }>();
-    for (const row of primary.data) {
-      const d = parseRowDate((row as Record<string, unknown>)[primary.x]);
-      if (!d) continue;
-      const raw = (row as Record<string, unknown>)[y];
-      const v = typeof raw === "number" ? raw : Number(raw);
-      if (!Number.isFinite(v)) continue;
-      const norm = normalizeDateToPeriod(d, period);
-      if (!norm) continue;
-      const cur = sums.get(norm.normalizedKey);
-      if (cur) {
-        cur.total += v;
-        cur.n += 1;
-      } else {
-        sums.set(norm.normalizedKey, { label: norm.displayLabel, total: v, n: 1 });
-      }
-    }
-    if (sums.size <= minBuckets) continue; // span gate
-
-    const rows = [...sums.entries()]
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([, b]) => ({
-        [facetX]: b.label,
-        [y]: agg === "mean" ? b.total / b.n : b.total,
-      }));
-
-    try {
-      const spec = chartSpecSchema.parse({
-        type: "line",
-        title: `${y} by ${facetX}`,
-        x: facetX,
-        y,
-        aggregate: agg,
-        _useAnalyticalDataOnly: true as const,
-      });
-      out.push(finishChartSpec(spec, rows));
-    } catch {
-      /* skip invalid */
-    }
-  }
-  return out;
-}
 
 export async function proposeAndBuildExtraCharts(
   ctx: AgentExecutionContext,
@@ -351,21 +257,15 @@ export async function proposeAndBuildExtraCharts(
   // {"addCharts": []}. Returns null → fall through to the LLM proposer.
   const deterministic = buildDeterministicFallbackChart(ctx, existingCharts);
 
-  // Trend questions get a DETERMINISTIC, span-gated set of same-measure coarser-
-  // grain companions (Day → Week → Month) — and nothing else — instead of the
-  // LLM proposer, which drifts into cross-dimension breakdowns or a different
-  // metric. This is the positive half of the "pointed trend ask → pointed
-  // answer" fix (the feature-sweep gate in agentLoop is the negative half).
-  // Minimal depth still gets at most the single fallback chart below.
+  // Trend questions emit only the DETERMINISTIC seed chart here and SKIP the LLM
+  // proposer (which drifts into cross-dimension breakdowns or a different
+  // metric) — the positive half of the "pointed trend ask → pointed answer" fix.
+  // The same-measure MULTI-GRAIN ladder (Day/Week, Quarter/Month, … per span) is
+  // applied uniformly post-merge by `trendGrainLadder.applyTrendGrainLadder`,
+  // which also respects an explicitly PINNED grain ("daily chart" → one daily
+  // chart). Minimal depth still gets at most the single fallback chart below.
   if (ctx.depthBudget !== "minimal" && ctx.queryIntent?.signals?.trend === true) {
-    const seed = deterministic
-      ? [...existingCharts, ...deterministic.charts]
-      : existingCharts;
-    const companions = buildTrendTemporalCompanions(ctx, seed);
-    const charts = deterministic
-      ? [...deterministic.charts, ...companions]
-      : companions;
-    return { charts, ...(deterministic ? { note: deterministic.note } : {}) };
+    return deterministic ?? { charts: [] };
   }
 
   if (deterministic) return deterministic;
@@ -438,6 +338,7 @@ export async function proposeAndBuildExtraCharts(
         y: p.y,
         z: p.z,
         seriesColumn: p.seriesColumn,
+        ...(p.barLayout ? { barLayout: p.barLayout } : {}),
       },
       {
         columnOrder:

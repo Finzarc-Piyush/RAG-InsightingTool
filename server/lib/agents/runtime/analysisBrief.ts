@@ -45,6 +45,7 @@ import {
   looksLikeMarketingMixDataset,
 } from "../../marketingColumnTags.js";
 import { collectBooleanIndicators } from "./booleanIndicatorRateRepair.js";
+import { findMetricMentionedInQuestion } from "../utils/columnMatcher.js";
 
 // Exported so the merged-pre-planner path can apply the same gate the per-task
 // analysisBrief call uses, keeping behaviour identical.
@@ -225,15 +226,41 @@ export function ensureDashboardOutcomeMetric(
 ): AnalysisBrief {
   if (!brief.requestsDashboard) return brief;
   let out = brief;
-  if (!out.outcomeMetricColumn || !out.outcomeMetricColumn.trim()) {
-    const colNames = new Set(ctx.summary.columns.map((c) => c.name));
-    const firstNumeric = (ctx.summary.numericColumns ?? []).find((n) =>
-      colNames.has(n)
-    );
-    const firstBooleanIndicator = ctx.summary.columns.find(
+
+  const colNames = new Set(ctx.summary.columns.map((c) => c.name));
+  const numericCols = (ctx.summary.numericColumns ?? []).filter((n) =>
+    colNames.has(n)
+  );
+  const indicatorCols = ctx.summary.columns
+    .filter(
       (c) => (c as { indicator?: { kind?: string } }).indicator?.kind === "boolean"
-    )?.name;
-    const fallback = firstNumeric ?? firstBooleanIndicator;
+    )
+    .map((c) => c.name);
+
+  // Question-aware anchoring. The metric the user NAMED ("PJP dashboard") must
+  // win over a column-order default — and over a brief that mis-extracted an
+  // unrelated metric the user never mentioned (the "every dashboard is about
+  // Compliance" failure mode). We only override a brief outcome when the user
+  // named a DIFFERENT metric AND the brief's own pick isn't itself mentioned in
+  // the question — so a correct brief is never disturbed.
+  const named = findMetricMentionedInQuestion(ctx.question, [
+    ...numericCols,
+    ...indicatorCols,
+  ]);
+  const briefOutcome = out.outcomeMetricColumn?.trim();
+  if (named && named !== briefOutcome) {
+    const briefNamedInQuestion = briefOutcome
+      ? findMetricMentionedInQuestion(ctx.question, [briefOutcome]) === briefOutcome
+      : false;
+    if (!briefOutcome || !briefNamedInQuestion) {
+      out = { ...out, outcomeMetricColumn: named };
+    }
+  }
+
+  // Still nothing chosen → deterministic, column-order fallback so the
+  // completion paths can chart something (first numeric, else first indicator).
+  if (!out.outcomeMetricColumn || !out.outcomeMetricColumn.trim()) {
+    const fallback = numericCols[0] ?? indicatorCols[0];
     if (fallback) out = { ...out, outcomeMetricColumn: fallback };
   }
   return ensureDashboardOutlineMetrics(out, ctx);
@@ -246,11 +273,16 @@ const OUTLINE_METRICS_CAP = 5;
 /**
  * W6 · For an indicator-centric dashboard (the outcome metric is a Yes/No
  * boolean indicator), seed `outlineMetrics` with the dataset's OTHER boolean
- * indicators so the dashboard becomes multi-KPI — e.g. a "PJP dashboard" charts
- * adherence + compliance + attendance + punctuality, not one metric. Pure and
+ * indicators so a BROAD "build a dashboard" becomes multi-KPI. Pure and
  * data-derived (no LLM, no hardcoded column names). No-op when the outcome is
  * numeric (e.g. a sales dashboard stays single-metric) or when the brief already
  * carries an explicit `outlineMetrics`.
+ *
+ * Pointed asks stay pointed: when the user NAMED a specific metric ("PJP
+ * dashboard"), we seed ONLY the other indicators they ALSO named (usually none)
+ * — so the board is "PJP vs everything else", not a pile of unrelated
+ * Compliance/Attendance charts. The full multi-KPI sweep only fires for an
+ * un-named, broad dashboard request.
  */
 export function ensureDashboardOutlineMetrics(
   brief: AnalysisBrief,
@@ -262,9 +294,17 @@ export function ensureDashboardOutlineMetrics(
   if (!outcome) return brief;
   const indicatorNames = collectBooleanIndicators(ctx.summary).map((i) => i.name);
   if (!indicatorNames.includes(outcome)) return brief; // numeric outcome → single-metric
-  const secondary = indicatorNames
-    .filter((n) => n !== outcome)
-    .slice(0, OUTLINE_METRICS_CAP);
+  const others = indicatorNames.filter((n) => n !== outcome);
+
+  // Pointed vs broad: did the user name ANY specific metric in the question?
+  const allMetrics = [...(ctx.summary.numericColumns ?? []), ...indicatorNames];
+  const pointed = findMetricMentionedInQuestion(ctx.question, allMetrics) !== null;
+  const secondary = (
+    pointed
+      ? others.filter((n) => findMetricMentionedInQuestion(ctx.question, [n]) === n)
+      : others
+  ).slice(0, OUTLINE_METRICS_CAP);
+
   if (secondary.length === 0) return brief;
   return { ...brief, outlineMetrics: secondary };
 }

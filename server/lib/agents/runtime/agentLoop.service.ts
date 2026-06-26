@@ -3112,6 +3112,56 @@ export async function runAgentTurn(
       }
     }
 
+    // Anchor-vs-secondary comparisons. When the user framed the board around a
+    // metric AND named a secondary ("PJP vs attendance"), add grouped tiles that
+    // compare the anchor against each named partner per key dimension. Tied to
+    // brief.outlineMetrics (Wave 2), so a pointed single-metric ask adds none —
+    // Compliance never appears here uninvited. See metricComparisonCharts.
+    if (isExplicitDashboardAsk) {
+      try {
+        const { buildAnchorComparisonCharts } = await import(
+          "./metricComparisonCharts.js"
+        );
+        const comparisons = buildAnchorComparisonCharts(ctx);
+        if (comparisons.length) {
+          mergedCharts.push(...comparisons);
+          agentLog("anchor_comparison_charts_added", {
+            turnId,
+            count: comparisons.length,
+          });
+        }
+      } catch (cmpErr) {
+        agentLog("anchor_comparison_charts_failed", {
+          turnId,
+          error: errorMessage(cmpErr),
+        });
+      }
+    }
+
+    // Trend-grain ladder. With the full chart list assembled, render the anchor
+    // metric's trend at the span-appropriate LADDER of grains (a month → weekly
+    // + daily; a year → quarterly + monthly), replacing whatever single,
+    // often-degenerate grain the engines above produced. Gated to dashboards /
+    // un-pinned trend asks (never a pinned "daily chart"). See trendGrainLadder.
+    try {
+      const { applyTrendGrainLadder } = await import("./trendGrainLadder.js");
+      const laddered = applyTrendGrainLadder(ctx, mergedCharts);
+      if (laddered !== mergedCharts) {
+        const before = mergedCharts.length;
+        mergedCharts.splice(0, mergedCharts.length, ...laddered);
+        agentLog("trend_grain_ladder_applied", {
+          turnId,
+          before,
+          after: mergedCharts.length,
+        });
+      }
+    } catch (ladderErr) {
+      agentLog("trend_grain_ladder_failed", {
+        turnId,
+        error: errorMessage(ladderErr),
+      });
+    }
+
     // Final dedupe + cap on mergedCharts. After this point the response is
     // assembled, so all chart sources (per-step promotion, deferred build_chart,
     // visual planner, dashboard sweep) are flushed into one canonical list.

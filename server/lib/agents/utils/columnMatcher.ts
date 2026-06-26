@@ -153,7 +153,84 @@ export function findMatchingColumn(
       return colTrimmed;
     }
   }
-  
+
   return null;
+}
+
+/**
+ * Glue / intent / temporal words that should NOT count as a metric mention when
+ * we scan a free-text question for the column a user named. Kept here (next to
+ * the column matcher) so the question→metric heuristic stays a thin, shared util
+ * rather than a new fuzzy system. Temporal words are excluded so "sales over
+ * time" doesn't accidentally bind a "Time to Resolution"-shaped column.
+ */
+const METRIC_MENTION_STOPWORDS = new Set<string>([
+  // glue
+  "a", "an", "the", "of", "by", "for", "to", "in", "on", "and", "or", "me", "my",
+  "our", "with", "over", "across", "per", "vs", "versus", "this", "that", "these",
+  "those", "all", "each", "its", "is", "are", "as", "at", "from", "into", "about",
+  // chart / intent
+  "dashboard", "dashboards", "chart", "charts", "graph", "graphs", "plot", "plots",
+  "trend", "trends", "show", "give", "gives", "build", "building", "make", "made",
+  "create", "creates", "display", "visualize", "visualise", "analyze", "analyse",
+  "analysis", "report", "reports", "view", "views", "please", "want", "wants",
+  "need", "needs", "see", "get", "got", "data", "breakdown", "break", "down",
+  "compare", "comparison", "summary", "overview", "insight", "insights", "wise",
+  // temporal (these describe grain, not the metric)
+  "time", "times", "date", "dates", "day", "days", "week", "weeks", "month",
+  "months", "quarter", "quarters", "year", "years", "daily", "weekly", "monthly",
+  "quarterly", "yearly", "annual", "annually", "hour", "hours", "hourly",
+  "period", "periods",
+]);
+
+function metricMentionTokens(s: string): string[] {
+  return s
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 2 && !METRIC_MENTION_STOPWORDS.has(t));
+}
+
+/**
+ * Scan a free-text question for the metric column the user actually named, by
+ * subject-token overlap. Returns the best-matching column from
+ * `candidateColumns` (the caller scopes this to metric-eligible columns —
+ * numeric measures and/or boolean indicators), or null when the question names
+ * none of them. More matched tokens win; ties break toward higher token
+ * coverage, then the longer (more specific) column name.
+ *
+ * This is what lets a "PJP dashboard" anchor on the PJP column even when a
+ * "Compliance" column sorts first — without it the deterministic fallbacks pick
+ * by column order and surface compliance on every board.
+ */
+export function findMetricMentionedInQuestion(
+  question: string | undefined,
+  candidateColumns: string[]
+): string | null {
+  if (!question || candidateColumns.length === 0) return null;
+  const qTokens = new Set(metricMentionTokens(question));
+  if (qTokens.size === 0) return null;
+  let best: string | null = null;
+  let bestScore = 0;
+  let bestCoverage = 0;
+  let bestLen = 0;
+  for (const col of candidateColumns) {
+    const cTokens = metricMentionTokens(col);
+    if (cTokens.length === 0) continue;
+    let hits = 0;
+    for (const t of cTokens) if (qTokens.has(t)) hits++;
+    if (hits === 0) continue;
+    const coverage = hits / cTokens.length;
+    if (
+      hits > bestScore ||
+      (hits === bestScore && coverage > bestCoverage) ||
+      (hits === bestScore && coverage === bestCoverage && col.length > bestLen)
+    ) {
+      best = col;
+      bestScore = hits;
+      bestCoverage = coverage;
+      bestLen = col.length;
+    }
+  }
+  return best;
 }
 

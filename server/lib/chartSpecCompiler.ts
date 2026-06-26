@@ -8,6 +8,26 @@ import type { ChartSpec } from "../shared/schema.js";
 import { AGG_SUFFIX } from "../shared/pivot/aggregationPatterns.js";
 import { HEATMAP_MAX_COL_KEYS, HEATMAP_MAX_ROW_KEYS } from "../shared/pivot/chartLimits.js";
 
+/** Names whose values DON'T sum to a meaningful whole — rates, %, scores, means. */
+const NON_ADDITIVE_METRIC_RX =
+  /\b(rate|adher|adherence|compliance|pct|percent|percentage|ratio|share|score|index|avg|average|mean)\b/i;
+
+/**
+ * Grouped (side-by-side) vs stacked default for a multi-series bar. Stacking
+ * only reads correctly for ADDITIVE measures (counts/amounts that sum to a
+ * meaningful total); a rate/%/score/mean series must be GROUPED so each bar is
+ * directly comparable rather than implying a nonsense stacked total. An explicit
+ * `barLayout` on the proposal always wins over this default.
+ */
+function defaultBarLayout(
+  yName: string,
+  aggregate?: string
+): "grouped" | "stacked" {
+  if (aggregate === "mean") return "grouped";
+  if (NON_ADDITIVE_METRIC_RX.test(yName.replace(/[_-]+/g, " "))) return "grouped";
+  return "stacked";
+}
+
 export type ChartCompileSummary = {
   numericColumns: string[];
   dateColumns?: string[];
@@ -276,7 +296,7 @@ export function compileChartSpec(
     }
     merged.x = matchedX;
     merged.y = matchedY;
-    if (!merged.barLayout) merged.barLayout = "stacked";
+    if (!merged.barLayout) merged.barLayout = defaultBarLayout(matchedY, merged.aggregate);
     return { merged, warnings };
   }
 
@@ -288,11 +308,13 @@ export function compileChartSpec(
   const seriesMatched =
     findMatchingColumn(secondDim, available) || secondDim;
   merged.seriesColumn = seriesMatched;
-  if (!merged.barLayout) merged.barLayout = "stacked";
 
   if (!options?.preserveAggregate) {
     merged.aggregate = inferAggregateForLongSeries(rows, matchedX, seriesMatched);
   }
+  // After the aggregate is known, so a per-record "mean" series defaults to
+  // grouped (a stacked rate total is meaningless).
+  if (!merged.barLayout) merged.barLayout = defaultBarLayout(matchedY, merged.aggregate);
 
   merged.x = matchedX;
   merged.y = matchedY;
