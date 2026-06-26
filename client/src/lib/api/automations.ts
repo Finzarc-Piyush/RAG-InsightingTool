@@ -8,6 +8,7 @@
  */
 
 import { api } from "@/lib/httpClient";
+import { getAuthorizationHeader } from "@/auth/msalToken";
 import type {
   Automation,
   AutomationDryRunResult,
@@ -86,9 +87,12 @@ export const runAutomationStream = (
 
   void (async () => {
     try {
+      // Raw fetch bypasses the axios apiClient interceptor — attach the Bearer
+      // token explicitly (see docs/conventions/authed-raw-fetch.md).
+      const auth = await getAuthorizationHeader();
       const res = await fetch(route, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...auth },
         credentials: "include",
         body: JSON.stringify(options),
         signal: controller.signal,

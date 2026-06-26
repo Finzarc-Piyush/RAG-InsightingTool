@@ -90,6 +90,12 @@ describe("WR8 · runRefreshStream", () => {
 
     expect(calls[0]?.url).toBe("/api/sessions/session_1/refresh");
     expect(calls[0]?.init?.method).toBe("POST");
+    // Raw fetch must carry the Bearer token (the apiClient interceptor is
+    // bypassed) — see docs/conventions/authed-raw-fetch.md.
+    const refreshHeaders = calls[0]?.init?.headers as Record<string, string>;
+    expect(refreshHeaders.Authorization).toBe("Bearer test");
+    // Multipart: no explicit Content-Type so the browser sets the boundary.
+    expect(refreshHeaders["Content-Type"]).toBeUndefined();
     const body = calls[0]?.init?.body as FormData;
     expect(body).toBeInstanceOf(FormData);
     expect(body.get("policy")).toBe("append");
@@ -122,8 +128,9 @@ describe("WR8 · runSnowflakeRefreshStream", () => {
     expect(calls[0]?.url).toBe("/api/sessions/session_2/refresh/snowflake");
     expect(calls[0]?.init?.method).toBe("POST");
     expect(String(calls[0]?.init?.body)).toContain("as of May");
-    expect((calls[0]?.init?.headers as Record<string, string>)["Content-Type"]).toBe(
-      "application/json"
-    );
+    const sfHeaders = calls[0]?.init?.headers as Record<string, string>;
+    expect(sfHeaders["Content-Type"]).toBe("application/json");
+    // JSON case keeps Content-Type AND gains the Bearer token via the merge.
+    expect(sfHeaders.Authorization).toBe("Bearer test");
   });
 });

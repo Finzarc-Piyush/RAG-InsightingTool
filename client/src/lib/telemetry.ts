@@ -19,7 +19,15 @@
  *   BrushRegion discriminant (`"numeric" | "temporal" | "categorical"
  *   | "box2d"`). Column NAMES go on the wire (those are dataset
  *   schema, not user content); column VALUES never do.
+ * - **Auth, silently** — `/api/telemetry/*` sits behind `requireAzureAdAuth`
+ *   like every `/api/*` route, and raw `fetch` bypasses the axios interceptor,
+ *   so we attach the Bearer token via `getAuthorizationHeaderSilent()`. The
+ *   *silent* variant never pops a re-auth window from a background beacon — if
+ *   no token is cached it sends without one (the ping is best-effort anyway).
+ *   See docs/conventions/authed-raw-fetch.md.
  */
+
+import { getAuthorizationHeaderSilent } from "@/auth/msalToken";
 
 export interface DrillThroughTelemetryPayload {
   chartId: string;
@@ -39,10 +47,11 @@ export async function recordDashboardDrillThroughTelemetry(
 ): Promise<void> {
   if (typeof fetch === "undefined") return;
   try {
+    const auth = await getAuthorizationHeaderSilent();
     await fetch("/api/telemetry/drill-through", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...auth },
       body: JSON.stringify(payload),
     });
   } catch {
@@ -64,10 +73,11 @@ export async function recordDashboardExplainSliceTelemetry(
 ): Promise<void> {
   if (typeof fetch === "undefined") return;
   try {
+    const auth = await getAuthorizationHeaderSilent();
     await fetch("/api/telemetry/explain-slice", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...auth },
       body: JSON.stringify(payload),
     });
   } catch {

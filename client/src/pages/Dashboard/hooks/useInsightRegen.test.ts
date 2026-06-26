@@ -79,11 +79,22 @@ describe("WI2-wire · useInsightRegen hook shape", () => {
     );
   });
 
-  it("regenerate() POSTs to /api/insight/regen with credentials:include", () => {
+  it("regenerate() POSTs to /api/insight/regen with credentials:include + the spread auth header", () => {
     assert.match(
       hookSrc,
-      /await fetch\("\/api\/insight\/regen", \{[\s\S]*?method: "POST",[\s\S]*?credentials: "include",[\s\S]*?headers: \{ "Content-Type": "application\/json" \},[\s\S]*?body: JSON\.stringify\(body\),[\s\S]*?\}\);/,
+      /await fetch\("\/api\/insight\/regen", \{[\s\S]*?method: "POST",[\s\S]*?credentials: "include",[\s\S]*?headers: \{ "Content-Type": "application\/json", \.\.\.auth \},[\s\S]*?body: JSON\.stringify\(body\),[\s\S]*?\}\);/,
     );
+  });
+
+  it("attaches the MSAL Bearer token before the fetch (raw fetch bypasses the axios interceptor)", () => {
+    // The dashboard regen path uses raw `fetch`, so it MUST spread
+    // getAuthorizationHeader() or the server 401s with "Missing
+    // Authorization" — see docs/conventions/authed-raw-fetch.md.
+    assert.match(
+      hookSrc,
+      /import \{ getAuthorizationHeader \} from "@\/auth\/msalToken";/,
+    );
+    assert.match(hookSrc, /const auth = await getAuthorizationHeader\(\);/);
   });
 
   it("response is merged into the cache via cache.set with no transformation", () => {

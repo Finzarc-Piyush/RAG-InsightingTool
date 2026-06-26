@@ -28,6 +28,7 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { getAuthorizationHeader } from "@/auth/msalToken";
 import type { ActiveChartFilters } from "../../../lib/chartFilters";
 import type { BrushRegion } from "../lib/explainSlice";
 import {
@@ -154,10 +155,14 @@ export function useInsightRegen(args: InsightRegenArgs): InsightRegenState {
             ? { datasetContextHint: options.datasetContextHint }
             : {}),
         };
+        // Raw fetch bypasses the axios apiClient interceptor, so the Bearer
+        // token must be attached explicitly or the server 401s (see
+        // docs/conventions/authed-raw-fetch.md).
+        const auth = await getAuthorizationHeader();
         const res = await fetch("/api/insight/regen", {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...auth },
           body: JSON.stringify(body),
         });
         if (!res.ok) {

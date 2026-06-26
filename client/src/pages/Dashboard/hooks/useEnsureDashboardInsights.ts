@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { ChartSpec, Dashboard as ServerDashboard } from "@/shared/schema";
+import { getAuthorizationHeader } from "@/auth/msalToken";
 import { logger } from "@/lib/logger";
 
 /**
@@ -51,10 +52,14 @@ export function useEnsureDashboardInsights(
 
     void (async () => {
       try {
+        // Raw fetch bypasses the axios apiClient interceptor, so attach the
+        // Bearer token explicitly — otherwise this silent self-heal 401s and
+        // the tile stays "No insight yet" (docs/conventions/authed-raw-fetch.md).
+        const auth = await getAuthorizationHeader();
         const res = await fetch(`/api/dashboards/${id}/ensure-insights`, {
           method: "POST",
           credentials: "include",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...auth },
         });
         if (!res.ok) return;
         const data = (await res.json()) as {

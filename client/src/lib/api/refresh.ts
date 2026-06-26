@@ -8,6 +8,7 @@
  */
 
 import { api } from "@/lib/httpClient";
+import { getAuthorizationHeader } from "@/auth/msalToken";
 import type {
   AutomationDryRunResult,
   AutomationColumnMapping,
@@ -118,15 +119,19 @@ export const refreshPreflight = (
 const streamSse = (
   route: string,
   body: BodyInit,
-  headers: HeadersInit,
+  headers: Record<string, string>,
   callbacks: RunRefreshCallbacks
 ): { abort: () => void } => {
   const controller = new AbortController();
   void (async () => {
     try {
+      // Raw fetch bypasses the axios apiClient interceptor — attach the Bearer
+      // token explicitly (see docs/conventions/authed-raw-fetch.md). Merge keeps
+      // the caller's Content-Type (or its deliberate absence for multipart).
+      const auth = await getAuthorizationHeader();
       const res = await fetch(route, {
         method: "POST",
-        headers,
+        headers: { ...headers, ...auth },
         credentials: "include",
         body,
         signal: controller.signal,

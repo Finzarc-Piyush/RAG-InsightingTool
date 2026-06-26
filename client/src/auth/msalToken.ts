@@ -24,8 +24,17 @@ export function registerMsalInstance(instance: PublicClientApplication): void {
 
 /**
  * Azure AD ID token for the SPA app — must match server AZURE_AD_CLIENT_ID / AZURE_AD_TENANT_ID.
+ *
+ * `allowPopup` (default `true`) controls the silent-failure fallback. User-
+ * initiated calls keep the interactive popup so an expired session can be
+ * re-acquired in place. Fire-and-forget background callers (telemetry, the
+ * client-error sink) pass `allowPopup: false` so a stale token can NEVER erupt
+ * a re-auth window from a background beacon — they degrade to no token instead.
  */
-export async function acquireIdTokenForApi(): Promise<string | null> {
+export async function acquireIdTokenForApi(
+  opts?: { allowPopup?: boolean }
+): Promise<string | null> {
+  const allowPopup = opts?.allowPopup ?? true;
   if (!pca) {
     return null;
   }
@@ -41,6 +50,10 @@ export async function acquireIdTokenForApi(): Promise<string | null> {
     });
     return result.idToken ?? null;
   } catch (silentErr) {
+    if (!allowPopup) {
+      // Background caller — never pop a window; just signal no token.
+      return null;
+    }
     try {
       const result = await pca.acquireTokenPopup({
         account,
@@ -60,6 +73,21 @@ export async function acquireIdTokenForApi(): Promise<string | null> {
 
 export async function getAuthorizationHeader(): Promise<Record<string, string>> {
   const token = await acquireIdTokenForApi();
+  if (token) {
+    return { Authorization: `Bearer ${token}` };
+  }
+  return {};
+}
+
+/**
+ * Silent-only variant of {@link getAuthorizationHeader} for fire-and-forget
+ * background calls (telemetry beacons, the client-error sink). Reads the MSAL
+ * token cache without ever falling back to an interactive popup — returns `{}`
+ * when no token is silently available so the caller sends the request as-is
+ * (same as the legacy unauthenticated behaviour, just authenticated when it can).
+ */
+export async function getAuthorizationHeaderSilent(): Promise<Record<string, string>> {
+  const token = await acquireIdTokenForApi({ allowPopup: false });
   if (token) {
     return { Authorization: `Bearer ${token}` };
   }

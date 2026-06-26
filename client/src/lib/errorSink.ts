@@ -20,7 +20,15 @@
  *   `window` (an SSE `lastEventId` or any `traceId` a future seam parks there)
  *   plus `location.pathname` as the route, so a server log line can be tied
  *   back to the turn/route that produced the crash.
+ * - **Auth, silently** — `/api/client-error` sits behind `requireAzureAdAuth`,
+ *   and raw `fetch` bypasses the axios interceptor, so we attach the Bearer
+ *   token via `getAuthorizationHeaderSilent()`. The *silent* variant is
+ *   essential here: this runs from global error handlers (often when auth is
+ *   itself broken), so it must NEVER pop a re-auth window — it sends without a
+ *   token when none is cached. See docs/conventions/authed-raw-fetch.md.
  */
+
+import { getAuthorizationHeaderSilent } from "@/auth/msalToken";
 
 export interface ClientErrorReport {
   message: string;
@@ -98,10 +106,11 @@ export async function reportClientError(report: ClientErrorReport): Promise<void
     if (route) body.route = route;
     if (correlationId) body.correlationId = correlationId;
 
+    const auth = await getAuthorizationHeaderSilent();
     await fetch("/api/client-error", {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...auth },
       body: JSON.stringify(body),
       // Allow the report to complete even if the page is unloading.
       keepalive: true,
