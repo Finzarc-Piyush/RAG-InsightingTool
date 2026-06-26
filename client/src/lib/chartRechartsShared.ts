@@ -24,23 +24,29 @@ export function evenlySpacedDataKeys(
   xKey: string,
   maxTicks: number
 ): Array<string | number> | undefined {
-  if (rows.length <= maxTicks) return undefined;
-  const out: Array<string | number> = [];
   const n = rows.length;
-  const target = Math.min(maxTicks, n);
-  const step = Math.max(1, Math.floor((n - 1) / Math.max(1, target - 1)));
-  for (let i = 0; i < n && out.length < target; i += step) {
-    const v = rows[i]?.[xKey];
+  if (n <= maxTicks) return undefined;
+  // Spread `target` ticks across the FULL index range [0, n-1] with a rounded
+  // float stride — the same math as `pickEvenlySpacedTicks` (the visx thinner).
+  // The previous floored-integer stride (`Math.floor((n-1)/(target-1))`)
+  // collapsed to 1 whenever the budget landed in (n/2, n) — e.g. 25 of 48 — so
+  // it emitted the first `target` categories CONTIGUOUSLY and only force-
+  // appended the last, crowding every label onto the left with a blank gap
+  // before a lone final label (visible on dashboard tiles whose measured width
+  // yields such a budget; the wider fullscreen modal lands outside that range,
+  // which is why it looked correct). Rounding distributes them evenly and
+  // always includes the first (i=0 → idx 0) and last (i=target-1 → idx n-1).
+  const target = Math.max(2, Math.min(maxTicks, n));
+  const out: Array<string | number> = [];
+  const seenIdx = new Set<number>();
+  const stride = (n - 1) / (target - 1);
+  for (let i = 0; i < target; i++) {
+    const idx = Math.round(i * stride);
+    if (seenIdx.has(idx)) continue;
+    seenIdx.add(idx);
+    const v = rows[idx]?.[xKey];
     if (v !== undefined && v !== null) {
       out.push(typeof v === 'string' || typeof v === 'number' ? v : String(v));
-    }
-  }
-  const lastRow = rows[n - 1];
-  const last = lastRow?.[xKey];
-  if (last !== undefined && last !== null) {
-    const normalized = typeof last === 'string' || typeof last === 'number' ? last : String(last);
-    if (out[out.length - 1] !== normalized) {
-      out.push(normalized);
     }
   }
   return out.length > 0 ? out : undefined;
