@@ -6,89 +6,11 @@ import { Button } from '@/components/ui/button';
 import { Lightbulb, ChevronDown, ChevronUp } from 'lucide-react';
 import { Plus } from 'lucide-react';
 import { DashboardTableModal } from './DashboardModal/DashboardTableModal';
+import { renderInsightText } from '@/lib/insightText';
 
 interface InsightCardProps {
   insights: Insight[];
 }
-
-// Function to clean orphaned characters (asterisks and hyphens) that aren't part of markdown
-const cleanOrphanedAsterisks = (text: string): string => {
-  // Protect valid markdown patterns
-  const placeholders: { [key: string]: string } = {};
-  let placeholderCounter = 0;
-  
-  // Protect **bold** patterns
-  let cleaned = text.replace(/\*\*(.*?)\*\*/g, (match) => {
-    const key = `__BOLD_${placeholderCounter}__`;
-    placeholders[key] = match;
-    placeholderCounter++;
-    return key;
-  });
-  
-  // Protect *italic* patterns
-  cleaned = cleaned.replace(/\*([^*\n]+?)\*/g, (match) => {
-    const key = `__ITALIC_${placeholderCounter}__`;
-    placeholders[key] = match;
-    placeholderCounter++;
-    return key;
-  });
-  
-  // Protect number ranges (e.g., "24.0-41.0", "907-1258") to avoid removing valid hyphens
-  cleaned = cleaned.replace(/(\d+\.?\d*)\s*-\s*(\d+\.?\d*)/g, (match) => {
-    const key = `__RANGE_${placeholderCounter}__`;
-    placeholders[key] = match;
-    placeholderCounter++;
-    return key;
-  });
-  
-  // Remove orphaned asterisks:
-  // 1. Remove asterisks at the end of lines
-  cleaned = cleaned.replace(/\s*\*\s*$/gm, '');
-  // 2. Remove asterisks after periods/full stops
-  cleaned = cleaned.replace(/\.\s*\*\s+/g, '. ');
-  // 3. Remove standalone asterisks (surrounded by spaces)
-  cleaned = cleaned.replace(/\s+\*\s+/g, ' ');
-  cleaned = cleaned.replace(/\s+\*$/gm, '');
-  
-  // Remove orphaned hyphens:
-  // 1. Remove hyphens at the end of lines (with whitespace before) - handles "text -" at end
-  cleaned = cleaned.replace(/\s+-\s*$/gm, '');
-  // 2. Remove hyphens after periods/full stops followed by space(s) - handles "text. -"
-  cleaned = cleaned.replace(/\.\s+-\s*/g, '. ');
-  // 3. Remove hyphens that appear standalone after sentences (period + space + hyphen at end)
-  cleaned = cleaned.replace(/\.\s+-\s*$/gm, '.');
-  // 4. Remove hyphens followed by space and newline or end of string
-  cleaned = cleaned.replace(/-\s+$/gm, '');
-  
-  // Restore protected markdown patterns and ranges
-  Object.keys(placeholders).forEach((key) => {
-    cleaned = cleaned.replace(key, placeholders[key]);
-  });
-  
-  return cleaned;
-};
-
-// Function to parse text and format bold sections
-const parseInsightText = (text: string) => {
-  // First clean orphaned asterisks
-  const cleanedText = cleanOrphanedAsterisks(text);
-  
-  // Split by ** to identify bold sections
-  const parts = cleanedText.split(/(\*\*[^*]+\*\*)/g);
-  
-  return parts.map((part, index) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
-      // This is a bold section - remove the ** and make it darker
-      const boldText = part.slice(2, -2);
-      return (
-        <span key={index} className="font-semibold text-foreground">
-          {boldText}
-        </span>
-      );
-    }
-    return part;
-  });
-};
 
 // Function to break down insight into sub-points
 const parseInsightSubPoints = (text: string) => {
@@ -245,7 +167,7 @@ export function InsightCard({ insights }: InsightCardProps) {
                   <div className="flex-1 space-y-2">
                     {subPoints.map((subPoint, subIndex) => (
                       <div key={subIndex} className="text-sm text-foreground leading-relaxed">
-                        {parseInsightText(subPoint)}
+                        {renderInsightText(subPoint)}
                       </div>
                     ))}
                   </div>

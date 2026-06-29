@@ -2,6 +2,7 @@ import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { cn } from "@/lib/utils";
 import { HelpCircle, Target } from "lucide-react";
 import { splitChartInsightLanes } from "@/shared/chartInsightLanes";
+import { renderInsightText } from "@/lib/insightText";
 
 /**
  * ChartInsightBody — the ONE presentational unit for a chart's auto-generated
@@ -80,7 +81,7 @@ export function ChartInsightBody({
             >
               Why:{" "}
             </span>
-            {lanes.why}
+            {renderInsightText(lanes.why)}
           </span>
         </p>
       ) : null}
@@ -101,7 +102,7 @@ export function ChartInsightBody({
           />
           <span>
             <span className="font-semibold">Do: </span>
-            {lanes.do}
+            {renderInsightText(lanes.do)}
           </span>
         </p>
       ) : null}

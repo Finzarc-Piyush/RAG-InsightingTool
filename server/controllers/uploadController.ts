@@ -315,6 +315,10 @@ export const getUploadStatus = async (req: Request, res: Response) => {
           })),
           numericColumns: session.dataSummary.numericColumns || [],
           dateColumns: session.dataSummary.dateColumns || [],
+          // Main-table detection (header offset, ignored side tables, raw-grid
+          // preview) so the client can render the TableDetectionBanner during
+          // the polling preview window. Undefined for clean / flag-off uploads.
+          tableDetection: session.dataSummary.tableDetection,
         };
         response.previewSampleRows = Array.isArray(session.sampleRows)
           ? session.sampleRows.slice(0, 50)

@@ -66,6 +66,12 @@ interface DataPreviewProps {
   durationByColumn?: Record<string, ColumnDuration>;
   /** WF9 — wide-format auto-melt metadata; renders the banner. */
   wideFormatTransform?: WideFormatTransform;
+  /** Main-table detection metadata; renders the TableDetectionBanner. */
+  tableDetection?: import('@/shared/schema').TableDetection;
+  /** Opens the raw-grid correction UI from the detection banner. */
+  onTableRegionAdjust?: () => void;
+  /** True while a retable re-ingest is in flight. */
+  isReingesting?: boolean;
   /** H6 — declared dimension hierarchies; renders the banner. */
   dimensionHierarchies?: DimensionHierarchy[];
   /** EU1 — when present, banner shows ✕ Remove buttons. */
@@ -97,6 +103,9 @@ export function DataPreview({
   currencyByColumn,
   durationByColumn,
   wideFormatTransform,
+  tableDetection,
+  onTableRegionAdjust,
+  isReingesting,
   dimensionHierarchies,
   sessionIdForHierarchyEdit,
   onHierarchiesChange,
@@ -215,6 +224,9 @@ export function DataPreview({
         currencyByColumn={currencyByColumn}
         durationByColumn={durationByColumn}
         wideFormatTransform={wideFormatTransform}
+        tableDetection={tableDetection}
+        onTableRegionAdjust={onTableRegionAdjust}
+        isReingesting={isReingesting}
         dimensionHierarchies={dimensionHierarchies}
         dateTimeColumnPairs={dateTimeColumnPairs}
         indicators={indicators}

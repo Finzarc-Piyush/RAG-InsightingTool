@@ -11,7 +11,7 @@
  * scaled value:
  *   |scaled| ≥ 100 → 0 decimals
  *   |scaled| ≥ 10  → 1 decimal
- *   |scaled| < 10  → 2 decimals
+ *   |scaled| < 10  → 2 decimals (never more than two — W-DEC1)
  * Trailing zeros / dangling decimal points are stripped.
  */
 export function formatCompactNumber(n: number): string {
@@ -24,8 +24,8 @@ export function formatCompactNumber(n: number): string {
 
   if (abs >= 100) return n.toFixed(0);
   if (abs >= 10) return stripTrailingZeros(n.toFixed(1));
-  if (abs >= 1) return stripTrailingZeros(n.toFixed(2));
-  return stripTrailingZeros(n.toFixed(3));
+  // ≤2 decimals everywhere (product rule) — sub-1 values were 3 dp before W-DEC1.
+  return stripTrailingZeros(n.toFixed(2));
 }
 
 function formatScaled(n: number, divisor: number, suffix: string): string {

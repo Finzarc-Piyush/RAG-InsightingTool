@@ -28,92 +28,23 @@
  */
 import ExcelJS from 'exceljs';
 import { estimateExcelRowsFromRef } from './excelRowEstimate.js';
+import { normalizeValue, headerLabel } from './excelCellValue.js';
+import { isFlagOn } from './featureFlags.js';
+import { worksheetToGrid } from './tableStructure/grid.js';
+import { detectTableFromGrid } from './tableStructure/detectTable.js';
+import {
+  buildHeaderKeys,
+  buildHeaderKeysFromGrid,
+  regionFromOverride,
+  toTableDetection,
+} from './tableStructure/applyRegion.js';
+import type { TableRegion } from './tableStructure/types.js';
+import type { TableDetection, TableRegionOverride } from '../shared/schema.js';
 
-/** Count digit placeholders after the decimal point (before the `%`). */
-function percentDecimals(numFmt: string): number {
-  const beforePct = numFmt.split('%')[0] ?? '';
-  const dot = beforePct.lastIndexOf('.');
-  if (dot < 0) return 0;
-  return (beforePct.slice(dot + 1).match(/[0#]/g) || []).length;
-}
-
-/**
- * Reproduce SheetJS `raw:false` display text for a percent-formatted number:
- * scale ×100, round to the format's decimal count, append "%". Optional
- * thousands grouping when the format groups the integer part.
- */
-function formatPercentDisplay(value: number, numFmt: string): string {
-  const decimals = percentDecimals(numFmt);
-  const fixed = (value * 100).toFixed(decimals);
-  const beforePct = numFmt.split('%')[0] ?? '';
-  if (/[#0],[#0]/.test(beforePct)) {
-    const neg = fixed.startsWith('-');
-    const [intPart, fracPart] = (neg ? fixed.slice(1) : fixed).split('.');
-    const grouped = intPart!.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-    return `${neg ? '-' : ''}${fracPart ? `${grouped}.${fracPart}` : grouped}%`;
-  }
-  return `${fixed}%`;
-}
-
-/** Map a resolved ExcelJS cell value to the value fileParser expects. */
-function normalizeValue(v: ExcelJS.CellValue, numFmt: string | undefined): unknown {
-  if (v === null || v === undefined) return null;
-  if (v instanceof Date) return v; // (1) dates typed
-  if (typeof v === 'number') {
-    if (!Number.isFinite(v)) return null;
-    if (numFmt && numFmt.includes('%')) return formatPercentDisplay(v, numFmt); // (2)
-    return v;
-  }
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'string') return v;
-  if (typeof v === 'object') {
-    const o = v as unknown as Record<string, unknown>;
-    if ('result' in o) return normalizeValue(o.result as ExcelJS.CellValue, numFmt); // formula
-    if ('error' in o) return null; // error cell → empty
-    if (Array.isArray(o.richText)) {
-      return (o.richText as Array<{ text?: string }>).map((r) => r?.text ?? '').join('');
-    }
-    if (typeof o.text === 'string') return o.text; // hyperlink
-  }
-  return null;
-}
-
-/** Header label for a cell, mirroring SheetJS key derivation. */
-function headerLabel(cell: ExcelJS.Cell): string | null {
-  const v = cell.value;
-  if (v === null || v === undefined) return null;
-  if (typeof v === 'string') return v;
-  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
-  if (v instanceof Date) return cell.text ?? null;
-  if (typeof v === 'object') {
-    const o = v as unknown as Record<string, unknown>;
-    if ('result' in o && o.result != null) return String(o.result);
-    if (Array.isArray(o.richText)) {
-      return (o.richText as Array<{ text?: string }>).map((r) => r?.text ?? '').join('');
-    }
-    if (typeof o.text === 'string') return o.text;
-  }
-  return cell.text || null;
-}
-
-/**
- * Build SheetJS-compatible object header keys: empty header cells become
- * `__EMPTY`/`__EMPTY_1`…; duplicate keys get `_1`/`_2`… suffixes.
- */
-function buildHeaderKeys(headerCells: (string | null)[]): string[] {
-  const used = new Map<string, number>();
-  return headerCells.map((raw) => {
-    const base = raw ?? '__EMPTY';
-    const n = used.get(base) ?? 0;
-    used.set(base, n + 1);
-    if (n === 0) return base;
-    // SheetJS suffixes duplicates as `key_1`, `key_2`, …
-    let suffixed = `${base}_${n}`;
-    while (used.has(suffixed)) suffixed = `${base}_${(used.get(base) ?? 0) + 1}`;
-    used.set(suffixed, 1);
-    return suffixed;
-  });
-}
+// Re-exported so existing importers keep working after the helpers moved out
+// (extraction broke an excelReader↔tableStructure cycle).
+export { normalizeValue, headerLabel } from './excelCellValue.js';
+export { buildHeaderKeys } from './tableStructure/applyRegion.js';
 
 async function loadFirstWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
   const wb = new ExcelJS.Workbook();
@@ -132,6 +63,38 @@ export interface ExcelReadResult {
   sheetName: string;
   availableSheets: string[];
   rows: Record<string, unknown>[];
+  /** Set when the main-table detector ran (flag on, or an override was given). */
+  tableDetection?: TableDetection;
+}
+
+/** Materialize data rows for the region. Reads the worksheet directly (not the
+ * scan-capped grid) so rows beyond the scan window are still ingested. When the
+ * region's data clearly ENDED within the scanned window (a stacked second
+ * table below), that bound is honored; otherwise extraction runs to the last row. */
+function buildRowsFromRegion(
+  ws: ExcelJS.Worksheet,
+  region: TableRegion,
+  keys: string[],
+  scanRows: number,
+): Record<string, unknown>[] {
+  const firstDataSheetRow = region.dataRowStart + 1; // grid 0-based → sheet 1-based
+  const reachedScanEnd = region.dataRowEnd >= scanRows - 1;
+  const lastSheetRow = reachedScanEnd ? ws.rowCount : region.dataRowEnd + 1;
+  const rows: Record<string, unknown>[] = [];
+  for (let r = firstDataSheetRow; r <= lastSheetRow; r++) {
+    const row = ws.getRow(r);
+    const rec: Record<string, unknown> = {};
+    let allEmpty = true;
+    for (let c = region.colStart; c <= region.colEnd; c++) {
+      const cell = row.getCell(c + 1); // grid 0-based col → sheet 1-based
+      const val = normalizeValue(cell.value, cell.numFmt);
+      rec[keys[c - region.colStart]!] = val;
+      if (val !== null) allEmpty = false;
+    }
+    if (allEmpty) continue;
+    rows.push(rec);
+  }
+  return rows;
 }
 
 /**
@@ -139,10 +102,22 @@ export interface ExcelReadResult {
  * `sheet_to_json({ raw:false, defval:null })`: first row = header, empty cells
  * → null, fully-blank rows skipped. Throws the same OOM-guard error as the
  * legacy path when the sheet exceeds `maxRows`.
+ *
+ * When `TABLE_STRUCTURE_DETECT_ENABLED` is on (or a `tableRegionOverride` is
+ * supplied), the main-table detector first finds the real header/data bounds
+ * (handling title rows, junk, side tables) and keys/iterates from THAT region.
+ * A trivially-clean sheet detects to {header row 0, full width} and produces
+ * byte-identical output to the legacy path.
  */
 export async function readExcelObjectRows(
   buffer: Buffer,
-  opts: { sheetName?: string; maxRows: number; onOversize: (estimatedRows: number) => never },
+  opts: {
+    sheetName?: string;
+    maxRows: number;
+    onOversize: (estimatedRows: number) => never;
+    tableRegionOverride?: TableRegionOverride;
+    turnId?: string;
+  },
 ): Promise<ExcelReadResult> {
   const wb = await loadFirstWorkbook(buffer);
   const availableSheets = wb.worksheets.map((w) => w.name);
@@ -158,6 +133,31 @@ export async function readExcelObjectRows(
   const estimatedRows = ref ? estimateExcelRowsFromRef(ref) : ws.rowCount;
   if (estimatedRows > opts.maxRows) opts.onOversize(estimatedRows);
 
+  const detectEnabled = isFlagOn('TABLE_STRUCTURE_DETECT_ENABLED');
+  if (detectEnabled || opts.tableRegionOverride) {
+    const grid = worksheetToGrid(ws);
+    const colsN = grid.reduce((m, row) => Math.max(m, row.length), 0);
+    let region: TableRegion;
+    if (opts.tableRegionOverride) {
+      region = regionFromOverride(opts.tableRegionOverride, grid.length, colsN);
+    } else {
+      region = await detectTableFromGrid(grid, {
+        llmEnabled: true,
+        turnId: opts.turnId,
+        sheetName,
+      });
+    }
+    const keys = buildHeaderKeysFromGrid(grid, region);
+    const rows = buildRowsFromRegion(ws, region, keys, grid.length);
+    return {
+      sheetName,
+      availableSheets,
+      rows,
+      tableDetection: toTableDetection(region, grid),
+    };
+  }
+
+  // ── Legacy path (flag off, no override): header = row 1, byte-identical ──
   const headerRow = ws.getRow(1);
   const colCount = ws.columnCount;
   const headerCells: (string | null)[] = [];

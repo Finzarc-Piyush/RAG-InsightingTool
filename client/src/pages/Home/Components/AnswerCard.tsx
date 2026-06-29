@@ -31,7 +31,7 @@ import {
   HelpCircle,
 } from "lucide-react";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
-import { cleanEvidenceNumbers } from "@/lib/cleanEvidenceNumbers";
+import { renderInsightText, plainInsightText } from "@/lib/insightText";
 
 interface AnswerCardProps {
   message: Message;
@@ -116,9 +116,9 @@ export function AnswerCard({
               aria-label="Headline answer"
             >
               <p className="text-[15px] font-medium leading-[22px] text-foreground">
-                {/* RNK-f6 · tldr is plain text (not markdown-rendered), so strip
-                    stray internal [fN] finding refs here too. */}
-                {env.tldr.replace(/\s?\[f\d+\]/gi, "")}
+                {/* RNK-f6 · strip stray internal [fN] finding refs; renderInsightText
+                    then clamps decimals to ≤2 and bolds data names/values. */}
+                {renderInsightText(env.tldr.replace(/\s?\[f\d+\]/gi, ""))}
               </p>
             </div>
           )}
@@ -206,17 +206,17 @@ export function AnswerCard({
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                       <span className="text-[14px] font-medium text-foreground">
-                        {f.headline}
+                        {renderInsightText(f.headline)}
                       </span>
                       {f.magnitude && (
                         <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">
-                          {cleanEvidenceNumbers(f.magnitude)}
+                          {plainInsightText(f.magnitude)}
                         </span>
                       )}
                     </div>
                     {f.evidence && (
                       <p className="mt-1 text-[13px] leading-[20px] text-muted-foreground">
-                        {cleanEvidenceNumbers(f.evidence)}
+                        {renderInsightText(f.evidence)}
                       </p>
                     )}
                   </div>
@@ -244,7 +244,7 @@ export function AnswerCard({
               >
                 <div className="flex items-start justify-between gap-2">
                   <p className="text-[13px] leading-[20px] text-foreground">
-                    {d.explanation}
+                    {renderInsightText(d.explanation)}
                   </p>
                   <div className="flex shrink-0 flex-col items-end gap-1">
                     <span className="rounded-full border border-border bg-background px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -277,7 +277,7 @@ export function AnswerCard({
               >
                 <div className="flex items-start justify-between gap-2">
                   <p className="text-[13px] leading-[20px] text-foreground">
-                    {imp.statement}
+                    {renderInsightText(imp.statement)}
                   </p>
                   {imp.confidence && (
                     <span
@@ -292,7 +292,7 @@ export function AnswerCard({
                 </div>
                 <p className="mt-1.5 text-[13px] leading-[20px] text-muted-foreground">
                   <span className="font-semibold text-foreground">So what: </span>
-                  {imp.soWhat}
+                  {renderInsightText(imp.soWhat)}
                 </p>
               </li>
             ))}
@@ -320,15 +320,15 @@ export function AnswerCard({
                     <ol className="space-y-2 list-decimal list-inside marker:text-muted-foreground">
                       {items.map((r, i) => (
                         <li key={i} className="text-[13px] leading-[20px] text-foreground">
-                          <span className="font-medium">{r.action}</span>
-                          <span className="ml-1 text-muted-foreground">— {r.rationale}</span>
+                          <span className="font-medium">{renderInsightText(r.action)}</span>
+                          <span className="ml-1 text-muted-foreground">— {renderInsightText(r.rationale)}</span>
                           {r.expectedImpact ? (
                             <span className="ml-1 text-muted-foreground">
                               {" "}
                               <span className="font-medium text-foreground">
                                 Expected impact:
                               </span>{" "}
-                              {r.expectedImpact}
+                              {renderInsightText(r.expectedImpact)}
                             </span>
                           ) : null}
                           {/* W44 · "Try this" button. Only renders when

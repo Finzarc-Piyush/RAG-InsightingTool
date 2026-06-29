@@ -544,7 +544,7 @@ export function CalendarRenderer({
       buildOptions={(_e: EChartsType, theme: ChartTheme) => ({
         backgroundColor: "transparent",
         textStyle: commonText(theme),
-        tooltip: { ...commonTooltip(theme), formatter: (info: { value: [string, number] }) => `${info.value[0]} · ${info.value[1]}` },
+        tooltip: { ...commonTooltip(theme), formatter: (info: { value: [string, number] }) => `${info.value[0]} · ${Number((info.value[1] ?? 0).toFixed(2))}` },
         visualMap: {
           show: false,
           min: Math.min(...series.map(([, v]) => v), 0),

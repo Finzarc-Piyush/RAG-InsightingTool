@@ -25,6 +25,8 @@ import { DATASET_PREVIEW_LOADING_CONTENT } from './modules/uploadSystemMessages'
 import type { ChartSpec, ChartSpecV2, SessionAnalysisContext } from '@/shared/schema';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { RawGridPreview } from '@/components/RawGridPreview';
+import { Input } from '@/components/ui/input';
 import { useChatSidebarNav } from '@/contexts/ChatSidebarNavContext';
 import { buildChatPivotNavEntries } from '@/pages/Home/lib/chatPivotNav';
 import { buildPivotMessage } from '@/pages/Home/lib/buildPivotMessage';
@@ -82,12 +84,16 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     id: number;
   } | null>(null);
   const [isUploadStarting, setIsUploadStarting] = useState(false);
+  // Table-detection correction: raw-grid dialog open state + in-flight retable.
+  const [showRawGrid, setShowRawGrid] = useState(false);
+  const [isReingesting, setIsReingesting] = useState(false);
   const [previewSource, setPreviewSource] = useState<PreviewSource>('none');
   const [localPreview, setLocalPreview] = useState<LocalPreviewResult | null>(null);
   const [uploadStartError, setUploadStartError] = useState<string | null>(null);
   const [pendingSheetFile, setPendingSheetFile] = useState<File | null>(null);
   const [sheetChoices, setSheetChoices] = useState<string[]>([]);
   const [selectedSheetName, setSelectedSheetName] = useState<string>('');
+  const [sheetFilter, setSheetFilter] = useState<string>('');
   const localPreviewRequestIdRef = useRef(0);
   const composerDraftIdRef = useRef(0);
   const [startMode, setStartMode] = useState<'choice' | 'snowflake'>('choice');
@@ -164,6 +170,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     currencyByColumn,
     durationByColumn,
     wideFormatTransform,
+    tableDetection,
     setSessionId,
     setFileName,
     setMessages,
@@ -180,6 +187,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setCurrencyByColumn,
     setDurationByColumn,
     setWideFormatTransform,
+    setTableDetection,
     dateTimeColumnPairs,
     indicators,
     setDateTimeColumnPairs,
@@ -201,6 +209,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     streamingNarratorPreview,
     togglePivotPin,
     renamePivot,
+    startUploadJobPolling,
   } = useHomeMutations({
     sessionId,
     messages,
@@ -219,6 +228,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setCurrencyByColumn,
     setDurationByColumn,
     setWideFormatTransform,
+    setTableDetection,
     setDateTimeColumnPairs,
     setIndicators,
     setMessages,
@@ -612,6 +622,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setCollaborators,
     setSessionAnalysisContext,
     setWideFormatTransform,
+    setTableDetection,
     setCurrencyByColumn,
     setDurationByColumn,
     setDateTimeColumnPairs,
@@ -693,6 +704,31 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
   }, [sessionId]);
 
   // Handle saving context
+  // Table-detection correction: re-parse the original file with the user's
+  // chosen header row and re-poll the upload status (regenerates the analysis).
+  const handleRetableConfirm = async (headerRow: number) => {
+    if (!sessionId) return;
+    setIsReingesting(true);
+    try {
+      const res: any = await sessionsApi.retableSession(sessionId, { headerRow });
+      const jobId = res?.jobId ?? res?.data?.jobId;
+      const retSession = res?.sessionId ?? res?.data?.sessionId ?? sessionId;
+      if (jobId && startUploadJobPolling) {
+        startUploadJobPolling(jobId, retSession);
+      }
+      setShowRawGrid(false);
+    } catch (err: any) {
+      toast({
+        title: 'Could not re-read the table',
+        description:
+          err?.response?.data?.error || err?.message || 'Please try again or re-upload the file.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsReingesting(false);
+    }
+  };
+
   const handleSaveContext = async (context: string) => {
     if (!contextModalSessionId) return;
 
@@ -772,6 +808,13 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     }
   }, [resetTrigger, sessionId, loadedSessionData]);
 
+  const normalizedSheetFilter = sheetFilter.trim().toLowerCase();
+  const visibleSheetChoices = normalizedSheetFilter
+    ? sheetChoices.filter((sheet) => sheet.toLowerCase().includes(normalizedSheetFilter))
+    : sheetChoices;
+  // Only surface the filter box once the list is long enough that scrolling alone is tedious.
+  const showSheetFilter = sheetChoices.length > 8;
+
   const sheetSelectorDialog = (
     <Dialog
       open={!!pendingSheetFile}
@@ -780,6 +823,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
           setPendingSheetFile(null);
           setSheetChoices([]);
           setSelectedSheetName('');
+          setSheetFilter('');
         }
       }}
     >
@@ -791,17 +835,34 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2">
-          {sheetChoices.map((sheet) => (
-            <Button
-              key={sheet}
-              type="button"
-              variant={selectedSheetName === sheet ? 'default' : 'outline'}
-              onClick={() => setSelectedSheetName(sheet)}
-              className="justify-start"
-            >
-              {sheet}
-            </Button>
-          ))}
+          {showSheetFilter ? (
+            <Input
+              value={sheetFilter}
+              onChange={(event) => setSheetFilter(event.target.value)}
+              placeholder={`Filter ${sheetChoices.length} sheets…`}
+              aria-label="Filter worksheets"
+              autoFocus
+            />
+          ) : null}
+          <div className="grid gap-2 max-h-[45vh] overflow-y-auto pr-1">
+            {visibleSheetChoices.length === 0 ? (
+              <p className="px-1 py-2 text-sm text-muted-foreground">
+                No sheets match “{sheetFilter.trim()}”.
+              </p>
+            ) : (
+              visibleSheetChoices.map((sheet) => (
+                <Button
+                  key={sheet}
+                  type="button"
+                  variant={selectedSheetName === sheet ? 'default' : 'outline'}
+                  onClick={() => setSelectedSheetName(sheet)}
+                  className="justify-start"
+                >
+                  {sheet}
+                </Button>
+              ))
+            )}
+          </div>
         </div>
         {!selectedSheetName && pendingSheetFile ? (
           <p className="text-sm text-muted-foreground">Please select a worksheet to continue.</p>
@@ -813,6 +874,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
               setPendingSheetFile(null);
               setSheetChoices([]);
               setSelectedSheetName('');
+              setSheetFilter('');
             }}
           >
             Cancel
@@ -826,6 +888,7 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
               setPendingSheetFile(null);
               setSheetChoices([]);
               setSelectedSheetName('');
+              setSheetFilter('');
               void beginUploadWithSheetSelection(file, chosenSheet);
             }}
           >
@@ -1047,6 +1110,9 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         currencyByColumn={currencyByColumn}
         durationByColumn={durationByColumn}
         wideFormatTransform={wideFormatTransform}
+        tableDetection={tableDetection}
+        onTableRegionAdjust={() => setShowRawGrid(true)}
+        isReingesting={isReingesting}
         dimensionHierarchies={
           sessionAnalysisContext?.dataset?.dimensionHierarchies
         }
@@ -1108,6 +1174,15 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
         onClose={() => setShowDataSummaryModal(false)}
         sessionId={sessionId}
       />
+      {tableDetection && (
+        <RawGridPreview
+          open={showRawGrid}
+          onOpenChange={setShowRawGrid}
+          detection={tableDetection}
+          onConfirm={handleRetableConfirm}
+          isSubmitting={isReingesting}
+        />
+      )}
       {pendingAutomation && (
         <AutomationRemapDialog
           open={automationRemapOpen}

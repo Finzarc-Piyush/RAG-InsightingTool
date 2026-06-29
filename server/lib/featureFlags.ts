@@ -253,6 +253,12 @@ export const FEATURE_FLAGS = {
       "Incremental data refresh: 'Update data' on an existing chat/dashboard re-ingests new data (Replace or Append) and faithfully regenerates every answer + dashboard via the automation replay engine. Default OFF.",
     lifecycle: "experimental",
   },
+  TABLE_STRUCTURE_DETECT_ENABLED: {
+    default: true,
+    purpose:
+      "Main-table detection: scan the raw cell grid for the real header row(s) and data bounds (handling title rows, junk, multi-table sheets) instead of hardcoding row 1. Tier-1 deterministic scoring + MINI-tier LLM adjudication on every non-trivial sheet. Default ON — clean sheets are byte-identical; only casually-authored sheets change. A user table-region override is honored regardless of this flag.",
+    lifecycle: "stable",
+  },
 
   // ── HTTP / auth (middleware) ───────────────────────────────────────────────
   CORS_ALLOW_NO_ORIGIN: {

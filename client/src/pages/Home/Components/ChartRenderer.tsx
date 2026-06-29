@@ -1075,7 +1075,15 @@ export function ChartRenderer({
                 }}
                 tickCount={DEFAULT_Y_TICKS}
               />
-              <Tooltip formatter={rechartsTooltipValueFormatter} labelFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)} />
+              <Tooltip
+                formatter={rechartsTooltipValueFormatter}
+                labelFormatter={(v) => formatTemporalPeriodKeyForDisplay(v)}
+                /* W-ORD1 · list stacked series highest→lowest for the hovered
+                   bar. itemSorter ranks ascending by the returned key, so negate
+                   the value to sort descending — matching the value-ordered stack
+                   (largest segment at the bottom). */
+                itemSorter={(item) => -(Number(item.value) || 0)}
+              />
               {multiKeys.length > 0 ? (
                 <>
                   {(specSeriesKeys ?? [])

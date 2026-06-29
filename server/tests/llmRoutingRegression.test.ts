@@ -88,6 +88,10 @@ const EXPECTED_CATEGORY: Record<LlmCallPurpose, "MINI" | "PRIMARY"> = {
   // that runs as a supplement to the deterministic regex extractor in
   // `extractUserDirectives.ts`. Short JSON output, schema-aware input.
   [LLM_PURPOSE.DIRECTIVE_EXTRACTION]: "MINI",
+  // Table-structure detection. MINI — bounded structural classification over a
+  // small corner map with Tier-1 scaffolding; runs at upload time on possibly
+  // many sheets, so cost matters and the schema constrains the output.
+  [LLM_PURPOSE.TABLE_STRUCTURE_DETECT]: "MINI",
 };
 
 describe("W3.11 · model-routing regression guard", () => {

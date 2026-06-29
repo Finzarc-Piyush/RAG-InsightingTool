@@ -164,6 +164,28 @@ describe("W-EXP-2 · buildSlimDashboard / chart-id allocation", () => {
     assert.match(prompt, /s0t0: table · "Brand-level Q3 performance"/);
     assert.match(prompt, /Compose the SlideDeckPlan now/);
   });
+
+  test("a 32-chart dashboard prompt instructs curation/Appendix and lists every chart id", () => {
+    // Wave W-EXP-DECK4 · with many charts the planner must be told to curate
+    // (not one-slide-per-chart) so it never overshoots the 30-slide schema cap.
+    const dash: Dashboard = {
+      ...makeDashboard(),
+      sheets: [
+        {
+          id: "sheet-overview",
+          name: "Overview",
+          order: 0,
+          charts: Array.from({ length: 32 }, (_, i) => makeChart(`Chart ${i}`)),
+        },
+      ],
+    } as Dashboard;
+    const prompt = buildDeckPlannerUserPrompt({ dashboard: dash, generatedAt: "2026-05-05" });
+    assert.match(prompt, /curate/i);
+    assert.match(prompt, /Appendix/);
+    // every chart id is present so the model CAN curate from the full inventory
+    assert.match(prompt, /s0c0:/);
+    assert.match(prompt, /s0c31:/);
+  });
 });
 
 describe("W-EXP-2 · runDeckPlanner with stubbed LLM", () => {

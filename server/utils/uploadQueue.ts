@@ -42,6 +42,8 @@ interface UploadJob {
   fileBuffer?: Buffer;
   mimeType?: string;
   sheetName?: string;
+  /** Retable: re-parse the original file with a user-chosen header/table region. */
+  tableRegionOverride?: import('../shared/schema.js').TableRegionOverride;
   blobInfo?: { blobUrl: string; blobName: string };
   snowflakeImport?: SnowflakeImportConfig;
   status:
@@ -196,7 +198,8 @@ class UploadQueue {
     fileBuffer: Buffer,
     mimeType: string,
     sheetName?: string,
-    blobInfo?: { blobUrl: string; blobName: string }
+    blobInfo?: { blobUrl: string; blobName: string },
+    tableRegionOverride?: import('../shared/schema.js').TableRegionOverride
   ): Promise<string> {
     if (this.jobs.size >= this.MAX_QUEUE_SIZE) {
       throw new Error('Upload queue is full. Please try again later.');
@@ -205,7 +208,7 @@ class UploadQueue {
     // SEC-1: jobIds must be unguessable — a guessable id (time prefix + Math.random)
     // combined with a missing ownership check is a cross-tenant IDOR. Use a CSPRNG.
     const jobId = `job_${randomUUID()}`;
-    
+
     const job: UploadJob = {
       jobId,
       sessionId,
@@ -214,6 +217,7 @@ class UploadQueue {
       fileBuffer,
       mimeType,
       sheetName,
+      tableRegionOverride,
       blobInfo,
       status: 'pending',
       progress: 0,
@@ -340,6 +344,7 @@ class UploadQueue {
       const {
         parseFile,
         getAndClearLastCsvParseDiagnostics,
+        getAndClearLastTableDetection,
         createDataSummary,
         canonicalizeDateColumnValues,
         applyUploadPipelineWithProfile,
@@ -386,6 +391,8 @@ class UploadQueue {
         | { blobUrl: string; blobName: string; version: number; lastUpdated: number }
         | undefined;
       let skipDateEnrichmentForSuspiciousCsv = false;
+      // Main-table detection metadata (flag-gated; captured right after parse).
+      let tableDetection: import('../shared/schema.js').TableDetection | undefined;
 
       // Keep Blob as best-effort and off the /upload critical path.
       if (job.fileBuffer && !job.blobInfo) {
@@ -463,7 +470,10 @@ class UploadQueue {
           job.progress = 5;
           
           // Parse file first to get summary (needed for chunking)
-          const tempData = await parseFile(job.fileBuffer, job.fileName, { sheetName: job.sheetName });
+          const tempData = await parseFile(job.fileBuffer, job.fileName, {
+            sheetName: job.sheetName,
+            tableRegionOverride: job.tableRegionOverride,
+          });
           if (tempData.length === 0) {
             throw new Error('No data found in file');
           }
@@ -559,7 +569,14 @@ class UploadQueue {
         job.status = 'parsing';
         job.progress = 15;
         try {
-          data = await parseFile(job.fileBuffer, job.fileName, { sheetName: job.sheetName });
+          data = await parseFile(job.fileBuffer, job.fileName, {
+            sheetName: job.sheetName,
+            tableRegionOverride: job.tableRegionOverride,
+          });
+          // Main-table detection ran inside parseFile (flag-gated). Capture it
+          // now — BEFORE the wide-format block below — so the order is
+          // detect-then-melt (detection cleans the grid, melt reshapes columns).
+          tableDetection = getAndClearLastTableDetection();
           const parseDiagnostics = getAndClearLastCsvParseDiagnostics();
           if (parseDiagnostics) {
             const mismatchWarnRatio = Number(process.env.CSV_MISMATCH_WARN_RATIO) || 0.015;
@@ -645,6 +662,15 @@ class UploadQueue {
         applyWideFormatTransformToSummary(summary, wideFormatTransform);
       };
 
+      // Stamp main-table detection metadata (header offset, ignored side
+      // tables, raw-grid preview) onto every DataSummary so the client banner
+      // can surface it. Sibling of the wide-format decorator above.
+      const decorateSummaryWithTableDetection = (
+        summary: ReturnType<typeof createDataSummary>
+      ): void => {
+        if (tableDetection) summary.tableDetection = tableDetection;
+      };
+
       // Options for applyTemporalFacetColumns: for melted wide-format data the
       // Period column's grain facets must derive from PeriodIso, not from
       // date-casting the human label. undefined for tidy datasets.
@@ -666,6 +692,7 @@ class UploadQueue {
       // Date columns for enrichment are chosen by the upload LLM; do not canonicalize preview on heuristics.
       const previewSummary = createDataSummary(data);
       decorateSummaryWithWideFormat(previewSummary);
+      decorateSummaryWithTableDetection(previewSummary);
       if (!skipUploadLlm) {
         previewSummary.dateColumns = [];
       }
@@ -723,6 +750,7 @@ class UploadQueue {
           summary = finalPrep.summary;
         }
         decorateSummaryWithWideFormat(summary);
+        decorateSummaryWithTableDetection(summary);
         const derivedFollowUps = suggestedFollowUpsFromDataSummary(summary, {
           fileLabel: job.fileName,
         });
@@ -751,6 +779,7 @@ class UploadQueue {
         // pick a 3-letter ISO code. WF8.
         const interimSummary = createDataSummary(data);
         decorateSummaryWithWideFormat(interimSummary);
+        decorateSummaryWithTableDetection(interimSummary);
         // Wave B5 · Surface user-context + domain-context so the LLM can
         // (a) disambiguate currency for symbols like "$" / "kr" / "¥",
         // (b) describe the dataset in the user's own terms, (c) suggest
@@ -836,6 +865,7 @@ class UploadQueue {
           summary = finalPrep.summary;
         }
         decorateSummaryWithWideFormat(summary);
+        decorateSummaryWithTableDetection(summary);
         // Apply LLM currency overrides — only on columns that already
         // carry a heuristic currency tag (we won't invent one).
         if (datasetProfile.currencyOverrides && datasetProfile.currencyOverrides.length > 0) {

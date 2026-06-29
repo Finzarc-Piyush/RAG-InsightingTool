@@ -237,6 +237,12 @@ interface MessageBubbleProps {
   durationByColumn?: Record<string, import('@/shared/schema').ColumnDuration>;
   /** WF9 — wide-format transform metadata (from dataSummary.wideFormatTransform). */
   wideFormatTransform?: import('@/shared/schema').WideFormatTransform;
+  /** Main-table detection metadata (from dataSummary.tableDetection). */
+  tableDetection?: import('@/shared/schema').TableDetection;
+  /** Opens the raw-grid correction UI from the detection banner. */
+  onTableRegionAdjust?: () => void;
+  /** True while a retable re-ingest is in flight. */
+  isReingesting?: boolean;
   /** H6 — declared dimension hierarchies (from sessionAnalysisContext.dataset.dimensionHierarchies). */
   dimensionHierarchies?: import('@/shared/schema').DimensionHierarchy[];
   /** EU1 — when present, hierarchies banner shows ✕ Remove buttons. */
@@ -303,6 +309,9 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   currencyByColumn,
   durationByColumn,
   wideFormatTransform,
+  tableDetection,
+  onTableRegionAdjust,
+  isReingesting,
   dimensionHierarchies,
   hierarchyEditSessionId,
   onHierarchiesChange,
@@ -1211,6 +1220,9 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   currencyByColumn={currencyByColumn}
                   durationByColumn={durationByColumn}
                   wideFormatTransform={wideFormatTransform}
+                  tableDetection={tableDetection}
+                  onTableRegionAdjust={onTableRegionAdjust}
+                  isReingesting={isReingesting}
                   dimensionHierarchies={dimensionHierarchies}
                   sessionIdForHierarchyEdit={hierarchyEditSessionId}
                   onHierarchiesChange={onHierarchiesChange}

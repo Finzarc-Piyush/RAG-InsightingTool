@@ -107,6 +107,12 @@ interface ChatInterfaceProps {
   durationByColumn?: Record<string, import('@/shared/schema').ColumnDuration>;
   /** WF9 — wide-format auto-melt metadata (server-populated). */
   wideFormatTransform?: import('@/shared/schema').WideFormatTransform;
+  /** Main-table detection metadata (server-populated). */
+  tableDetection?: import('@/shared/schema').TableDetection;
+  /** Opens the raw-grid correction UI from the detection banner. */
+  onTableRegionAdjust?: () => void;
+  /** True while a retable re-ingest is in flight. */
+  isReingesting?: boolean;
   /** H6 — declared dimension hierarchies (from sessionAnalysisContext). */
   dimensionHierarchies?: import('@/shared/schema').DimensionHierarchy[];
   /** EU1 — callback after a successful hierarchy remove. */
@@ -211,6 +217,9 @@ export function ChatInterface({
   currencyByColumn,
   durationByColumn,
   wideFormatTransform,
+  tableDetection,
+  onTableRegionAdjust,
+  isReingesting,
   dimensionHierarchies,
   onHierarchiesChange,
   dateTimeColumnPairs,
@@ -1236,6 +1245,9 @@ export function ChatInterface({
                   currencyByColumn={hasDatasetSchema ? currencyByColumn : undefined}
                   durationByColumn={hasDatasetSchema ? durationByColumn : undefined}
                   wideFormatTransform={hasDatasetSchema ? wideFormatTransform : undefined}
+                  tableDetection={hasDatasetSchema ? tableDetection : undefined}
+                  onTableRegionAdjust={hasDatasetSchema ? onTableRegionAdjust : undefined}
+                  isReingesting={isReingesting}
                   dimensionHierarchies={hasDatasetSchema ? dimensionHierarchies : undefined}
                   hierarchyEditSessionId={hasDatasetSchema ? sessionId ?? undefined : undefined}
                   onHierarchiesChange={hasDatasetSchema ? onHierarchiesChange : undefined}

@@ -20,6 +20,7 @@ import {
   getSessionDirectivesEndpoint,
   revokeSessionDirectiveEndpoint,
 } from "../controllers/sessionController.js";
+import { retableSessionEndpoint } from "../controllers/retableController.js";
 import {
   getMemoryEntriesEndpoint,
   searchMemoryEndpoint,
@@ -81,6 +82,10 @@ router.patch('/sessions/:sessionId', updateSessionNameEndpoint);
 
 // Update session permanent context by session ID
 router.patch('/sessions/:sessionId/context', updateSessionContextEndpoint);
+
+// Re-table: re-parse the original file with a user-chosen header/table region
+// and regenerate the analysis (main-table detection correction).
+router.post('/sessions/:sessionId/retable', retableSessionEndpoint);
 
 // EU1 · Replace the dimensionHierarchies array on a session.
 // Body: { hierarchies: DimensionHierarchy[] }. Returns the new array.

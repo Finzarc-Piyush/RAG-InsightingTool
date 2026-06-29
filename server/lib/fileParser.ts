@@ -2,6 +2,7 @@ import { parse } from 'csv-parse/sync';
 import { readExcelObjectRows, readExcelSheetNames } from './excelReader.js';
 import { estimateExcelRowsFromRef } from './excelRowEstimate.js';
 import { DataSummary } from '../shared/schema.js';
+import type { TableDetection, TableRegionOverride } from '../shared/schema.js';
 import { uploadLimits } from '../config/uploadLimits.js';
 import {
   isDateColumnName,
@@ -29,6 +30,14 @@ import {
   stripCurrencyAndParse,
   isoForSymbol,
 } from './wideFormat/currencyVocabulary.js';
+import { isFlagOn } from './featureFlags.js';
+import { matrixToGrid } from './tableStructure/grid.js';
+import { detectTableFromGrid } from './tableStructure/detectTable.js';
+import {
+  regionFromOverride,
+  buildHeaderKeysFromGrid,
+  toTableDetection,
+} from './tableStructure/applyRegion.js';
 import {
   classifyAsDuration,
   parseDurationToHours,
@@ -252,7 +261,24 @@ export function warnSuspiciousDuplicateRowIdInSample(
 
 export type ParseFileOptions = {
   sheetName?: string;
+  /** When set, the main-table detector is SKIPPED and this region is used
+   * verbatim — the user-correction (retable) path. Honored regardless of the
+   * TABLE_STRUCTURE_DETECT_ENABLED flag. */
+  tableRegionOverride?: TableRegionOverride;
+  /** Stable id forwarded to the detector's LLM routing ramp. */
+  turnId?: string;
 };
+
+/** Main-table detection metadata from the last parseFile call. Side-channel
+ * (mirrors lastCsvParseDiagnostics / the currency tally) so parseFile's return
+ * type stays `Record<string,any>[]`. Read by processJob right after parseFile. */
+let lastTableDetection: TableDetection | undefined;
+
+export function getAndClearLastTableDetection(): TableDetection | undefined {
+  const out = lastTableDetection;
+  lastTableDetection = undefined;
+  return out;
+}
 
 export async function parseFile(
   buffer: Buffer,
@@ -260,11 +286,12 @@ export async function parseFile(
   opts: ParseFileOptions = {}
 ): Promise<Record<string, any>[]> {
   lastCsvParseDiagnostics = undefined;
+  lastTableDetection = undefined;
   resetCurrencyTally();
   const ext = filename.split('.').pop()?.toLowerCase();
 
   if (ext === 'csv') {
-    return parseCsv(buffer);
+    return parseCsv(buffer, opts);
   } else if (ext === 'xlsx' || ext === 'xls') {
     return parseExcel(buffer, opts);
   } else {
@@ -276,11 +303,9 @@ export async function getExcelSheetNames(buffer: Buffer): Promise<string[]> {
   return readExcelSheetNames(buffer);
 }
 
-function parseCsv(buffer: Buffer): Record<string, any>[] {
-  const content = buffer.toString('utf-8');
-  
-  // For very large files, use streaming parser if available
-  // For now, we use sync parser but optimize memory usage
+/** Legacy CSV parse: row 1 = header (`columns: true`), with mismatched-column
+ * diagnostics. Unchanged behavior — used when detection is off + no override. */
+function parseCsvLegacy(content: string): Record<string, any>[] {
   const records = parse(content, {
     columns: true,
     skip_empty_lines: true,
@@ -322,7 +347,97 @@ function parseCsv(buffer: Buffer): Record<string, any>[] {
       `⚠️ ${lastCsvParseDiagnostics.warning} Sample rows: ${sampleRowNumbers.join(', ') || 'n/a'}`
     );
   }
-  
+  return unwrappedRecords;
+}
+
+/** Detection CSV parse: parse the RAW matrix (no header assumption), find the
+ * main-table region (or apply the override), then build records keyed by the
+ * detected header. Records are sliced from the FULL matrix so rows beyond the
+ * scan window are still ingested. Sets `lastTableDetection`. */
+async function parseCsvViaDetection(
+  content: string,
+  opts: ParseFileOptions,
+): Promise<Record<string, any>[]> {
+  const matrix = parse(content, {
+    columns: false,
+    skip_empty_lines: false,
+    cast: true,
+    cast_date: true,
+    relax_column_count: true,
+    relax_quotes: true,
+  }) as unknown[][];
+  if (!matrix.length) return [];
+
+  const grid = matrixToGrid(matrix);
+  const colsN = grid.reduce((m, row) => Math.max(m, row.length), 0);
+  const region = opts.tableRegionOverride
+    ? regionFromOverride(opts.tableRegionOverride, Math.max(grid.length, matrix.length), colsN)
+    : await detectTableFromGrid(grid, { llmEnabled: true, turnId: opts.turnId });
+
+  const keys = buildHeaderKeysFromGrid(grid, region);
+  const scanRows = grid.length;
+  const reachedScanEnd = region.dataRowEnd >= scanRows - 1;
+  const lastRow = reachedScanEnd ? matrix.length - 1 : region.dataRowEnd;
+
+  const records: Record<string, any>[] = [];
+  for (let r = region.dataRowStart; r <= lastRow; r++) {
+    const rowArr = matrix[r];
+    if (!rowArr) continue;
+    const rec: Record<string, any> = {};
+    let allEmpty = true;
+    for (let c = region.colStart; c <= region.colEnd; c++) {
+      const v = rowArr[c];
+      const val = v == null || v === '' ? null : v;
+      rec[keys[c - region.colStart]!] = val;
+      if (val !== null) allEmpty = false;
+    }
+    if (allEmpty) continue;
+    records.push(rec);
+  }
+
+  // Preserve the legacy mismatched-column diagnostics (drives the
+  // "suspicious CSV → skip date enrichment" guard in processJob). Compare each
+  // data row's raw field count to the detected header width.
+  const headerWidth = (matrix[region.headerRowStart] ?? []).length;
+  let mismatchedRows = 0;
+  const sampleRowNumbers: number[] = [];
+  let totalDataRows = 0;
+  for (let r = region.dataRowStart; r < matrix.length; r++) {
+    const row = matrix[r];
+    if (!row) continue;
+    totalDataRows++;
+    if (row.length !== headerWidth) {
+      mismatchedRows++;
+      if (sampleRowNumbers.length < 10) sampleRowNumbers.push(r + 1);
+    }
+  }
+  if (mismatchedRows > 0) {
+    const mismatchRatio = totalDataRows > 0 ? mismatchedRows / totalDataRows : 0;
+    lastCsvParseDiagnostics = {
+      totalRows: totalDataRows,
+      mismatchedRows,
+      mismatchRatio,
+      sampleRowNumbers,
+      warning: `CSV rows with mismatched column counts detected: ${mismatchedRows}/${totalDataRows} (${(mismatchRatio * 100).toFixed(2)}%).`,
+    };
+    logger.warn(
+      `⚠️ ${lastCsvParseDiagnostics.warning} Sample rows: ${sampleRowNumbers.join(', ') || 'n/a'}`,
+    );
+  }
+
+  lastTableDetection = toTableDetection(region, grid);
+  return records;
+}
+
+async function parseCsv(buffer: Buffer, opts: ParseFileOptions = {}): Promise<Record<string, any>[]> {
+  const content = buffer.toString('utf-8');
+
+  const detectEnabled = isFlagOn('TABLE_STRUCTURE_DETECT_ENABLED');
+  const unwrappedRecords =
+    detectEnabled || opts.tableRegionOverride
+      ? await parseCsvViaDetection(content, opts)
+      : parseCsvLegacy(content);
+
   // Normalize column names: trim whitespace from all column names
   const normalized = normalizeColumnNames(unwrappedRecords as Record<string, any>[]);
   
@@ -414,9 +529,11 @@ async function parseExcel(buffer: Buffer, opts: ParseFileOptions = {}): Promise<
   // load — a pathological workbook can still OOM at load time. Phase 2 removes
   // both risks with a streaming Excel ingest.
   const excelRowCap = uploadLimits.maxExcelRowsInMemory;
-  const { rows: data } = await readExcelObjectRows(buffer, {
+  const { rows: data, tableDetection } = await readExcelObjectRows(buffer, {
     sheetName: opts.sheetName,
     maxRows: excelRowCap,
+    tableRegionOverride: opts.tableRegionOverride,
+    turnId: opts.turnId,
     onOversize: (estimatedRows): never => {
       throw new Error(
         `This Excel sheet has about ${estimatedRows.toLocaleString('en-US')} rows, above the supported ` +
@@ -426,6 +543,8 @@ async function parseExcel(buffer: Buffer, opts: ParseFileOptions = {}): Promise<
       );
     },
   });
+  // Stash detection for processJob to read via getAndClearLastTableDetection().
+  if (tableDetection) lastTableDetection = tableDetection;
 
   // Normalize column names: trim whitespace from all column names
   const normalized = normalizeColumnNames(data as Record<string, any>[]);

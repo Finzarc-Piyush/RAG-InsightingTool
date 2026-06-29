@@ -216,28 +216,36 @@ describe("W-EXP-7 · end-to-end PPTX pipeline", () => {
     assert.ok(buf.length > 25_000, `expected non-trivial PPTX size, got ${buf.length} bytes`);
   });
 
-  it("fallback deck renders cleanly when the planner returns null", async () => {
+  it("rich fallback deck renders cleanly when the planner returns null", async () => {
     installLlmStub({
       [LLM_PURPOSE.DECK_PLANNER]: () => ({ slides: [] }), // schema-invalid → planner returns null
     });
     const plan = await buildAndVerifyDeckPlan(dashboard());
     assert.equal(plan, null, "planner should return null on Zod-invalid output");
+    // W-EXP-DECK3 · the fallback is now a REAL deck (one chart slide per chart +
+    // envelope chrome), not the old 3-slide inventory stub.
     const fallback = buildFallbackDeckPlan(dashboard(), { generatedAt: "2026-05-05" });
-    assert.equal(fallback.slides.length, 3);
+    assert.ok(fallback.slides.length > 3, `rich fallback should be a full deck, got ${fallback.slides.length}`);
+    const chartSlides = fallback.slides.filter((s) => s.layout === "ChartWithInsight");
+    assert.equal(chartSlides.length, 2, "one ChartWithInsight per chart");
     const buf = await renderDeckPlanToPptxBuffer(fallback, dashboard());
     assert.ok(buf.length > 5_000);
   });
 
   it("verifier-fail → repair branch → ok plan flow rescues a bad first call", async () => {
+    // W-EXP-DECK1/2 · positional defects (mis-ordered Methodology) are now fixed
+    // deterministically by autoRepairDeckPlan WITHOUT an LLM repair. To exercise
+    // the repair branch we inject a defect auto-repair can't fix: a placeholder
+    // action title (rule 1), which only the LLM can rewrite.
     let plannerCalls = 0;
     installLlmStub({
       [LLM_PURPOSE.DECK_PLANNER]: () => {
         plannerCalls += 1;
         if (plannerCalls === 1) {
-          // First call — Methodology in the FRONT third (verifier rejects).
+          // First call — a denylisted topic title on slide 4 (verifier rejects).
           return {
             ...RICH_PLAN,
-            slides: [RICH_PLAN.slides[7], ...RICH_PLAN.slides.slice(0, 7)],
+            slides: RICH_PLAN.slides.map((s, i) => (i === 3 ? { ...s, actionTitle: "Findings" } : s)),
           };
         }
         // Repair call — return the rich plan as-is.
@@ -247,7 +255,7 @@ describe("W-EXP-7 · end-to-end PPTX pipeline", () => {
     const plan = await buildAndVerifyDeckPlan(dashboard(), { turnId: "test-repair" });
     assert.ok(plan);
     assert.equal(plannerCalls, 2, "planner must be called twice (initial + repair)");
-    // Methodology is back in the back third.
+    // Methodology is in the back third.
     const lastIdx = plan!.slides.length - 1;
     assert.equal(plan!.slides[lastIdx]!.layout, "Methodology");
   });

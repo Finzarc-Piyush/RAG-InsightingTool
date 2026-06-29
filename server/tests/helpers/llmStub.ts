@@ -204,6 +204,17 @@ export const DEFAULT_STUB_HANDLERS: Required<StubHandlerMap> = {
   // existing tests that hit chat-stream paths don't suddenly grow a
   // persisted directive. Tests exercising the extractor override.
   [LLM_PURPOSE.DIRECTIVE_EXTRACTION]: () => ({ directives: [] }),
+  // Minimal-valid table region: header row 0, data to end, no side tables.
+  [LLM_PURPOSE.TABLE_STRUCTURE_DETECT]: () => ({
+    headerRowStart: 0,
+    headerRowEnd: 0,
+    dataRowStart: 1,
+    dataRowEnd: -1,
+    colStart: 0,
+    colEnd: 0,
+    secondaryTablesIgnored: [],
+    rationale: "stub table region",
+  }),
 };
 
 /** Track installed handlers so `clearLlmStub` is a clean teardown. */

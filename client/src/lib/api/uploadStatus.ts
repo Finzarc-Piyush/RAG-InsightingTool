@@ -43,6 +43,7 @@ export interface UploadJobStatusResponse {
     columns: Array<{ name: string; type: string }>;
     numericColumns?: string[];
     dateColumns?: string[];
+    tableDetection?: import('@/shared/schema').TableDetection;
   };
   previewSampleRows?: Record<string, any>[];
   /** Ready-state hint for preview payload completeness */

@@ -8,6 +8,7 @@ import {
   type DateTimeColumnPair,
   type TemporalFacetColumnMeta,
   type WideFormatTransform,
+  type TableDetection,
 } from '@/shared/schema';
 import type { IndicatorEntry } from '@/components/IndicatorColumnsBanner';
 
@@ -29,6 +30,8 @@ export interface HomeState {
   /** DUR1 · per-column duration tag for elapsed-time measures ("Working Hrs"). */
   durationByColumn: Record<string, ColumnDuration>;
   wideFormatTransform?: WideFormatTransform;
+  /** Main-table detection metadata (from dataSummary.tableDetection). */
+  tableDetection?: TableDetection;
   /** SU-UX1 · per-session date×time pair annotations (from dataSummary.dateTimeColumnPairs). */
   dateTimeColumnPairs: DateTimeColumnPair[];
   /** SU-UX1 · per-session indicator-column annotations (derived from dataSummary). */
@@ -56,6 +59,7 @@ export const useHomeState = () => {
   const [wideFormatTransform, setWideFormatTransform] = useState<WideFormatTransform | undefined>(
     undefined
   );
+  const [tableDetection, setTableDetection] = useState<TableDetection | undefined>(undefined);
   const [dateTimeColumnPairs, setDateTimeColumnPairs] = useState<DateTimeColumnPair[]>([]);
   const [indicators, setIndicators] = useState<IndicatorEntry[]>([]);
 
@@ -76,6 +80,7 @@ export const useHomeState = () => {
     setCurrencyByColumn({});
     setDurationByColumn({});
     setWideFormatTransform(undefined);
+    setTableDetection(undefined);
     setDateTimeColumnPairs([]);
     setIndicators([]);
   }, []);
@@ -97,6 +102,7 @@ export const useHomeState = () => {
     currencyByColumn,
     durationByColumn,
     wideFormatTransform,
+    tableDetection,
     dateTimeColumnPairs,
     indicators,
 
@@ -116,6 +122,7 @@ export const useHomeState = () => {
     setCurrencyByColumn,
     setDurationByColumn,
     setWideFormatTransform,
+    setTableDetection,
     setDateTimeColumnPairs,
     setIndicators,
 

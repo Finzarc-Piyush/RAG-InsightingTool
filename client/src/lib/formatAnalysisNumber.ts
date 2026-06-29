@@ -13,7 +13,7 @@ export function formatAnalysisNumber(n: number): string {
   }
   const s = n.toLocaleString(undefined, {
     minimumFractionDigits: 0,
-    maximumFractionDigits: 6,
+    maximumFractionDigits: 2,
   });
   return s.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 }

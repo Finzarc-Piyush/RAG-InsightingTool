@@ -48,6 +48,7 @@ interface UseSessionLoaderProps {
    * WF9 banner / đồng badges survive a browser refresh, not just an upload.
    */
   setWideFormatTransform?: (transform: WideFormatTransform | undefined) => void;
+  setTableDetection?: (detection: import('@/shared/schema').TableDetection | undefined) => void;
   setCurrencyByColumn?: (map: Record<string, ColumnCurrency>) => void;
   /** DUR1 · populate the per-column duration map on session load. */
   setDurationByColumn?: (map: Record<string, ColumnDuration>) => void;
@@ -80,6 +81,7 @@ export const useSessionLoader = ({
   setCollaborators,
   setSessionAnalysisContext,
   setWideFormatTransform,
+  setTableDetection,
   setCurrencyByColumn,
   setDurationByColumn,
   setDateTimeColumnPairs,
@@ -131,6 +133,9 @@ export const useSessionLoader = ({
       // produce identical UI state.
       if (setWideFormatTransform) {
         setWideFormatTransform(session.dataSummary.wideFormatTransform);
+      }
+      if (setTableDetection) {
+        setTableDetection(session.dataSummary.tableDetection);
       }
       if (setCurrencyByColumn && Array.isArray(session.dataSummary.columns)) {
         const map: Record<string, ColumnCurrency> = {};
@@ -237,6 +242,7 @@ export const useSessionLoader = ({
     setIndicators,
     setSessionAnalysisContext,
     setWideFormatTransform,
+    setTableDetection,
   ]);
 };
 

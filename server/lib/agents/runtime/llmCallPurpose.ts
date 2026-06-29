@@ -137,6 +137,16 @@ export const LLM_PURPOSE = {
    * never blocks or breaks the turn.
    */
   ANALYSIS_TITLE: "analysis_title",
+  /**
+   * Main-table structure adjudication. Given a COMPACT corner map of a messy
+   * sheet (≤25 rows × ≤30 cols) plus the Tier-1 candidate regions, the LLM
+   * returns the real header row range, data range, column range, and which
+   * side blocks to ignore. MINI-tier: bounded structural classification over a
+   * fully-supplied corner (not open-ended synthesis), shape-constrained by a
+   * tight Zod schema, with Tier-1 scaffolding — and it runs at upload time on
+   * possibly many sheets, so cost matters. Falls back to Tier-1 on any failure.
+   */
+  TABLE_STRUCTURE_DETECT: "table_structure_detect",
 } as const;
 
 export type LlmCallPurpose = (typeof LLM_PURPOSE)[keyof typeof LLM_PURPOSE];
@@ -189,6 +199,7 @@ const PURPOSE_TO_CATEGORY: Record<LlmCallPurpose, LlmCallCategory> = {
   [LLM_PURPOSE.INSIGHT_REGEN]: "MINI",
   [LLM_PURPOSE.DIRECTIVE_EXTRACTION]: "MINI",
   [LLM_PURPOSE.ANALYSIS_TITLE]: "MINI",
+  [LLM_PURPOSE.TABLE_STRUCTURE_DETECT]: "MINI",
 };
 
 /** Build the per-purpose override env-var name: `mode_classify` → `OPENAI_MODEL_FOR_MODE_CLASSIFY`. */

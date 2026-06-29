@@ -64,6 +64,10 @@ interface UseHomeMutationsProps {
   setWideFormatTransform?: (
     t: import('@/shared/schema').WideFormatTransform | undefined
   ) => void;
+  /** Populate from dataSummary.tableDetection on session load + upload. */
+  setTableDetection?: (
+    t: import('@/shared/schema').TableDetection | undefined
+  ) => void;
   /** SU-UX1 — populate from dataSummary.dateTimeColumnPairs on session load + upload. */
   setDateTimeColumnPairs?: (
     next: import('@/shared/schema').DateTimeColumnPair[]
@@ -109,6 +113,7 @@ export const useHomeMutations = ({
   setCurrencyByColumn,
   setDurationByColumn,
   setWideFormatTransform,
+  setTableDetection,
   setDateTimeColumnPairs,
   setIndicators,
   setMessages,
@@ -347,6 +352,7 @@ export const useHomeMutations = ({
     }>;
     temporalFacetColumns?: TemporalFacetColumnMeta[];
     wideFormatTransform?: import('@/shared/schema').WideFormatTransform;
+    tableDetection?: import('@/shared/schema').TableDetection;
     dateTimeColumnPairs?: import('@/shared/schema').DateTimeColumnPair[];
     allowEmptyRowsOverwrite?: boolean;
   }) => {
@@ -392,6 +398,9 @@ export const useHomeMutations = ({
     if (typeof payload.columnCount === 'number') setTotalColumns(payload.columnCount);
     if (setWideFormatTransform) {
       setWideFormatTransform(payload.wideFormatTransform);
+    }
+    if (setTableDetection) {
+      setTableDetection(payload.tableDetection);
     }
     // SU-UX1 · populate the per-session date×time pairs + indicator lists
     // from the dataSummary we just hydrated. Both come back in lockstep
@@ -447,6 +456,7 @@ export const useHomeMutations = ({
         summaryColumns: session.dataSummary.columns,
         temporalFacetColumns: session.dataSummary.temporalFacetColumns ?? [],
         wideFormatTransform: session.dataSummary.wideFormatTransform,
+        tableDetection: session.dataSummary.tableDetection,
         dateTimeColumnPairs: session.dataSummary.dateTimeColumnPairs ?? [],
         rowCount: session.dataSummary.rowCount || 0,
         columnCount: session.dataSummary.columnCount || 0,
@@ -508,6 +518,10 @@ export const useHomeMutations = ({
       dateTimeColumnPairs:
         (summary as { dateTimeColumnPairs?: import('@/shared/schema').DateTimeColumnPair[] })
           .dateTimeColumnPairs ?? [],
+      // Forward upload-time table detection so the banner appears the moment the
+      // preview finishes (no wait for the next session-load round-trip).
+      tableDetection: (summary as { tableDetection?: import('@/shared/schema').TableDetection })
+        .tableDetection,
       rowCount: summary.rowCount || 0,
       columnCount: summary.columnCount || 0,
       allowEmptyRowsOverwrite: false,
@@ -719,6 +733,9 @@ export const useHomeMutations = ({
           }
           if (setWideFormatTransform) {
             setWideFormatTransform(data.summary.wideFormatTransform);
+          }
+          if (setTableDetection) {
+            setTableDetection(data.summary.tableDetection);
           }
         }
         
@@ -1983,5 +2000,8 @@ export const useHomeMutations = ({
     streamingNarratorPreview,
     togglePivotPin,
     renamePivot,
+    // Exposed so the retable correction flow can re-poll upload status after a
+    // re-ingest, reusing the exact same preview-application path as a fresh upload.
+    startUploadJobPolling,
   };
 };

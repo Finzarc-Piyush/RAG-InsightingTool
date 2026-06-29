@@ -82,6 +82,13 @@ export const sessionsApi = {
   updateSessionContext: (sessionId: string, permanentContext: string) =>
     api.patch(`/api/sessions/${sessionId}/context`, { permanentContext }),
 
+  /** Re-table: re-parse the original file with a user-chosen header row and
+   * regenerate the analysis. Returns { jobId, sessionId } to re-poll status. */
+  retableSession: (
+    sessionId: string,
+    tableRegion: import("@/shared/schema").TableRegionOverride,
+  ) => api.post(`/api/sessions/${sessionId}/retable`, { tableRegion }),
+
   /** EU1 — replace the dimensionHierarchies array on a session. */
   updateSessionHierarchies: (
     sessionId: string,

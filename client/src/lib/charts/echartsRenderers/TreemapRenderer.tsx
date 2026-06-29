@@ -192,7 +192,7 @@ export function TreemapRenderer({
           formatter: (info: { name: string; value: number }) =>
             `<div style="padding:6px 8px;font-family:var(--font-sans);">
                <div style="font-weight:600;color:${theme.foreground};">${info.name}</div>
-               <div style="color:${theme.mutedForeground};font-size:11px;">${info.value?.toLocaleString?.() ?? info.value}</div>
+               <div style="color:${theme.mutedForeground};font-size:11px;">${info.value?.toLocaleString?.(undefined, { maximumFractionDigits: 2 }) ?? info.value}</div>
              </div>`,
           backgroundColor: theme.background,
           borderColor: theme.border,

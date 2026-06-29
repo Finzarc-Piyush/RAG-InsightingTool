@@ -1,5 +1,6 @@
 import React from 'react';
 import { compactizeNumbersInText } from '@/lib/text/compactizeNumbersInText';
+import { clampInsightDecimals } from '@/lib/cleanEvidenceNumbers';
 import { extractCitations } from '@/lib/citationTokens';
 import { CitationHoverCard } from '@/components/CitationHoverCard';
 import { parseGfmTableBlock } from '@/lib/markdownTable';
@@ -14,9 +15,14 @@ export function MarkdownRenderer({ content }: { content: string }) {
   // blackboard finding-reference tokens ([f1], [f6], …) the narrator may have
   // echoed into prose. New turns are stripped server-side; this catches history.
   const withoutFindingRefs = content.replace(/\s?\[f\d+\]/gi, "");
-  // Compact large numbers (≥1000) to K/M/B/T form before markdown cleanup so
-  // chat narrative prose matches the K/M/B convention used everywhere else.
-  const cleanedContent = cleanOrphanedAsterisks(compactizeNumbersInText(withoutFindingRefs));
+  // Compact large numbers (≥1000) to K/M/B/T form, then clamp any remaining
+  // machine-precision decimals to ≤2 places (W-DEC1), before markdown cleanup —
+  // so chat prose matches the K/M/B convention AND the "no more than two
+  // decimals anywhere" rule. Order matters: compactize first (so K/M/B suffixes
+  // are applied), clamp second (rounds the sub-1000 decimals it leaves behind).
+  const cleanedContent = cleanOrphanedAsterisks(
+    clampInsightDecimals(compactizeNumbersInText(withoutFindingRefs)),
+  );
 
   // Split by lines to handle line breaks
   const lines = cleanedContent.split('\n');

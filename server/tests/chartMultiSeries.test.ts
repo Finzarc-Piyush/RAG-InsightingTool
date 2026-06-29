@@ -93,4 +93,27 @@ describe("pivotLongToWideBar", () => {
     assert.equal(rows.length, 1);
     assert.ok(seriesKeys.length >= 1);
   });
+
+  it("orders seriesKeys by descending total even below the series cap (W-ORD1)", () => {
+    // Three series in scrambled encounter order; totals: big=100, mid=30, small=5.
+    const data = [
+      { x: "g1", cat: "small", v: 2 },
+      { x: "g1", cat: "big", v: 60 },
+      { x: "g1", cat: "mid", v: 20 },
+      { x: "g2", cat: "small", v: 3 },
+      { x: "g2", cat: "big", v: 40 },
+      { x: "g2", cat: "mid", v: 10 },
+    ];
+    const spec: ChartSpec = {
+      type: "bar",
+      title: "t",
+      x: "x",
+      y: "v",
+      seriesColumn: "cat",
+      aggregate: "sum",
+    };
+    const { seriesKeys } = pivotLongToWideBar(data, "x", "cat", "v", "sum", spec);
+    // Largest total first → declared as the first <Bar> → bottom of the stack.
+    assert.deepEqual(seriesKeys, ["big", "mid", "small"]);
+  });
 });

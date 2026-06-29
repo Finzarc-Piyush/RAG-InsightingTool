@@ -28,6 +28,11 @@ interface DrillThroughRowTableProps {
 function formatCell(value: unknown): string {
   if (value === null || value === undefined) return "—";
   if (value instanceof Date) return value.toISOString();
+  // No more than two decimals anywhere (W-DEC1): clamp non-integer numerics,
+  // dropping trailing zeros (1234.5678 → "1234.57", 0.5 → "0.5").
+  if (typeof value === "number" && Number.isFinite(value) && !Number.isInteger(value)) {
+    return String(Number(value.toFixed(2)));
+  }
   return String(value);
 }
 

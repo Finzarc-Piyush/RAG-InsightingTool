@@ -2021,6 +2021,58 @@ export const wideFormatTransformSchema = z.object({
 
 export type WideFormatTransform = z.infer<typeof wideFormatTransformSchema>;
 
+// Main-table detection metadata, populated at upload by the tableStructure
+// detector when it scans the raw cell grid for the real header row / data
+// bounds (handling title rows, junk, and multiple tables per sheet). All
+// row/col fields are 0-based GRID indices (the reader maps them to 1-based
+// sheet positions; the banner adds 1 for display). See `server/lib/tableStructure/`.
+export const tableDetectionSchema = z.object({
+  headerRowStart: z.number().int(),
+  headerRowEnd: z.number().int(),
+  dataRowStart: z.number().int(),
+  dataRowEnd: z.number().int(),
+  colStart: z.number().int(),
+  colEnd: z.number().int(),
+  confidence: z.number().min(0).max(1),
+  rationale: z.string().max(400),
+  source: z.enum(["tier1", "tier2", "fallback", "override"]),
+  /** True when detection did something the user should verify — header not on
+   * row 1, rows skipped, a side table ignored, or low confidence. Gates the
+   * `TableDetectionBanner` (a clean sheet leaves this false and shows nothing). */
+  nonTrivial: z.boolean(),
+  secondaryTablesIgnored: z
+    .array(
+      z.object({
+        rowStart: z.number().int(),
+        rowEnd: z.number().int(),
+        colStart: z.number().int(),
+        colEnd: z.number().int(),
+        reason: z.string().max(200),
+      })
+    )
+    .max(16)
+    .default([]),
+  /** First ~30 rows × ~30 cols of the RAW grid (display text), so the
+   * correction UI can show pre-header junk and let the user click the true
+   * header row. Bounded so it rides the chat doc cheaply. */
+  rawGridPreview: z.array(z.array(z.string())).optional(),
+});
+
+export type TableDetection = z.infer<typeof tableDetectionSchema>;
+
+// User correction of a wrong detection, sent to POST /api/sessions/:id/retable.
+// Only `headerRow` is required for v1; the rest default to "extend from the
+// header to the natural bounds". All 0-based grid indices.
+export const tableRegionOverrideSchema = z.object({
+  headerRow: z.number().int().nonnegative(),
+  dataRowStart: z.number().int().nonnegative().optional(),
+  dataRowEnd: z.number().int().optional(),
+  colStart: z.number().int().nonnegative().optional(),
+  colEnd: z.number().int().nonnegative().optional(),
+});
+
+export type TableRegionOverride = z.infer<typeof tableRegionOverrideSchema>;
+
 /**
  * SU-DT1 · A pairing between a time-of-day column (HH:MM:SS) and the date
  * column whose value carries the row's calendar date. Lets the planner
@@ -2144,6 +2196,10 @@ export const dataSummarySchema = z.object({
   /** Set when the upload pipeline detected a wide-format input and
    * melted it to long form. See WF3/WF4/WF7. */
   wideFormatTransform: wideFormatTransformSchema.optional(),
+  /** Set when the main-table detector found the real header/data bounds on a
+   * messy sheet (title rows, junk, side tables). Sibling of
+   * `wideFormatTransform`; surfaced by the `TableDetectionBanner`. */
+  tableDetection: tableDetectionSchema.optional(),
   /** SU-DT1 · Pairings between time-of-day and date columns so the agent
    * can compose a combined datetime via add_computed_columns (SU-DT2). */
   dateTimeColumnPairs: z.array(dateTimeColumnPairSchema).max(20).optional(),

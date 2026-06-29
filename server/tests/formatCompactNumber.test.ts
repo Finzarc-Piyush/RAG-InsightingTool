@@ -29,7 +29,9 @@ describe("formatCompactNumber", () => {
     assert.equal(formatCompactNumber(123.456), "123");
     assert.equal(formatCompactNumber(42.567), "42.6");
     assert.equal(formatCompactNumber(3.14159), "3.14");
-    assert.equal(formatCompactNumber(0.083), "0.083");
+    // W-DEC1 · sub-1 values now cap at 2 decimals (was 3): 0.083 → 0.08.
+    assert.equal(formatCompactNumber(0.083), "0.08");
+    assert.equal(formatCompactNumber(0.126), "0.13");
     assert.equal(formatCompactNumber(0.5), "0.5");
   });
 

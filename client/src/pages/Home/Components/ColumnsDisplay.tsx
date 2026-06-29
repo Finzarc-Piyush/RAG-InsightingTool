@@ -6,9 +6,11 @@ import type {
   ColumnDuration,
   DateTimeColumnPair,
   DimensionHierarchy,
+  TableDetection,
   WideFormatTransform,
 } from '@/shared/schema';
 import { WideFormatBanner } from '@/components/WideFormatBanner';
+import { TableDetectionBanner } from '@/components/TableDetectionBanner';
 import { DimensionHierarchiesBanner } from '@/components/DimensionHierarchiesBanner';
 import { DateTimePairsBanner } from '@/components/DateTimePairsBanner';
 import {
@@ -29,6 +31,13 @@ interface ColumnsDisplayProps {
   /** WF9 — banner above the column chips when the dataset was
    * auto-melted from wide format. */
   wideFormatTransform?: WideFormatTransform;
+  /** Main-table detection — banner shown when detection did something
+   * non-trivial (skipped a title row, ignored a side table, low confidence). */
+  tableDetection?: TableDetection;
+  /** Opens the raw-grid correction UI when the user clicks "Adjust". */
+  onTableRegionAdjust?: () => void;
+  /** True while a retable re-ingest is in flight. */
+  isReingesting?: boolean;
   /** H6 — banner above the column chips when the user has declared
    * one or more dimension hierarchies (rollup values in a column). */
   dimensionHierarchies?: DimensionHierarchy[];
@@ -55,6 +64,9 @@ export function ColumnsDisplay({
   currencyByColumn,
   durationByColumn,
   wideFormatTransform,
+  tableDetection,
+  onTableRegionAdjust,
+  isReingesting,
   dimensionHierarchies,
   dateTimeColumnPairs,
   indicators,
@@ -129,6 +141,13 @@ export function ColumnsDisplay({
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-0">
+        {tableDetection?.nonTrivial && (
+          <TableDetectionBanner
+            detection={tableDetection}
+            onAdjust={onTableRegionAdjust}
+            isReingesting={isReingesting}
+          />
+        )}
         {wideFormatTransform && (
           <WideFormatBanner transform={wideFormatTransform} valueCurrency={valueCurrency} />
         )}

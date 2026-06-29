@@ -91,39 +91,48 @@ export function pivotLongToWideBar(
       : MAX_CHART_SERIES_DEFAULT;
   const totalSeriesBeforeCap = rawSeriesOrder.length;
 
-  if (rawSeriesOrder.length > seriesCap) {
-    const seriesTotals = new Map<string, number>();
-    for (const sv of rawSeriesOrder) {
-      let total = 0;
-      for (const xv of xOrder) {
-        const vals = pairMap.get(`${xv}${KEY_SEP}${sv}`);
-        if (vals) total += vals.reduce((a, b) => a + b, 0);
-      }
-      seriesTotals.set(sv, total);
+  // W-ORD1 · order EVERY series by global total (descending), not just when the
+  // count exceeds the cap. Recharts declares the first <Bar> at the bottom of a
+  // stack, so a value-sorted seriesKeys puts the largest segment at the bottom
+  // of each bar and the smallest on top (and the legend reads big→small). This
+  // ordering is global across bars — a Recharts stack cannot reorder per-bar —
+  // so "largest at bottom" is by total contribution.
+  const seriesTotals = new Map<string, number>();
+  for (const sv of rawSeriesOrder) {
+    let total = 0;
+    for (const xv of xOrder) {
+      const vals = pairMap.get(`${xv}${KEY_SEP}${sv}`);
+      if (vals) total += vals.reduce((a, b) => a + b, 0);
     }
-    const sorted = rawSeriesOrder
-      .slice()
-      .sort((a, b) => (seriesTotals.get(b) ?? 0) - (seriesTotals.get(a) ?? 0));
-    const topSet = new Set(sorted.slice(0, seriesCap));
+    seriesTotals.set(sv, total);
+  }
+  const sortedSeries = rawSeriesOrder
+    .slice()
+    .sort((a, b) => (seriesTotals.get(b) ?? 0) - (seriesTotals.get(a) ?? 0));
 
+  const capped = totalSeriesBeforeCap > seriesCap;
+  const keptSeries = capped ? sortedSeries.slice(0, seriesCap) : sortedSeries;
+
+  if (capped) {
     // Drop the tail series entirely — do NOT roll them into "Others". This
     // is the central fix for P1.c: the chart shows only the genuine top
     // contributors, and a truncation note tells the user the rest were
     // omitted (so they're not surprised by a missing tail).
+    const topSet = new Set(keptSeries);
     for (const sv of rawSeriesOrder) {
       if (topSet.has(sv)) continue;
       for (const xv of xOrder) {
         pairMap.delete(`${xv}${KEY_SEP}${sv}`);
       }
     }
-    rawSeriesOrder.length = 0;
-    for (const sv of sorted.slice(0, seriesCap)) rawSeriesOrder.push(sv);
-
     (chartSpec as { _chartTruncationNote?: string })._chartTruncationNote =
       `Showing top ${seriesCap} of ${totalSeriesBeforeCap} ${seriesCol} by total ${valueCol}; ${
         totalSeriesBeforeCap - seriesCap
       } smaller ${seriesCol}${totalSeriesBeforeCap - seriesCap === 1 ? "" : "s"} not displayed.`;
   }
+
+  rawSeriesOrder.length = 0;
+  for (const sv of keptSeries) rawSeriesOrder.push(sv);
 
   const displayToSanitized = new Map<string, string>();
   const usedSan = new Set<string>();

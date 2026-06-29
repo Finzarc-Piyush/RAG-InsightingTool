@@ -154,7 +154,7 @@ interface SlimDashboard {
  * back to the same coordinates. Format `s{sheetIdx}c{chartIdx}` keeps it
  * short and grepable.
  */
-function chartIdFor(sheetIdx: number, chartIdx: number): string {
+export function chartIdFor(sheetIdx: number, chartIdx: number): string {
   return `s${sheetIdx}c${chartIdx}`;
 }
 
@@ -319,7 +319,7 @@ YOUR CONTRACT
    1. TitleSlide
    2. ExecSummary (TL;DR — populate \`bullets\` from \`answerEnvelope.tldr\` + the 2–4 strongest findings)
    3. KpiRow (when \`answerEnvelope.magnitudes\` has 2+ entries — surface them as tiles)
-   4. Findings — one ChartWithInsight per material chart, in the order the dashboard arranges them
+   4. Findings — one ChartWithInsight per material chart, in the order the dashboard arranges them. When the dashboard has MANY charts (more than ~12), do NOT emit one slide per chart: CURATE the most material charts, group related pairs into TwoChartCompare, and fold the remainder into a SINGLE Appendix slide. Keep the whole deck ≤ 16 slides.
    5. ImplicationsByHorizon (when \`answerEnvelope.implications\` is populated)
    6. Recommendations (when \`answerEnvelope.recommendations\` AND/OR \`businessActions\` are populated; merge into one slide if total ≤ 5, two slides otherwise)
    7. Methodology (always include if \`answerEnvelope.methodology\` exists; goes in back third)
@@ -336,6 +336,7 @@ YOUR CONTRACT
    - Never put Methodology in the first half of the deck.
    - Never produce a deck of fewer than 3 slides (TitleSlide + ExecSummary + at least one chart/recommendation slide is the minimum).
    - Never produce more than 16 slides for a single dashboard — denser is harder to read; merge similar findings or move to Appendix.
+   - NEVER emit more than 30 slides under any circumstance — that is a hard validation cap and the deck will be rejected. With many charts, curate and use ONE Appendix slide rather than one slide per chart.
 `;
 
 function formatSlimDashboardForPrompt(slim: SlimDashboard): string {
@@ -465,7 +466,7 @@ export function buildDeckPlannerUserPrompt(inputs: DeckPlannerInputs): string {
 - Reference charts by their inventory id only.
 - Methodology in the back third.
 - Speaker notes ≥ 20 chars on every slide.
-- Aim for 8–14 slides total; hard cap 16; floor 3.`);
+- Aim for 8–14 slides total; hard cap 16; floor 3. With many charts, curate to the most material and fold the rest into ONE Appendix slide — never exceed 30 slides.`);
 
   return sections.join("\n");
 }
@@ -508,8 +509,10 @@ export async function runDeckPlanner(
   const result = await completeJson(DECK_PLANNER_SYSTEM, finalUser, slideDeckPlanSchema, {
     turnId: `${opts.turnId ?? "deck"}_planner${repair ? "_repair" : ""}`,
     // Generous — a 14-slide deck with rich speaker notes can run 6–8K tokens
-    // of output. 12K leaves headroom without being so large it invites runaway.
-    maxTokens: 12_000,
+    // of output. 16K leaves headroom for the densest (curated, ≤16-slide) decks
+    // without truncating the JSON mid-object (a truncated reply fails the schema
+    // and forces the deterministic fallback).
+    maxTokens: 16_000,
     temperature: 0.3,
     onLlmCall: opts.onLlmCall,
     purpose: LLM_PURPOSE.DECK_PLANNER,

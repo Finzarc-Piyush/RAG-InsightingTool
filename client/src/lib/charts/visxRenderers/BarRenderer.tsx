@@ -305,8 +305,20 @@ function BarRendererImpl({
   // "default" key when no detail encoding is set.
   const colorKeys = useMemo<string[]>(() => {
     if (!colorCh) return [enc.y.field];
-    return Array.from(new Set(data.map((r) => asString(colorCh.accessor(r)))));
-  }, [colorCh, data, enc.y.field]);
+    // W-ORD1 · order series by descending total contribution (not data-encounter
+    // order) so the largest segment sits at the bottom of each stacked bar and
+    // the legend reads big→small — mirroring the server-side seriesKeys ordering
+    // the Recharts chat charts use. Stack order is global across bars.
+    const totals = new Map<string, number>();
+    for (const r of data) {
+      const key = asString(colorCh.accessor(r));
+      const v = asNumber(enc.y.accessor(r));
+      totals.set(key, (totals.get(key) ?? 0) + (Number.isFinite(v) ? v : 0));
+    }
+    return Array.from(totals.keys()).sort(
+      (a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0),
+    );
+  }, [colorCh, data, enc.y]);
   const detailKeys = useMemo<string[]>(() => {
     if (!detailCh) return [""];
     return Array.from(new Set(data.map((r) => asString(detailCh.accessor(r)))));

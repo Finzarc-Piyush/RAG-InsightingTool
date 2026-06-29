@@ -219,6 +219,64 @@ export function verifyDeckPlan(plan: SlideDeckPlan): DeckVerifierResult {
 }
 
 /**
+ * Deterministically fix the MECHANICAL verifier rules that don't need an LLM —
+ * slide ORDERING (rules 2/3/4) and SHORT SPEAKER NOTES (rule 5). Returns a NEW
+ * plan; never mutates the input and never drops a slide. The genuinely-LLM
+ * rules — action-title wording (rule 1) and overloaded bullets (rule 6) — are
+ * deliberately left untouched so the one LLM repair round can address them.
+ *
+ * This is the first half of the export's "verifier is advisory, never fatal"
+ * contract (buildDashboardDeck.ts): we mechanically satisfy what we can BEFORE
+ * spending an LLM repair, so most decks pass without one, and a deck that still
+ * has residual rule-1/6 nits is shipped anyway rather than collapsed to the
+ * 3-slide stub.
+ *
+ * Reorder is a STABLE bucket sort that preserves the original (findings) order
+ * within each bucket:
+ *   [ first TitleSlide?, ...ExecSummary/KpiRow band, ...body, ...Methodology ]
+ * which gives TitleSlide-first, ExecSummary-in-first-half, and
+ * Methodology-in-back-third for any realistic deck. Extra TitleSlides beyond the
+ * first stay in `body` (kept, never lost).
+ */
+export function autoRepairDeckPlan(plan: SlideDeckPlan): SlideDeckPlan {
+  const slides = plan.slides;
+  const titleIdx = slides.findIndex((s) => s.layout === LAYOUT_KIND.TitleSlide);
+
+  const title: SlideSpec[] = [];
+  const front: SlideSpec[] = [];
+  const body: SlideSpec[] = [];
+  const methodology: SlideSpec[] = [];
+  for (let i = 0; i < slides.length; i++) {
+    const s = slides[i]!;
+    if (i === titleIdx) {
+      title.push(s);
+    } else if (s.layout === LAYOUT_KIND.Methodology) {
+      methodology.push(s);
+    } else if (
+      s.layout === LAYOUT_KIND.ExecSummary ||
+      s.layout === LAYOUT_KIND.KpiRow
+    ) {
+      front.push(s);
+    } else {
+      body.push(s);
+    }
+  }
+  const reordered = [...title, ...front, ...body, ...methodology];
+
+  // Pad too-short speaker notes deterministically. `Presenter notes: ` (17) +
+  // the suffix (28) clears the 20-char floor even when actionTitle is empty,
+  // and stays well under the 1500-char schema ceiling.
+  const padded = reordered.map((s): SlideSpec => {
+    const notes = (s.speakerNotes ?? "").trim();
+    if (notes.length >= MIN_SPEAKER_NOTES) return s;
+    const pad = `Presenter notes: ${(s.actionTitle ?? "").trim()} — review before presenting.`;
+    return { ...s, speakerNotes: pad.slice(0, 1500) };
+  });
+
+  return { ...plan, slides: padded };
+}
+
+/**
  * Walks the slot content per layout and flags bullets / captions that pack
  * ≥ 2 distinct numeric magnitudes — the one-message-per-slide rule. Single
  * numbers are fine; the rule is about the bullet, not the deck.

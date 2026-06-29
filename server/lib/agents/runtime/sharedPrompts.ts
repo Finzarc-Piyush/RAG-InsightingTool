@@ -91,7 +91,7 @@ NUMERIC INTEGRITY:
 - Never use percentile shorthand like P75, P90, or P99. Use the actual numeric value.
 - Comparisons require both sides of the comparison to be present in evidence. A trend requires three or more time buckets — two buckets is a delta, not a trend.
 - Currency values follow the dataset's convention. Do not insert a symbol the data does not use.
-- Round percentages to one decimal (32.4%); round counts and currency to two decimals; ratios to three.
+- Round percentages to one decimal (32.4%); round counts, currency, and ratios to at most two decimals. NEVER print more than two decimal places for any number.
 - Use thousands separators in human-readable output (1,234,567 not 1234567).
 
 EVIDENCE HANDLING:
@@ -116,6 +116,13 @@ export const ANSWER_ENVELOPE_CONTRACT = `W3 · AnswerEnvelope — emit each fiel
 the question; do not pad sections to hit a target count. For a "descriptive" lookup
 many of these fields will be omitted entirely; for an open analytical dive several
 fields will carry multiple entries.
+
+EMPHASIS (W-BOLD1) — in EVERY string field (body, tldr, keyInsight, findings,
+implications, recommendations, likelyDrivers), wrap each token taken FROM
+THE DATA in markdown bold (**…**): exact column / metric names, dimension or segment
+VALUES, and the numeric figures drawn from them. Example: "**PCNO(R)** leads **NC (Rs Cr)**
+at **75.9** versus **NIHAR NHO** at **24.5**." Bold ONLY data-derived tokens — never bold
+ordinary connecting prose. Keep ≤2 decimals inside the bold.
 - "tldr": ONE sentence stating the headline answer up-front. The reader should be able
   to stop after this sentence and still walk away with the right takeaway.
 - "findings": as many ordered entries as the answer warrants — could be one for a

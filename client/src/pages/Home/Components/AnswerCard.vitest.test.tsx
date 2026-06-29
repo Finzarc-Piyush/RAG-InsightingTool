@@ -116,9 +116,9 @@ describe('AnswerCard — Highlight Summary', () => {
     expect(screen.queryByText('Why this might be happening')).toBeNull();
   });
 
-  // W-CW2 · machine-precision decimal leaks in finding evidence/magnitude are
-  // compacted at render so "0.6296296296296297" never reaches the reader.
-  test('compacts raw machine-precision decimals in finding evidence', () => {
+  // W-CW2 / W-DEC1 · machine-precision decimal leaks in finding evidence/magnitude
+  // are clamped at render to ≤2 dp so "0.6296296296296297" never reaches the reader.
+  test('clamps raw machine-precision decimals in finding evidence to 2 dp', () => {
     render(
       <AnswerCard
         message={msg({
@@ -131,7 +131,7 @@ describe('AnswerCard — Highlight Summary', () => {
         })}
       />
     );
-    expect(screen.getByText(/0\.6296\b/)).toBeTruthy();
-    expect(screen.queryByText(/0\.6296296296296297/)).toBeNull();
+    expect(screen.getByText(/survival_rate = 0\.63\./)).toBeTruthy();
+    expect(screen.queryByText(/0\.6296/)).toBeNull();
   });
 });
