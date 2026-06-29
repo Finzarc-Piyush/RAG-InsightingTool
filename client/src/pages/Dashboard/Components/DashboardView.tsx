@@ -6,6 +6,7 @@ import { DashboardData } from '../modules/useDashboardState';
 import { useToast } from '@/hooks/use-toast';
 import { dashboardSourceSessions } from '../dashboardSourceSessions';
 import { deepenFollowUps } from '@/shared/followUpDeepening';
+import { isRenderableChart } from '@/shared/chartValidity';
 // W-EXP-12 · The client html-to-image + pptxgenjs imports were the engine
 // of the rastered-screenshot deck path. They're gone — the server now does
 // agentic deck composition (W-EXP-7) and ships a consultant-grade PPTX
@@ -294,16 +295,24 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     // Chart and its keyInsight live in ONE tile — same container, same chat
     // pairing. The render branch in DashboardTiles.tsx pulls keyInsight off
     // tile.chart directly.
-    const baseTiles: DashboardTile[] = activeSheet.charts.map((chart, index) => ({
-      kind: 'chart' as const,
-      id: `chart-${index}`,
-      title: chart.title || `Chart ${index + 1}`,
-      chart,
-      index,
-      metadata: {
-        lastUpdated: dashboard.updatedAt,
-      },
-    }));
+    const baseTiles: DashboardTile[] = activeSheet.charts
+      .map((chart, index) => ({
+        kind: 'chart' as const,
+        id: `chart-${index}`,
+        title: chart.title || `Chart ${index + 1}`,
+        chart,
+        index,
+        metadata: {
+          lastUpdated: dashboard.updatedAt,
+        },
+      }))
+      // A line/area/scatter chart whose x-axis has < 2 distinct points is a
+      // degenerate single-dot trendline — hide the WHOLE tile (chart + insight
+      // + chrome), so an already-saved one disappears on view without a DB
+      // rewrite. Same rule the server applies at finalize. Filter AFTER the map
+      // so tile ids stay pinned to original chart positions. See
+      // @/shared/chartValidity.
+      .filter((tile) => isRenderableChart(tile.chart));
 
     const tableTiles: DashboardTile[] = (activeSheet.tables ?? []).map((table, index) => ({
       kind: 'table',

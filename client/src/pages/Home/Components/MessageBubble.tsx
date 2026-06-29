@@ -7,6 +7,7 @@ import {
   TemporalDisplayGrain,
   type TemporalFacetColumnMeta,
 } from '@/shared/schema';
+import { isRenderableChart } from '@/shared/chartValidity';
 import { User, Bot, Edit2, Check, X as XIcon, Info } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { InsightCard } from './InsightCard';
@@ -800,13 +801,23 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
         {!isUser && !isDashboardMode && (
           <>
             {/* Show existing charts */}
-            {message.charts && message.charts.length > 0 && (
+            {(() => {
+              // Hide degenerate single-point trendlines (line/area/scatter with
+              // < 2 distinct x-points) so an already-saved one disappears on
+              // view. Preserve each chart's ORIGINAL index so sort persistence
+              // (updateMessageChartSort) still targets the right chart. Same
+              // rule the server applies at finalize. See @/shared/chartValidity.
+              const renderableCharts = (message.charts ?? [])
+                .map((chart, idx) => ({ chart, idx }))
+                .filter(({ chart }) => isRenderableChart(chart));
+              if (renderableCharts.length === 0) return null;
+              return (
               <div className={`mt-3 grid gap-4 ${
-                message.charts.length === 1 
-                  ? 'grid-cols-1' 
+                renderableCharts.length === 1
+                  ? 'grid-cols-1'
                   : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'
               }`}>
-                {message.charts.map((chart, idx) => {
+                {renderableCharts.map(({ chart, idx }) => {
                   // Check if this correlation chart is still loading based on thinking steps
                   const isCorrelationChart = chart.type === 'scatter' && (chart as any)._isCorrelationChart;
                   const chartLoadingState = isCorrelationChart && thinkingSteps 
@@ -846,7 +857,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                             <ChartRenderer
                               chart={localSpec}
                               index={idx}
-                              isSingleChart={message.charts!.length === 1}
+                              isSingleChart={renderableCharts.length === 1}
                               enableFilters
                               isLoading={chartLoadingState.isLoading}
                               loadingProgress={chartLoadingState.progress}
@@ -863,7 +874,8 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                   );
                 })}
               </div>
-            )}
+              );
+            })()}
 
             {!isUser &&
               precedingUserQuestion &&

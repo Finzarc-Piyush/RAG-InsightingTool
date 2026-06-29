@@ -32,6 +32,7 @@ import {
   validateChartAgainstIntent,
   chartIntentGuardEnabled,
 } from "../chartIntentGuard.js";
+import { isDegenerateTrendChart } from "../../../../shared/chartValidity.js";
 import type { ChartSpec } from "../../../../shared/schema.js";
 import type { IntentEnvelope } from "../types.js";
 
@@ -81,6 +82,25 @@ export function finalizeMergedCharts(
       mergedCharts.length = 0;
       for (const c of kept) mergedCharts.push(c);
     }
+  }
+
+  // Single-point trend guard (UNCONDITIONAL). A line/area/scatter chart whose
+  // x-axis materialized to < 2 distinct points is a degenerate "single dot" — a
+  // trendline with nothing to connect. Drop it regardless of which builder
+  // emitted it: in dashboard mode the grain authority is called with
+  // `allowSingleBucket: true` ("one honest point as a last resort"), and the
+  // raw-date-column fallback can collapse to one point too — this is the single
+  // seam where the MATERIALIZED data (hence the real point count) is known. See
+  // server/shared/chartValidity.ts. Runs before dedupe/cap so degenerate charts
+  // never consume a cap slot.
+  const renderable = mergedCharts.filter((c) => !isDegenerateTrendChart(c));
+  if (renderable.length !== mergedCharts.length) {
+    agentLog("finalize_charts_single_point_trend_dropped", {
+      before: mergedCharts.length,
+      after: renderable.length,
+    });
+    mergedCharts.length = 0;
+    for (const c of renderable) mergedCharts.push(c);
   }
 
   const seen = new Set<string>();
