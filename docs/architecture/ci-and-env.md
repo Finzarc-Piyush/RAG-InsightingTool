@@ -125,6 +125,8 @@ cleanly and that `api/data-ops/requirements.txt` pins versions via
 
 ## Recent changes
 
+- **Wave W-WEB (2026-06-30)** — `WEB_SEARCH_ENABLED` flipped to **default-ON** in [`featureFlags.ts`](../../server/lib/featureFlags.ts). The default provider path is free (Wikipedia + GDELT, `WEB_SEARCH_PROVIDER=auto`, no key) and degrades to a knowledge-floor fallback, so it is zero-cost. **Deploy revert:** set `WEB_SEARCH_ENABLED=false`. `TAVILY_API_KEY` optional (quality upgrade only). See `docs/WAVES.md`.
+
 - **Wave F8** — pinned `vitest@^2.1.9` in
   `client/devDependencies`; switched the test script from
   `npx --yes vitest@^2 …` to `vitest run …`. CI `npm ci` now

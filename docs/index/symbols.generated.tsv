@@ -280,7 +280,7 @@ AppLoadingScreenProps	type	client/src/components/AppLoadingScreen.tsx	4
 applyActiveFilter	function	server/lib/activeFilter/applyActiveFilter.ts	92
 applyActiveFilterFromIntent	function	server/lib/activeFilter/persistActiveFilter.ts	18
 applyAddComputedColumns	function	server/lib/computedColumns.ts	213
-applyAnalysisBriefDigestToSession	function	server/lib/sessionAnalysisContext.ts	391
+applyAnalysisBriefDigestToSession	function	server/lib/sessionAnalysisContext.ts	396
 applyCap	function	server/lib/agents/runtime/promptBudget.ts	246
 applyChartFilters	const	client/src/lib/chartFilters.ts	440
 applyChartInsightsBySignature	function	server/lib/applyChartInsightsBySignature.ts	24
@@ -477,7 +477,7 @@ buildHeaderKeysFromGrid	function	server/lib/tableStructure/applyRegion.ts	73
 buildHierarchyEditHeadline	function	client/src/pages/Admin/lib/semanticModelHierarchyLevels.ts	151
 buildHierarchyEditSubmitLabel	function	client/src/pages/Admin/lib/semanticModelHierarchyLevels.ts	161
 buildIdentityGraph	function	server/lib/financeMetricAuthority.ts	525
-buildInitialAssistantContentFromContext	function	server/lib/sessionAnalysisContext.ts	488
+buildInitialAssistantContentFromContext	function	server/lib/sessionAnalysisContext.ts	493
 buildInsightRegenPrompt	function	server/lib/insightRegen.ts	242
 buildIntermediateInsight	function	server/lib/agents/runtime/buildIntermediateInsight.ts	30
 buildInvariantLine	function	server/scripts/lib/bootstrapSections.ts	87
@@ -1243,7 +1243,7 @@ DetectDateTimePairsOptions	interface	server/lib/detectDateTimePairs.ts	37
 detectDescribe	function	server/lib/dataOps/intent/detectDescribe.ts	10
 detectDurationColumns	function	server/lib/fileParser.ts	189
 DetectedPeriodColumn	interface	server/lib/periodColumnResolver.ts	45
-detectExternalClaims	function	server/lib/agents/runtime/utils/externalClaimDetector.ts	127
+detectExternalClaims	function	server/lib/agents/runtime/utils/externalClaimDetector.ts	139
 detectFillNulls	function	server/lib/dataOps/intent/detectFillNulls.ts	12
 detectHowManyRowsCols	function	server/lib/dataOps/intent/detectHowManyRowsCols.ts	11
 detectIndicatorColumns	function	server/lib/detectIndicatorColumns.ts	183
@@ -1489,7 +1489,7 @@ ExposedToggle	function	client/src/pages/Admin/components/semanticModelCells.tsx	
 ExternalClaim	interface	server/lib/agents/runtime/utils/externalClaimDetector.ts	46
 ExternalClaimReport	interface	server/lib/agents/runtime/utils/externalClaimDetector.ts	56
 ExternalClaimType	type	server/lib/agents/runtime/utils/externalClaimDetector.ts	38
-extractAndPersistUserHierarchies	function	server/lib/sessionAnalysisContext.ts	247
+extractAndPersistUserHierarchies	function	server/lib/sessionAnalysisContext.ts	252
 extractCitations	function	client/src/lib/citationTokens.ts	42
 extractColumnsFromHistory	function	server/lib/agents/utils/columnExtractor.ts	209
 extractColumnsFromMessage	function	server/lib/columnExtractor.ts	123
@@ -1633,10 +1633,10 @@ finiteOrZero	function	server/lib/exports/pptx/chartValueSanitize.ts	26
 fitLinearTrend	function	client/src/lib/charts/layers.ts	88
 fitLogLogElasticity	function	server/lib/agents/runtime/tools/priceElasticityTool.ts	183
 FitMetrics	interface	server/lib/dataOps/mmmService.ts	30
-flagDefault	function	server/lib/featureFlags.ts	319
+flagDefault	function	server/lib/featureFlags.ts	325
 FlagLifecycle	type	server/lib/featureFlags.ts	36
-FlagListing	interface	server/lib/featureFlags.ts	304
-FlagName	type	server/lib/featureFlags.ts	285
+FlagListing	interface	server/lib/featureFlags.ts	310
+FlagName	type	server/lib/featureFlags.ts	291
 FlagSpec	interface	server/lib/featureFlags.ts	39
 FlatAnalysisCellLookups	interface	client/src/pages/Home/Components/DataPreviewTable/FlatAnalysisCell.tsx	13
 flattenPivotTree	function	client/src/lib/pivot/buildPivotModel.ts	493
@@ -2070,7 +2070,7 @@ isDuckDBAvailable	function	server/lib/columnarStorage.ts	47
 isEditableTarget	function	client/src/pages/Dashboard/context/DashboardEditModeContext.tsx	67
 isExhaustiveBreadthEnabled	function	server/lib/agents/runtime/dashboardFeatureSweep.ts	468
 isExplicitDateLikeForPreview	function	client/src/lib/localPreviewParser.ts	88
-isFlagOn	function	server/lib/featureFlags.ts	295
+isFlagOn	function	server/lib/featureFlags.ts	301
 isGenericRecommendation	function	server/lib/recommendationQualityGuard.ts	62
 isIdColumn	function	server/lib/columnIdHeuristics.ts	4
 isIdentifierLikeNumericColumn	function	server/lib/columnIdHeuristics.ts	56
@@ -2175,7 +2175,7 @@ listCitedPackIds	function	client/src/lib/citationTokens.ts	86
 listDashboardsController	const	server/controllers/dashboardController.ts	93
 listDatabases	function	server/lib/snowflakeService.ts	242
 listDomainContextPacks	function	server/controllers/adminDomainContextController.ts	37
-listFlags	function	server/lib/featureFlags.ts	312
+listFlags	function	server/lib/featureFlags.ts	318
 listMemoryEntries	function	server/models/analysisMemory.model.ts	119
 ListMemoryOptions	interface	server/models/analysisMemory.model.ts	108
 listPastAnalysesForSession	function	server/models/pastAnalysis.model.ts	387
@@ -2310,8 +2310,8 @@ mergeIntermediateSegmentPivotDefaults	function	server/lib/diagnosticIntermediate
 mergePivotDefaultRowsAndValues	function	server/lib/pivotDefaultsFromExecution.ts	217
 mergePivotDefaultsForResponse	function	server/services/chat/chatStreamPivotDefaults.ts	32
 mergePivotSliceDefaults	function	server/lib/pivotSliceDefaultsFromDimensionFilters.ts	83
-mergeSessionAnalysisContextAssistantLLM	function	server/lib/sessionAnalysisContext.ts	419
-mergeSessionAnalysisContextUserLLM	function	server/lib/sessionAnalysisContext.ts	198
+mergeSessionAnalysisContextAssistantLLM	function	server/lib/sessionAnalysisContext.ts	424
+mergeSessionAnalysisContextUserLLM	function	server/lib/sessionAnalysisContext.ts	203
 mergeSuggestedQuestions	function	server/lib/suggestedQuestions.ts	14
 Message	type	server/shared/schema/charts.ts	2007
 MessageActionsBar	function	client/src/pages/Home/Components/MessageActionsBar.tsx	25
@@ -2556,8 +2556,8 @@ PersistedSpawnedQuestion	interface	server/lib/agents/runtime/spawnedQuestionPers
 PERSISTENCE_QUALIFIER_RE	const	server/lib/agents/runtime/extractUserDirectives.ts	53
 PersistJob	interface	server/lib/persistenceQueue.ts	31
 persistLifecycleMemory	function	server/lib/agents/runtime/memoryLifecycleBuilders.ts	336
-persistMergeAssistantSessionContext	function	server/lib/sessionAnalysisContext.ts	545
-persistMidTurnAssistantSessionContext	function	server/lib/sessionAnalysisContext.ts	445
+persistMergeAssistantSessionContext	function	server/lib/sessionAnalysisContext.ts	550
+persistMidTurnAssistantSessionContext	function	server/lib/sessionAnalysisContext.ts	450
 PersistOutcome	type	server/lib/persistenceQueue.ts	29
 persistQueuedQuestion	function	client/src/lib/chat/earlyQuestionRefire.ts	77
 persistTurnCheckpoint	function	server/lib/agents/runtime/agentLoop/checkpointPhase.ts	36
@@ -2877,7 +2877,7 @@ REGENERATE_EVENT	const	client/src/lib/chat/regeneratePrompt.ts	33
 RegenerateButton	function	client/src/pages/Home/Components/RegenerateButton.tsx	43
 RegenerateConstraint	type	client/src/lib/chat/regeneratePrompt.ts	11
 RegenerateEventDetail	interface	client/src/lib/chat/regeneratePrompt.ts	35
-regenerateStarterQuestionsLLM	function	server/lib/sessionAnalysisContext.ts	168
+regenerateStarterQuestionsLLM	function	server/lib/sessionAnalysisContext.ts	173
 regenInsightForFilteredView	function	server/lib/insightRegen.ts	335
 RegenInsightRequest	type	server/lib/insightRegen.ts	88
 regenInsightRequestSchema	const	server/lib/insightRegen.ts	67
@@ -3286,7 +3286,7 @@ shouldBuildDashboard	function	server/lib/agents/runtime/dashboardAutogenGate.ts	
 shouldBuildDeterministicAnalyticalCharts	function	server/lib/analyticalChartBuilders.ts	8
 shouldDecompose	function	server/lib/agents/runtime/decompositionGate.ts	42
 shouldEmitIntermediatePivotFlush	function	server/services/chat/intermediatePivotPolicy.ts	107
-shouldExtractUserHierarchies	function	server/lib/sessionAnalysisContext.ts	235
+shouldExtractUserHierarchies	function	server/lib/sessionAnalysisContext.ts	240
 shouldHoldPollForRefire	function	client/src/lib/chat/earlyQuestionRefire.ts	48
 shouldRefireEarlyQuestion	function	client/src/lib/chat/earlyQuestionRefire.ts	34
 shouldRejectWideWithoutAgg	function	server/lib/questionAggregationPolicy.ts	71
@@ -3417,7 +3417,7 @@ summariseAutomation	const	server/models/automation.model.ts	150
 summarizeChartFilters	const	client/src/lib/chartFilters.ts	529
 summarizeConfidenceTiers	function	server/lib/agents/runtime/scaleNarrativeByConfidence.ts	230
 summarizeContextForPrompt	function	server/lib/agents/runtime/context.ts	789
-summarizeExternalClaims	function	server/lib/agents/runtime/utils/externalClaimDetector.ts	160
+summarizeExternalClaims	function	server/lib/agents/runtime/utils/externalClaimDetector.ts	172
 summarizeFilteredData	function	server/lib/insightRegen.ts	141
 summarizeNarratorConfidence	function	server/lib/agents/runtime/narratorHintsBlock.ts	280
 summarizePastAnalysisRows	function	server/lib/admin/metricsAggregator.ts	233
@@ -3596,12 +3596,12 @@ updateMessagePivotStateEndpoint	const	server/controllers/sessionController.ts	80
 updateProcessedDataBlob	const	server/lib/blobStorage.ts	295
 updateRequestContext	function	server/lib/telemetry/requestContext.ts	56
 updateSessionContextEndpoint	const	server/controllers/sessionController.ts	615
-updateSessionDimensionHierarchies	function	server/lib/sessionAnalysisContext.ts	364
+updateSessionDimensionHierarchies	function	server/lib/sessionAnalysisContext.ts	369
 updateSessionFileName	const	server/models/chat.model.ts	1677
 updateSessionNameEndpoint	const	server/controllers/sessionController.ts	533
 updateSessionPermanentContext	const	server/models/chat.model.ts	1812
 updateSessionPinned	const	server/models/chat.model.ts	1743
-updateSessionSchemaAnnotations	function	server/lib/sessionAnalysisContext.ts	301
+updateSessionSchemaAnnotations	function	server/lib/sessionAnalysisContext.ts	306
 updateTableCaption	const	server/models/dashboard.model.ts	1179
 updateTableCaptionController	const	server/controllers/dashboardController.ts	496
 updateTableCaptionRequestSchema	const	server/shared/schema/charts.ts	3037
@@ -3614,7 +3614,7 @@ UploadJobStatusView	interface	server/utils/uploadQueue.ts	91
 uploadLimits	const	server/config/uploadLimits.ts	25
 UploadPath	type	server/utils/uploadTelemetry.ts	11
 UploadPhase	type	client/src/lib/api/uploadStatus.ts	4
-uploadQueue	const	server/utils/uploadQueue.ts	1810
+uploadQueue	const	server/utils/uploadQueue.ts	1813
 UploadResponse	type	server/shared/schema/charts.ts	2457
 uploadResponseSchema	const	server/shared/schema/charts.ts	2443
 UploadTelemetry	interface	server/utils/uploadTelemetry.ts	18
