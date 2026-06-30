@@ -88,13 +88,20 @@ function buildCandidate(grid: CellGrid, block: ColumnBlock): DetectionCandidate 
 
   const [hs, he] = extendHeaderRun(grid, bestH, block);
 
-  // Data extent: last non-blank row at/after the header.
+  // Data extent: end at the last DENSE row (≥ MIN_ROW_DENSITY), trimming any
+  // trailing stray-value rows (e.g. formula/footer cells below the table whose
+  // dimension columns are blank) that would otherwise become phantom
+  // null-dimension buckets. Fall back to the last non-blank row when NO row is
+  // dense (a legitimately sparse table — don't collapse it).
   const ds = he + 1;
   let de = ds;
+  let lastDense = -1;
   for (let r = ds; r < rowsN; r++) {
     const s = rowStatsInRange(grid[r]!, c0, c1, r);
     if (s.nonEmpty > 0) de = r;
+    if (s.density >= MIN_ROW_DENSITY) lastDense = r;
   }
+  if (lastDense >= ds) de = lastDense;
   const dataRows = Math.max(0, de - ds + 1);
   const width = c1 - c0 + 1;
   const score = Math.max(0, bestScore) * Math.log1p(dataRows) * width;

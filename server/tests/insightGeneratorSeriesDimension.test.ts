@@ -99,9 +99,14 @@ describe("buildDeterministicChartInsightFallback", () => {
     assert.match(fallback, /Category "Technology" leads on/);
     // IUX2 · the de-jargoned fallback must not emit banned vocabulary / anti-patterns.
     assert.doesNotMatch(fallback, /\bp75\b|prioritize|weaker segments/i);
+    // Case-SENSITIVE: the X-dimension LABEL is "Region" (capital). The generic
+    // DO-lane lever "break it down by region, pack or channel" is lowercase and
+    // is NOT a reference to the X-dimension — matching it case-insensitively was
+    // an over-broad false positive. The guard's real intent is "don't name the
+    // X-dimension label as the winner".
     assert.doesNotMatch(
       fallback,
-      /Region/i,
+      /\bRegion\b/,
       "fallback must not reference the X-dimension when winner is a series"
     );
   });

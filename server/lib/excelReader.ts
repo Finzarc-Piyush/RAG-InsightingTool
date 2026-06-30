@@ -31,6 +31,7 @@ import { estimateExcelRowsFromRef } from './excelRowEstimate.js';
 import { normalizeValue, headerLabel } from './excelCellValue.js';
 import { isFlagOn } from './featureFlags.js';
 import { worksheetToGrid } from './tableStructure/grid.js';
+import { trimTrailingSparseRows } from './tableStructure/rowProfile.js';
 import { detectTableFromGrid } from './tableStructure/detectTable.js';
 import {
   buildHeaderKeys,
@@ -94,7 +95,11 @@ function buildRowsFromRegion(
     if (allEmpty) continue;
     rows.push(rec);
   }
-  return rows;
+  // Drop trailing stray-value rows (e.g. formula cells below the table whose
+  // dimension columns are blank) so they don't become phantom null-dimension
+  // buckets like a "null" Month. Reads to ws.rowCount when the scan window was
+  // exhausted, so this is the gate that catches junk below row ~200.
+  return trimTrailingSparseRows(rows);
 }
 
 /**
@@ -180,5 +185,5 @@ export async function readExcelObjectRows(
     rows.push(rec);
   }
 
-  return { sheetName, availableSheets, rows };
+  return { sheetName, availableSheets, rows: trimTrailingSparseRows(rows) };
 }

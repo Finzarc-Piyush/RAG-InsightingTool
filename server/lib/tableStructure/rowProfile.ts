@@ -91,6 +91,58 @@ export function rowStatsInRange(row: GridCell[], c0: number, c1: number, index =
   };
 }
 
+/**
+ * Density floor a row must clear to count as a real DATA row (vs a stray
+ * formula/footer cell below the table). Mirrors `detectRegion.MIN_ROW_DENSITY`
+ * (0.3) — kept here to avoid an import cycle (detectRegion imports rowProfile).
+ */
+export const ROW_DENSITY_FLOOR = 0.3;
+
+/**
+ * Is this row dense enough to be a real data row? `nonNull` is the count of
+ * populated cells; `columnCount` the table width. The `max(1, …)` floor means
+ * narrow 2–3 column tables behave exactly like the old "any non-empty cell"
+ * rule (no regression); wide tables (the Marico 42-col sheet) require ≥30% of
+ * cells filled, which excludes a trailing row carrying a single stray value.
+ */
+export function isRealDataRow(nonNull: number, columnCount: number): boolean {
+  if (columnCount <= 0) return nonNull > 0;
+  const threshold = Math.max(1, Math.ceil(columnCount * ROW_DENSITY_FLOOR));
+  return nonNull >= threshold;
+}
+
+/**
+ * Drop TRAILING rows that fall below the data-row density floor — the stray
+ * formula/footer cells below the real table (a blank dimension column with a
+ * lone value), which otherwise become a phantom null-dimension bucket (e.g. a
+ * "null" Month) once grouped. Interior sparse rows are KEPT (a sparse row that
+ * is followed by a real row is genuine). If NO row qualifies — a legitimately
+ * sparse table — nothing is trimmed, so we never wipe real data.
+ *
+ * Operates on already-materialised object rows (every row shares the region's
+ * header keys, so the column count is stable) — reused by the Excel detect /
+ * legacy paths and the CSV path.
+ */
+export function trimTrailingSparseRows(
+  rows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  if (rows.length === 0) return rows;
+  const colCount = Object.keys(rows[0]!).length;
+  const nonNullCount = (rec: Record<string, unknown>): number => {
+    let n = 0;
+    for (const v of Object.values(rec)) {
+      if (v !== null && v !== undefined && v !== "") n++;
+    }
+    return n;
+  };
+  let lastReal = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (isRealDataRow(nonNullCount(rows[i]!), colCount)) lastReal = i;
+  }
+  if (lastReal < 0) return rows; // all-sparse table — don't wipe it
+  return rows.slice(0, lastReal + 1);
+}
+
 /** Per-row profiles across the full grid width. */
 export function profileRows(grid: CellGrid): RowProfile[] {
   const cols = gridColCount(grid);

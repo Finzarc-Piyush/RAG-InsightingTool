@@ -29,6 +29,25 @@ describe('tableStructure/detectRegion', () => {
     assert.equal(region.triviallyClean, false);
   });
 
+  it('trims trailing stray-value rows below the table (phantom null-dimension guard)', () => {
+    // Real data rows are dense; the trailing rows carry a lone formula/footer
+    // value with a blank dimension column — they must NOT extend dataRowEnd, or
+    // they become a phantom "null" Month/Channel bucket once grouped.
+    const grid = matrixToGrid([
+      ['Month', 'Channel', 'Volume', 'NR'],
+      ['Apr', 'GT', '176.84', '3.94'],
+      ['Apr', 'MT', '301.82', '8.01'],
+      ['May', 'CSD', '51.70', '2.73'],
+      ['', '', '', '999'], // trailing stray value, blank dimensions
+      ['', '', '', '0'], // trailing stray value, blank dimensions
+    ]);
+    const { region } = detectRegion(grid);
+    assert.equal(region.dataRowStart, 1);
+    // dataRowEnd must stop at the last DENSE row (index 3 = "May/CSD"), not the
+    // greedy last-non-empty row (index 5).
+    assert.equal(region.dataRowEnd, 3);
+  });
+
   it('isolates the main table from a gap-separated side table', () => {
     const grid = matrixToGrid([
       ['Marico India Ltd', '', '', '', '', ''],
