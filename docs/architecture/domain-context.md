@@ -126,3 +126,6 @@ When sources of context speak about the same thing, follow this order:
 | [`tests/domainContextWiring.test.ts`](../../server/tests/domainContextWiring.test.ts) | Block injection in planner + reflector prompts |
 | [`tests/adminDomainContextRoute.test.ts`](../../server/tests/adminDomainContextRoute.test.ts) | Admin endpoint auth, validation, error paths |
 | [`tests/promptCacheEligibility.test.ts`](../../server/tests/promptCacheEligibility.test.ts) (existing) | Confirms WD7 did not break the system-prompt prefix cache |
+
+## Recent changes
+- Wave W-INSIGHT (2026-06-30) — added a qualitative "Performance framing" section to `fmcg-distribution-channels-india.md` (channel maturity priors: GT-leads is the baseline not a finding; judge each channel on its own yardstick). No numbers — doctrine preserved. See `docs/WAVES.md`.
