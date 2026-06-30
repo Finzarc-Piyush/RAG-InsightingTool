@@ -4,6 +4,7 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { sessionsApi } from "@/lib/api";
 import { getUserEmail } from "@/utils/userStorage";
+import { shouldSelfMintSessionUrl } from "@/lib/shouldSelfMintSessionUrl";
 import type { SessionsResponse, LoadedSessionData } from "@/pages/Analysis/types";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -197,9 +198,18 @@ function Router() {
   // the rehydration effect doesn't double-fetch (the doc may not yet
   // exist on the server during an in-flight upload). Consumed once.
   const selfMintedSessionRef = useRef<string | null>(null);
+  // Tracks the sessionId Home reported last, so `handleSessionChange` can tell
+  // a genuine new mint (null → real) from a STALE ECHO of a session we just
+  // left. Self-minting on a stale echo restored a just-stripped URL with no
+  // loaded snapshot — the "New analysis" infinite-loader trap (L-040).
+  const lastReportedSessionIdRef = useRef<string | null>(null);
   const handleSessionChange = (sessionId: string | null, fileName: string | null) => {
+    const prevReported = lastReportedSessionIdRef.current;
+    lastReportedSessionIdRef.current = sessionId;
     setLastChatFileName(fileName);
-    if (sessionId && !urlSessionId && location.startsWith('/analysis')) {
+    if (
+      shouldSelfMintSessionUrl({ reported: sessionId, prevReported, urlSessionId, location })
+    ) {
       selfMintedSessionRef.current = sessionId;
       setLocation(`/analysis/${sessionId}`, { replace: true });
     }

@@ -11,7 +11,7 @@ import { automationsApi, runAutomationStream } from '@/lib/api';
 import { PriorInvestigationsBanner } from './Components/PriorInvestigationsBanner';
 import { ContextModal } from './Components/ContextModal';
 import { DataSummaryModal } from './Components/DataSummaryModal';
-import { useHomeState, useHomeMutations, useHomeHandlers, useSessionLoader } from './modules';
+import { useHomeState, useHomeMutations, useHomeHandlers, useSessionLoader, useNotifySessionChange } from './modules';
 import { sessionsApi } from '@/lib/api';
 import { useToast } from '@/hooks/use-toast';
 import { logger } from '@/lib/logger';
@@ -629,12 +629,12 @@ export default function Home({ resetTrigger = 0, loadedSessionData, onSessionCha
     setIndicators,
   });
 
-  // Notify parent when sessionId or fileName changes
-  useEffect(() => {
-    if (onSessionChange) {
-      onSessionChange(sessionId, fileName);
-    }
-  }, [sessionId, fileName, onSessionChange]);
+  // Notify parent when sessionId or fileName changes. Gated on the VALUES
+  // only (not the callback identity) so a parent re-render that churns the
+  // `onSessionChange` closure can't replay a STALE sessionId back to App and
+  // self-mint the URL — which trapped "New analysis" in an infinite loader
+  // (L-040). See useNotifySessionChange for the full why.
+  useNotifySessionChange(sessionId, fileName, onSessionChange);
 
   useEffect(() => {
     setPivotEntries(buildChatPivotNavEntries(messages));
