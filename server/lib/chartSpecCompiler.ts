@@ -7,24 +7,23 @@ import { findMatchingColumn } from "./agents/utils/columnMatcher.js";
 import type { ChartSpec } from "../shared/schema.js";
 import { AGG_SUFFIX } from "../shared/pivot/aggregationPatterns.js";
 import { HEATMAP_MAX_COL_KEYS, HEATMAP_MAX_ROW_KEYS } from "../shared/pivot/chartLimits.js";
-
-/** Names whose values DON'T sum to a meaningful whole — rates, %, scores, means. */
-const NON_ADDITIVE_METRIC_RX =
-  /\b(rate|adher|adherence|compliance|pct|percent|percentage|ratio|share|score|index|avg|average|mean)\b/i;
+import { isNonAdditiveMetric } from "./financeMetricAuthority.js";
 
 /**
  * Grouped (side-by-side) vs stacked default for a multi-series bar. Stacking
  * only reads correctly for ADDITIVE measures (counts/amounts that sum to a
  * meaningful total); a rate/%/score/mean series must be GROUPED so each bar is
  * directly comparable rather than implying a nonsense stacked total. An explicit
- * `barLayout` on the proposal always wins over this default.
+ * `barLayout` on the proposal always wins over this default. Additivity is
+ * decided by the metric-semantics authority (incl. the literal "%" the old
+ * regex missed) — see docs/conventions/metric-additivity.md.
  */
 function defaultBarLayout(
   yName: string,
   aggregate?: string
 ): "grouped" | "stacked" {
   if (aggregate === "mean") return "grouped";
-  if (NON_ADDITIVE_METRIC_RX.test(yName.replace(/[_-]+/g, " "))) return "grouped";
+  if (isNonAdditiveMetric(yName)) return "grouped";
   return "stacked";
 }
 

@@ -406,6 +406,7 @@ export async function proposeAndBuildExtraCharts(
       }
       const processed = processChartData(chartRows, spec, ctx.summary.dateColumns, {
         chartQuestion: ctx.question,
+        columnMeta: ctx.summary.columns,
       });
       built.push(finishChartSpec(spec, processed));
     } catch {

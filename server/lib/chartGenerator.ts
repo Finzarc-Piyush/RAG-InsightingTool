@@ -16,13 +16,88 @@ import { logger } from "./logger.js";
 import { KEY_SEP } from "./compositeKey.js";
 import { toNumber } from "./numberCoercion.js";
 import { applyChartSort, resolveSort } from "../shared/chartSort.js";
+import { aggregationPolicyFor, type AggPolicy } from "./financeMetricAuthority.js";
 
 export type ProcessChartDataOptions = {
   /** Used to pick date bucket (year/month/...) for aggregated line charts and downsampling. */
   chartQuestion?: string;
   /** Explicit grain override (from build_chart `grain`); wins over chartQuestion. */
   grain?: DatePeriod | null;
+  /**
+   * Per-column metric-semantics tags (W6) stamped at enrichment onto
+   * DataSummary.columns. When present, additivity/numerator/denominator come
+   * from the DURABLE signal rather than a name-match — the model object isn't
+   * on the chart context, so this is how the structured signal reaches the math.
+   */
+  columnMeta?: ReadonlyArray<{
+    name: string;
+    additivity?: "additive" | "non_additive";
+    ratioNumeratorColumn?: string;
+    ratioDenominatorColumn?: string;
+  }>;
 };
+
+/**
+ * THE one place chart aggregation is chosen. Additive metrics SUM (unchanged);
+ * a non-additive metric (GC%, margin %, realization …) is NEVER summed — it walks
+ * the authority's ladder: recompute (Σnum/Σden) → weighted_mean → mean. An explicit
+ * caller `mean`/`count` is honoured; an explicit/coerced `sum` on a non-additive
+ * metric is OVERRIDDEN (this is the "sum of GC%" fix). Returns the string the
+ * legacy switch understands plus the optional richer policy.
+ */
+type ResolvedAggregation = {
+  effective: "sum" | "mean" | "count";
+  policy?: AggPolicy;
+  additivity: "additive" | "non_additive";
+  aggPolicyLabel: "sum" | "mean" | "weighted_mean" | "recompute";
+};
+
+function resolveAggregation(
+  requested: ChartSpec["aggregate"],
+  yCol: string,
+  frameColumns: readonly string[],
+  columnMeta?: ProcessChartDataOptions["columnMeta"],
+): ResolvedAggregation {
+  const meta = columnMeta?.find((c) => c.name === yCol);
+  // Durable per-column tag (W6) wins; else the authority decides from the name.
+  let policy: AggPolicy;
+  if (meta?.additivity === "non_additive") {
+    // Weighted-mean by the denominator preserves the column's scale (percent-points
+    // stay percent-points); recompute from raw parts would yield the fraction.
+    if (meta.ratioDenominatorColumn && frameColumns.includes(meta.ratioDenominatorColumn)) {
+      policy = { op: "weighted_mean", weightColumn: meta.ratioDenominatorColumn };
+    } else {
+      policy = { op: "mean" };
+    }
+  } else if (meta?.additivity === "additive") {
+    policy = { op: "sum" };
+  } else {
+    policy = aggregationPolicyFor(yCol, { frameColumns });
+  }
+  const additivity = policy.op === "sum" ? "additive" : "non_additive";
+
+  // An explicit caller `count` is honoured outright (a distinct intent).
+  if (requested === "count") return { effective: "count", additivity, aggPolicyLabel: additivity === "additive" ? "sum" : "mean" };
+
+  if (policy.op === "sum") {
+    // Additive — preserve an explicit mean, else default to sum (unchanged behaviour).
+    const effective = requested && requested !== "none" ? (requested as "sum" | "mean") : "sum";
+    return { effective, additivity, aggPolicyLabel: effective === "mean" ? "mean" : "sum" };
+  }
+  // Non-additive — NEVER sum. recompute/weighted_mean carry a policy; mean is plain.
+  return {
+    effective: "mean",
+    policy: policy.op === "mean" ? undefined : policy,
+    additivity,
+    aggPolicyLabel: policy.op,
+  };
+}
+
+/** Stamp the metric-semantics sidecar on the spec (telemetry + title relabel, W7). */
+function stampAggregation(chartSpec: ChartSpec, r: ResolvedAggregation): void {
+  chartSpec.metricAdditivity = r.additivity;
+  chartSpec.aggPolicy = r.aggPolicyLabel;
+}
 
 /** Safe object key for pivoted series (Recharts dataKey). */
 export function sanitizeSeriesKey(raw: string): string {
@@ -40,9 +115,13 @@ export function pivotLongToWideBar(
   seriesCol: string,
   valueCol: string,
   aggregate: "sum" | "mean" | "count",
-  chartSpec: ChartSpec
+  chartSpec: ChartSpec,
+  policy?: AggPolicy
 ): { rows: Record<string, any>[]; seriesKeys: string[] } {
   const pairMap = new Map<string, number[]>();
+  // Parallel Σnum / Σden per (x,series) cell — backs recompute / weighted_mean so
+  // a ratio series is rebuilt correctly instead of summed/averaged per cell.
+  const ratioMap = new Map<string, { num: number; den: number }>();
   const xOrder: string[] = [];
   const xSeen = new Set<string>();
   const rawSeriesOrder: string[] = [];
@@ -68,6 +147,18 @@ export function pivotLongToWideBar(
     if (isNaN(n)) continue;
     if (!pairMap.has(key)) pairMap.set(key, []);
     pairMap.get(key)!.push(n);
+    if (policy?.op === "recompute" || policy?.op === "weighted_mean") {
+      if (!ratioMap.has(key)) ratioMap.set(key, { num: 0, den: 0 });
+      const r = ratioMap.get(key)!;
+      if (policy.op === "recompute") {
+        r.num += toNumber(row[policy.numerator]) || 0;
+        r.den += toNumber(row[policy.denominator]) || 0;
+      } else {
+        const w = toNumber(row[policy.weightColumn]) || 0;
+        r.num += n * w;
+        r.den += w;
+      }
+    }
   }
 
   // G2-P1.c / P6.b — series cap: replace the legacy "Others" rollup with a
@@ -184,7 +275,11 @@ export function pivotLongToWideBar(
       const vals = pairMap.get(key);
       let v = 0;
       if (vals && vals.length > 0) {
-        if (aggregate === "sum" || aggregate === "count") {
+        const ratio = ratioMap.get(key);
+        if (ratio) {
+          // Σnum/Σden — a ratio series rebuilt, never summed/averaged per cell.
+          v = ratio.den !== 0 ? ratio.num / ratio.den : vals.reduce((a, b) => a + b, 0) / vals.length;
+        } else if (aggregate === "sum" || aggregate === "count") {
           v = aggregate === "count" ? vals.length : vals.reduce((a, b) => a + b, 0);
         } else {
           v = vals.reduce((a, b) => a + b, 0) / vals.length;
@@ -691,9 +786,10 @@ export function processChartData(
       }
     } else {
       // Need to aggregate
-      const effectiveAggregate = aggregate === 'none' ? 'sum' : aggregate || 'sum';
-      logger.log(`   Processing pie chart with aggregation: ${effectiveAggregate}`);
-      const aggregated = aggregateData(data, xCol, yCol, effectiveAggregate, detectedPeriod, isDateCol);
+      const agg = resolveAggregation(aggregate, yCol, availableColumns, options?.columnMeta);
+      stampAggregation(chartSpec, agg);
+      logger.log(`   Processing pie chart with aggregation: ${agg.policy?.op ?? agg.effective}`);
+      const aggregated = aggregateData(data, xCol, yCol, agg.effective, detectedPeriod, isDateCol, agg.policy);
       logger.log(`   Aggregated data points: ${aggregated.length}`);
       // Convert Date objects to strings for schema validation and sort
       allData = aggregated
@@ -737,10 +833,16 @@ export function processChartData(
       ? findMatchingColumn(seriesColSpec, availableColumns)
       : null;
     if (seriesColSpec && matchedSeriesCol && matchedSeriesCol !== xCol) {
-      const eff =
-        aggregate === "none" || !aggregate ? "sum" : (aggregate as "sum" | "mean" | "count");
+      const agg = resolveAggregation(aggregate, yCol, availableColumns, options?.columnMeta);
+      stampAggregation(chartSpec, agg);
+      // A non-additive series must NEVER stack (a stacked "% total" is nonsense) —
+      // force grouped so each bar is directly comparable (defence in depth beyond
+      // defaultBarLayout, which an explicit persisted barLayout could override).
+      if (agg.additivity === "non_additive" && chartSpec.barLayout === "stacked") {
+        chartSpec.barLayout = "grouped";
+      }
       logger.log(
-        `   Multi-series bar: x="${xCol}", series="${matchedSeriesCol}", measure="${yCol}", layout=${chartSpec.barLayout || "stacked"}`
+        `   Multi-series bar: x="${xCol}", series="${matchedSeriesCol}", measure="${yCol}", agg=${agg.policy?.op ?? agg.effective}, layout=${chartSpec.barLayout || "stacked"}`
       );
       chartSpec.seriesColumn = matchedSeriesCol;
       const { rows: wideRows } = pivotLongToWideBar(
@@ -748,8 +850,9 @@ export function processChartData(
         xCol,
         matchedSeriesCol,
         yCol,
-        eff,
-        chartSpec
+        agg.effective,
+        chartSpec,
+        agg.policy
       );
       let result = wideRows;
       if (xIsDateCol) {
@@ -785,9 +888,10 @@ export function processChartData(
     if (isDateCol && data.some((r) => r[xCol] instanceof Date && !isNaN(r[xCol].getTime()))) {
       detectedPeriod = 'month';
     }
-    const effectiveAggregate = aggregate === 'none' ? 'sum' : aggregate || 'sum';
-    logger.log(`   Processing bar chart with aggregation: ${effectiveAggregate}`);
-    const aggregated = aggregateData(data, xCol, yCol, effectiveAggregate, detectedPeriod, isDateCol);
+    const agg = resolveAggregation(aggregate, yCol, availableColumns, options?.columnMeta);
+    stampAggregation(chartSpec, agg);
+    logger.log(`   Processing bar chart with aggregation: ${agg.policy?.op ?? agg.effective}`);
+    const aggregated = aggregateData(data, xCol, yCol, agg.effective, detectedPeriod, isDateCol, agg.policy);
     logger.log(`   Aggregated data points: ${aggregated.length}`);
     
     // Validate aggregated results - ensure we have data after aggregation
@@ -839,19 +943,20 @@ export function processChartData(
       ? findMatchingColumn(seriesColSpec, availableColumns)
       : null;
     if (seriesColSpec && matchedSeriesColForLine && matchedSeriesColForLine !== xCol) {
-      const eff =
-        aggregate === "none" || !aggregate ? "sum" : (aggregate as "sum" | "mean" | "count");
+      const agg = resolveAggregation(aggregate, yCol, availableColumns, options?.columnMeta);
+      stampAggregation(chartSpec, agg);
       chartSpec.seriesColumn = matchedSeriesColForLine;
       logger.log(
-        `   Multi-series ${type}: x="${xCol}", series="${matchedSeriesColForLine}", measure="${yCol}", aggregate=${eff}`
+        `   Multi-series ${type}: x="${xCol}", series="${matchedSeriesColForLine}", measure="${yCol}", aggregate=${agg.policy?.op ?? agg.effective}`
       );
       const { rows: wideRows } = pivotLongToWideBar(
         data,
         xCol,
         matchedSeriesColForLine,
         yCol,
-        eff,
-        chartSpec
+        agg.effective,
+        chartSpec,
+        agg.policy
       );
       let result = wideRows;
       if (xIsDateCol) {
@@ -883,10 +988,15 @@ export function processChartData(
         .slice(0, Math.min(120, data.length))
         .some((r) => coerceChartDate(r[xCol]) !== null)
     ) {
+      // Bucket daily rows into the asked-for period. SUM for additive metrics;
+      // a non-additive metric (a daily GC% series) is recomputed Σnum/Σden per
+      // bucket, never summed daily → monthly (the same "sum of ratio" bug).
+      const repairAgg = resolveAggregation("none", yCol, availableColumns, options?.columnMeta);
+      stampAggregation(chartSpec, repairAgg);
       logger.warn(
-        `[chart_time_bucket_repair] ${type} "${chartSpec.title}": ${data.length} rows, questionPeriod=${periodHint} — applying sum bucket`
+        `[chart_time_bucket_repair] ${type} "${chartSpec.title}": ${data.length} rows, questionPeriod=${periodHint} — applying ${repairAgg.policy?.op ?? repairAgg.effective} bucket`
       );
-      const aggregated = aggregateData(data, xCol, yCol, "sum", periodHint, true);
+      const aggregated = aggregateData(data, xCol, yCol, repairAgg.effective, periodHint, true, repairAgg.policy);
       let repaired = aggregated.sort((a, b) =>
         compareValues(a[xCol], b[xCol], xIsDateCol)
       );
@@ -1058,11 +1168,15 @@ function aggregateData(
   valueColumn: string,
   aggregateType: string,
   datePeriod?: DatePeriod | null,
-  isDateColumn?: boolean
+  isDateColumn?: boolean,
+  policy?: AggPolicy
 ): Record<string, any>[] {
-  logger.log(`     Aggregating by "${groupBy}" with "${aggregateType}" of "${valueColumn}"${datePeriod ? ` (period: ${datePeriod})` : ''}`);
-  
-  const grouped = new Map<string, { values: number[] }>();
+  logger.log(`     Aggregating by "${groupBy}" with "${policy?.op ?? aggregateType}" of "${valueColumn}"${datePeriod ? ` (period: ${datePeriod})` : ''}`);
+
+  // Per-group accumulators. `num`/`den` back the recompute (Σnum/Σden) and
+  // weighted_mean (Σ(value·weight)/Σweight) paths — both read sibling columns
+  // off the SAME row, which is why a ratio can be rebuilt correctly here.
+  const grouped = new Map<string, { values: number[]; num: number; den: number }>();
   let validValues = 0;
   let invalidValues = 0;
 
@@ -1086,10 +1200,17 @@ function aggregateData(
 
     if (!isNaN(value)) {
       validValues++;
-      if (!grouped.has(key)) {
-        grouped.set(key, { values: [] });
+      if (!grouped.has(key)) grouped.set(key, { values: [], num: 0, den: 0 });
+      const g = grouped.get(key)!;
+      g.values.push(value);
+      if (policy?.op === "recompute") {
+        g.num += toNumber(row[policy.numerator]) || 0;
+        g.den += toNumber(row[policy.denominator]) || 0;
+      } else if (policy?.op === "weighted_mean") {
+        const w = toNumber(row[policy.weightColumn]) || 0;
+        g.num += value * w;
+        g.den += w;
       }
-      grouped.get(key)!.values.push(value);
     } else {
       invalidValues++;
     }
@@ -1100,21 +1221,27 @@ function aggregateData(
 
   const result: Record<string, any>[] = [];
 
-  for (const [key, { values }] of Array.from(grouped.entries())) {
+  for (const [key, { values, num, den }] of Array.from(grouped.entries())) {
     let aggregatedValue: number;
 
-    switch (aggregateType) {
-      case 'sum':
-        aggregatedValue = values.reduce((a: number, b: number) => a + b, 0);
-        break;
-      case 'mean':
-        aggregatedValue = values.reduce((a: number, b: number) => a + b, 0) / values.length;
-        break;
-      case 'count':
-        aggregatedValue = values.length;
-        break;
-      default:
-        aggregatedValue = values[0]!;
+    if (policy?.op === "recompute" || policy?.op === "weighted_mean") {
+      // Σnum/Σden — the ONLY correct way to combine a ratio across a group.
+      // Fall back to the plain mean if the denominator vanished (all-zero weights).
+      aggregatedValue = den !== 0 ? num / den : values.reduce((a, b) => a + b, 0) / values.length;
+    } else {
+      switch (aggregateType) {
+        case 'sum':
+          aggregatedValue = values.reduce((a: number, b: number) => a + b, 0);
+          break;
+        case 'mean':
+          aggregatedValue = values.reduce((a: number, b: number) => a + b, 0) / values.length;
+          break;
+        case 'count':
+          aggregatedValue = values.length;
+          break;
+        default:
+          aggregatedValue = values[0]!;
+      }
     }
 
     result.push({

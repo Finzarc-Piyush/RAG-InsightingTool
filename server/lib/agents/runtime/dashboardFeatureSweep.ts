@@ -44,6 +44,7 @@ import { processChartData } from "../../chartGenerator.js";
 import { compileChartSpec } from "../../chartSpecCompiler.js";
 import { finishChartSpec } from "../../chartSpecFinish.js";
 import { toNumber } from "../../numberCoercion.js";
+import { isNonAdditiveMetric } from "../../financeMetricAuthority.js";
 import {
   resolveTrendGrain,
   buildDateRangeByColumn,
@@ -212,9 +213,7 @@ export function enumerateMissingDashboardCharts(
       // a legitimately wide line (lines downsample; bars cannot), and bucketing
       // a time axis into top-N+Other is meaningless.
       if (countUniqueValuesUpTo(sourceRows, dim, 2) < 2) continue;
-      const aggregate = RATE_METRIC_RX.test(outcome.replace(/[_-]+/g, " "))
-        ? "mean"
-        : "sum";
+      const aggregate = isNonAdditiveMetric(outcome) ? "mean" : "sum";
       const line = tryBuildChart(ctx, sourceRows, "line", dim, outcome, aggregate);
       if (line) {
         out.push(line);
@@ -478,7 +477,7 @@ function tryBuildChart(
       rows as Record<string, any>[],
       spec,
       ctx.summary.dateColumns,
-      { chartQuestion: ctx.question }
+      { chartQuestion: ctx.question, columnMeta: ctx.summary.columns }
     );
     return finishChartSpec(spec, processed);
   } catch {
@@ -547,8 +546,6 @@ export function isOrdinalLikeColumnName(name: string): boolean {
   );
 }
 
-const RATE_METRIC_RX = /\b(rate|adher|adherence|compliance|pct|percent|percentage|ratio|share|score|index)\b/i;
-
 /**
  * Resolve the outcome metric to break down, deterministically, WITHOUT relying
  * on the LLM brief (which doesn't exist on plain analytical turns):
@@ -590,13 +587,13 @@ export function resolveBreadthOutcomeMetric(
   );
   if (named) return named;
 
-  // Rate/score-shaped numeric column, in dataset column order. Normalise
-  // snake/kebab case first so `\brate\b` matches "pjp_adherence_rate".
+  // Rate/score-shaped numeric column, in dataset column order — delegated to the
+  // metric-semantics authority (catches "pjp_adherence_rate" AND a literal "GC%").
   const rateCol = ctx.summary.columns.find(
     (c) =>
       numeric.has(c.name) &&
       !isOrdinalLikeColumnName(c.name) &&
-      RATE_METRIC_RX.test(c.name.replace(/[_-]+/g, " "))
+      isNonAdditiveMetric(c.name)
   );
   return rateCol?.name ?? null;
 }

@@ -72,3 +72,42 @@ export function joinChartInsightLanes(lanes: ChartInsightLanes): string {
   if (lanes.do && lanes.do.trim()) out.push(`DO: ${lanes.do.trim()}`);
   return out.join("\n");
 }
+
+/**
+ * Meta-tool advice a DO lane must NEVER carry: telling the reader to BUILD an
+ * analytics artifact ("build a dashboard / scorecard / tracker / monitoring view
+ * / report to track this") instead of taking a real business action. A manager
+ * reading a tile wants a DECISION, not an instruction to construct the very
+ * surface they are already looking at.
+ *
+ * Two shapes are caught:
+ *   1. a build/create verb adjacent (bounded ≤40-char gap) to an artifact noun
+ *      — "Build a dashboard to track regional sell-through";
+ *   2. a prepositional "... in / into / to a dashboard|scorecard|tracker" tail
+ *      — "Track sell-through in a dashboard".
+ *
+ * This is a CONTENT vocabulary (it polices generated prose), deliberately NOT an
+ * intent vocabulary — it does NOT live in `queryIntentAuthority` (invariant #12)
+ * and is an independent sibling of `dashboardIntent.EXPLICIT_RX` (which detects a
+ * USER asking to build a dashboard) so the two evolve separately. Verb-adjacency
+ * + the bounded gap mean a legitimate action that merely contains "track" or
+ * "report" as a business verb — "track promo compliance with the field team",
+ * "report stockouts to the regional lead" — is NOT matched.
+ */
+export const DASHBOARD_META_ADVICE_RE =
+  /\b(?:build|create|set ?up|make|design|stand ?up|put together|spin up|develop|implement)\b[\s\S]{0,40}\b(?:dashboards?|scorecards?|trackers?|tracking views?|monitoring views?|reports?)\b|\b(?:in|into|on|onto|to|via|using|within|through)\s+(?:a|an|the|your|our|this)\s+(?:dashboards?|scorecards?|trackers?|monitoring views?)\b/i;
+
+/**
+ * Drop the DO lane when it is meta-tool advice (above) rather than a managerial
+ * action — re-joining {headline, why}. Pure; a no-op when there is no DO lane,
+ * when the DO lane is a real action, and on legacy untagged strings. Applied at
+ * GENERATION (server post-LLM gate) AND at CONSUMPTION (client render + deck
+ * export) off this single shared vocabulary, so already-persisted meta-advice is
+ * suppressed without a regeneration and the two tiers can never drift
+ * (L-018 "fix both ends", L-022 "the code gate is the guarantee").
+ */
+export function stripDashboardMetaAdviceDoLane(keyInsight: string): string {
+  const lanes = splitChartInsightLanes(keyInsight);
+  if (!lanes.do || !DASHBOARD_META_ADVICE_RE.test(lanes.do)) return keyInsight;
+  return joinChartInsightLanes({ headline: lanes.headline, why: lanes.why });
+}

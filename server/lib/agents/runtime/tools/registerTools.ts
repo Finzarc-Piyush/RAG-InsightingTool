@@ -1479,7 +1479,9 @@ export function registerDefaultTools(registry: ToolRegistry) {
           sessionAnalysisContext: ctx.exec.sessionAnalysisContext,
           permanentContext: ctx.exec.permanentContext,
           domainContext: ctx.exec.domainContext,
-        }
+        },
+        // W9 · definitional pairs (GC% ↔ NR) are dropped before ranking/charting.
+        ctx.exec.identityGraph
       );
       const noteSuffix = `${resolutionNote}${filterNote}`;
 

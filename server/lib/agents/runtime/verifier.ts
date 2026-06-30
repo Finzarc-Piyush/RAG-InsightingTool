@@ -266,7 +266,8 @@ export async function runVerifier(
   if (params.narratorOutput) {
     const causal = detectUnsupportedCausalClaims(
       params.narratorOutput,
-      ctx.summary.columns.map((c) => c.name)
+      ctx.summary.columns.map((c) => c.name),
+      ctx.identityGraph
     );
     const blocking = causal.flags.filter(
       (f) => f.severity === "warning" || f.severity === "block"

@@ -240,6 +240,7 @@ export function buildChartFromAnalyticalTable(
   try {
     processed = processChartData(workingRows, spec, summary.dateColumns, {
       chartQuestion: question,
+      columnMeta: summary.columns,
     }) as Record<string, unknown>[];
   } catch {
     return null;

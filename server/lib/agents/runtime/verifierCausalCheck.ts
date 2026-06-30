@@ -42,6 +42,7 @@
 import type { NarratorOutput } from "./narratorAgent.js";
 import type { LikelyDriver } from "../../../shared/schema/charts.js";
 import { CAUSAL_HEDGE_TERMS } from "./sharedPrompts.js";
+import { areStructurallyRelated, type IdentityGraph } from "../../financeMetricAuthority.js";
 
 export type CausalFlagSeverity = "info" | "warning" | "block";
 
@@ -50,7 +51,8 @@ export interface CausalClaimFlag {
     | "driver_missing_hedge"
     | "driver_number_in_mechanism"
     | "driver_data_basis_ungrounded"
-    | "measured_layer_causal_claim";
+    | "measured_layer_causal_claim"
+    | "structural_identity_claim";
   severity: CausalFlagSeverity;
   /** The offending text (clipped) — suitable for a revise_narrative issue. */
   excerpt: string;
@@ -66,6 +68,8 @@ export interface CausalClaimReport {
   ungroundedDataDrivers: string[];
   /** Causal connectives found in the measured layer (info-only). */
   unhedgedInMeasured: string[];
+  /** Claims linking two DEFINITIONALLY-related metrics (GC% ↔ NR) — tautologies. */
+  structuralIdentityClaims: string[];
   flags: CausalClaimFlag[];
   /** True iff a driver-level (warning/block) flag fired — the verifier should
    *  then request `revise_narrative`. Measured-layer info flags do NOT trip it
@@ -84,6 +88,18 @@ export const STAT_NUMBER_RE =
 /** Causal connectives that ASSERT a cause — banned in the measured layer. */
 const MEASURED_CAUSAL_RE =
   /\b(?:because(?:\s+of)?|caused by|due to|as a result of|driven by|the reason|attributable to|owing to|stems from|results? from)\b/i;
+
+/** A claim that asserts one metric MOVES/DRIVES another (relational framing). When
+ *  both metrics are definitionally linked, this is a tautology, not an insight. */
+const RELATIONAL_CLAIM_RE =
+  /\b(?:impacted by|impacts|driven by|drives|improves? with|increases? with|decreases? with|depends on|determined by|a function of|moves? with|correlat\w* with|linked to|tied to|affected by|affects|influenc\w+)\b/i;
+
+/** Markers of a genuine DECOMPOSITION / variance attribution. A claim between two
+ *  structurally-related metrics is EXEMPT from the identity block when it carries
+ *  these — "COGS inflation compressed GC% by 3 pts" is a real, actionable result,
+ *  not a tautology. This is the single most important anti-over-suppression guard. */
+const DECOMPOSITION_RE =
+  /\b(?:decompos\w*|attribut\w*|compress(?:ed|es|ing)?|account(?:s|ed|ing)?\s+for|explain(?:s|ed|ing)?|contribut\w*|variance|bridge|waterfall|by\s+[\d.]+\s*(?:pts?|ppt|pp|%|bps))\b/i;
 
 /** True iff `text` opens its causal claim with a hedge from the frozen
  *  `CAUSAL_HEDGE_TERMS` vocabulary. Exported so the per-chart insight generator
@@ -109,6 +125,34 @@ function referencesColumn(text: string, availableColumns: readonly string[]): bo
 }
 
 /**
+ * Is this claim a TAUTOLOGY — a relational assertion ("X is impacted by Y")
+ * between two DEFINITIONALLY-related metrics (GC% ↔ NR)? Returns the offending
+ * pair, or null. EXEMPTS genuine decompositions (RM-cost → GC%): a claim carrying
+ * decomposition/attribution language is a real quantified result, not a tautology.
+ * Each mentioned column resolves on its own (no multi-mention ambiguity).
+ */
+function structuralIdentityClaim(
+  text: string,
+  availableColumns: readonly string[],
+  graph: IdentityGraph,
+): { a: string; b: string; kind: string } | null {
+  if (!RELATIONAL_CLAIM_RE.test(text)) return null;
+  if (DECOMPOSITION_RE.test(text)) return null; // decomposition is exempt (anti-over-suppression)
+  const lower = text.toLowerCase();
+  const mentioned = availableColumns.filter((c) => {
+    const n = c.trim().toLowerCase();
+    return n.length >= 2 && lower.includes(n);
+  });
+  for (let i = 0; i < mentioned.length; i++) {
+    for (let j = i + 1; j < mentioned.length; j++) {
+      const rel = areStructurallyRelated(mentioned[i]!, mentioned[j]!, graph);
+      if (rel.related) return { a: mentioned[i]!, b: mentioned[j]!, kind: rel.kind };
+    }
+  }
+  return null;
+}
+
+/**
  * Pure detector. Operates on the structured envelope so it can scope each rule
  * to the right field. `availableColumns` are the dataset's column names (for the
  * data-grounding check).
@@ -116,15 +160,17 @@ function referencesColumn(text: string, availableColumns: readonly string[]): bo
 export function detectUnsupportedCausalClaims(
   output: Pick<
     NarratorOutput,
-    "likelyDrivers" | "body" | "findings" | "implications"
+    "likelyDrivers" | "body" | "findings" | "implications" | "recommendations"
   >,
-  availableColumns: readonly string[]
+  availableColumns: readonly string[],
+  identityGraph?: IdentityGraph
 ): CausalClaimReport {
   const flags: CausalClaimFlag[] = [];
   const unhedgedDrivers: string[] = [];
   const numberInMechanism: string[] = [];
   const ungroundedDataDrivers: string[] = [];
   const unhedgedInMeasured: string[] = [];
+  const structuralIdentityClaims: string[] = [];
 
   for (const d of output.likelyDrivers ?? []) {
     const explanation = d.explanation ?? "";
@@ -194,6 +240,40 @@ export function detectUnsupportedCausalClaims(
     }
   }
 
+  // W10 · NO_STRUCTURAL_IDENTITY — scan EVERY lane (findings, implications,
+  // drivers, recommendations) for a relational claim between two definitionally-
+  // linked metrics ("GC% is impacted by Net Revenue"). That is a tautology, not a
+  // discovery — severity "block" forces a revise. Decomposition claims are exempt
+  // (handled inside structuralIdentityClaim). No-op without an identity graph.
+  if (identityGraph) {
+    const allClaimStrings: string[] = [...measuredStrings];
+    for (const d of output.likelyDrivers ?? []) {
+      if (d.explanation) allClaimStrings.push(d.explanation);
+    }
+    for (const r of output.recommendations ?? []) {
+      if (r.action) allClaimStrings.push(r.action);
+      if (r.rationale) allClaimStrings.push(r.rationale);
+    }
+    const seen = new Set<string>();
+    for (const s of allClaimStrings) {
+      const hit = structuralIdentityClaim(s, availableColumns, identityGraph);
+      if (!hit) continue;
+      const key = `${s}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      structuralIdentityClaims.push(s);
+      flags.push({
+        kind: "structural_identity_claim",
+        severity: "block",
+        excerpt: clip(s),
+        message: `This presents an ACCOUNTING IDENTITY as a discovered relationship: "${clip(
+          s,
+          120
+        )}". "${hit.a}" and "${hit.b}" are definitionally linked (${hit.kind}) — a move in one mechanically moves the other. Remove it, or reframe as a quantified DECOMPOSITION (how much of the move each component explains), not a driver.`,
+      });
+    }
+  }
+
   const shouldRevise = flags.some(
     (f) => f.severity === "warning" || f.severity === "block"
   );
@@ -202,6 +282,7 @@ export function detectUnsupportedCausalClaims(
     numberInMechanism,
     ungroundedDataDrivers,
     unhedgedInMeasured,
+    structuralIdentityClaims,
     flags,
     shouldRevise,
   };
@@ -210,13 +291,15 @@ export function detectUnsupportedCausalClaims(
 /**
  * Belt-and-suspenders sanitizer applied at EMIT time (before persist), so a
  * driver that slipped past both the model and the LLM verifier can never reach
- * the user. Drops unhedged or number-bearing explanations outright, and demotes
- * a falsely "data"-grounded driver to a low-confidence "general" one (keeping the
- * explanation but dropping the unearned grounding). Returns a cleaned array.
+ * the user. Drops unhedged or number-bearing explanations outright, demotes a
+ * falsely "data"-grounded driver, and (W10) drops a driver that presents a
+ * definitional identity (GC% ↔ NR) as a cause — unless it is a decomposition.
+ * Returns a cleaned array.
  */
 export function sanitizeLikelyDrivers(
   drivers: readonly LikelyDriver[] | undefined,
-  availableColumns: readonly string[]
+  availableColumns: readonly string[],
+  identityGraph?: IdentityGraph
 ): LikelyDriver[] {
   if (!drivers?.length) return [];
   const out: LikelyDriver[] = [];
@@ -224,6 +307,9 @@ export function sanitizeLikelyDrivers(
     const explanation = d.explanation ?? "";
     if (!hasHedge(explanation)) continue; // unhedged assertion → drop
     if (STAT_NUMBER_RE.test(explanation)) continue; // fabricated statistic → drop
+    if (identityGraph && structuralIdentityClaim(explanation, availableColumns, identityGraph)) {
+      continue; // tautological identity-as-cause → drop (decompositions are exempt within the helper)
+    }
     if (d.basis === "data" && !referencesColumn(explanation, availableColumns)) {
       out.push({ ...d, basis: "general", confidence: "low" }); // false grounding → demote
     } else {

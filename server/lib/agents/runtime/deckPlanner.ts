@@ -56,6 +56,7 @@ import {
   slideDeckPlanSchema,
   type SlideDeckPlan,
 } from "../../../shared/exportSchema.js";
+import { stripDashboardMetaAdviceDoLane } from "../../../shared/chartInsightLanes.js";
 import type {
   ActiveFilterSpec,
   BusinessActionItem,
@@ -179,7 +180,13 @@ function slimChartFromSpec(c: ChartSpec, id: string): SlimChart {
     y: spec.y,
     z: spec.z,
     seriesColumn: spec.seriesColumn,
-    insight: trimToLength(spec.keyInsight, 400),
+    // Strip a persisted "build a dashboard to track this" DO lane so the export
+    // deck never carries meta-tool advice — off the SAME shared vocabulary as
+    // the generation gate + the on-screen render (one vocabulary, no drift).
+    insight: trimToLength(
+      spec.keyInsight ? stripDashboardMetaAdviceDoLane(spec.keyInsight) : undefined,
+      400,
+    ),
   };
 }
 

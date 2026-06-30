@@ -5,6 +5,7 @@ import { LLM_PURPOSE } from './agents/runtime/llmCallPurpose.js';
 import { formatCompactNumber } from './formatCompactNumber.js';
 import { getBatchInsightTemperature, getInsightModel } from './insightSynthesis/insightModelConfig.js';
 import { generateChartInsights } from './insightGenerator.js';
+import { areStructurallyRelated, type IdentityGraph } from './financeMetricAuthority.js';
 import { generateStreamingCorrelationChart, formatSlopeForTitle } from './streamingCorrelationAnalyzer.js';
 import {
   type CorrelationResult,
@@ -26,6 +27,7 @@ export type CorrelationDiagnosticReason =
   | 'no_numeric_pairs'
   | 'no_categorical_signal'
   | 'filter_eliminated_all'
+  | 'structural_identity_filtered'
   | 'insights_llm_failed'
   | 'chart_generation_failed';
 
@@ -69,7 +71,11 @@ export async function analyzeCorrelations(
   // W15 · optional synthesis context so per-chart insight generation can also
   // produce `businessCommentary` (FMCG/Marico framing). Backwards-compatible:
   // pre-W15 callers still work and produce keyInsight only.
-  synthesisContext?: import("./insightSynthesis/types.js").ChartInsightSynthesisContext
+  synthesisContext?: import("./insightSynthesis/types.js").ChartInsightSynthesisContext,
+  // W9 · the per-turn metric identity graph. When supplied, a candidate that is
+  // DEFINITIONALLY related to the target (GC% ↔ NR) is dropped BEFORE ranking,
+  // charting or insight generation — a tautology is never surfaced as a driver.
+  identityGraph?: IdentityGraph
 ): Promise<{
   charts: ChartSpec[];
   insights: Insight[];
@@ -109,8 +115,24 @@ export async function analyzeCorrelations(
     : [];
 
   // Merge and sort by |correlation| descending
-  const correlations = [...numericCorrelations, ...catCorrelations]
+  const mergedCorrelations = [...numericCorrelations, ...catCorrelations]
     .sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation));
+
+  // W9 · drop DEFINITIONAL pairs (GC% ↔ NR) BEFORE ranking/charting/insights — an
+  // accounting identity is not a discovered correlation. Partition rather than
+  // silently drop, so the agent/reflector sees WHY a strong pair vanished.
+  const structurallyFiltered: string[] = [];
+  const correlations = !identityGraph
+    ? mergedCorrelations
+    : mergedCorrelations.filter((c) => {
+        const rel = areStructurallyRelated(targetVariable, c.variable, identityGraph);
+        if (rel.related) {
+          structurallyFiltered.push(c.variable);
+          logger.log(`[structural_identity_filtered] ${targetVariable} ↔ ${c.variable} (${rel.kind}) — definitional, not charted`);
+          return false;
+        }
+        return true;
+      });
 
   const categoricalSet = new Set(categoricalColumns ?? []);
 
@@ -124,12 +146,16 @@ export async function analyzeCorrelations(
   if (correlations.length === 0) {
     // W46 · classify the empty path so the tool surface can tell the agent
     // *why* nothing came back, instead of returning a silent ok-with-empty.
+    // W9 · if everything that WAS found got dropped as a definitional identity,
+    // say so — "GC% only correlates with its own components" is a real answer.
     const reason: CorrelationDiagnosticReason =
-      targetNonNan === 0
-        ? 'no_target_values'
-        : numericTried > 0 && numericCorrelations.length === 0 && catCorrelations.length === 0
-          ? 'no_numeric_pairs'
-          : 'no_categorical_signal';
+      structurallyFiltered.length > 0 && mergedCorrelations.length > 0
+        ? 'structural_identity_filtered'
+        : targetNonNan === 0
+          ? 'no_target_values'
+          : numericTried > 0 && numericCorrelations.length === 0 && catCorrelations.length === 0
+            ? 'no_numeric_pairs'
+            : 'no_categorical_signal';
     const diagnostic: CorrelationDiagnostic = {
       reason,
       frameRows: data.length,
@@ -140,11 +166,13 @@ export async function analyzeCorrelations(
       targetSampleNonNan: targetNonNan,
       filter,
       notes:
-        reason === 'no_target_values'
-          ? `Target "${targetVariable}" had no numeric values in first 100 rows — frame may be aggregated or column is non-numeric.`
-          : reason === 'no_numeric_pairs'
-            ? `${numericTried} numeric column(s) tried but none produced valid Pearson pairs with "${targetVariable}".`
-            : `${categoricalTried} categorical column(s) tried but none passed the η thresholds (≥5 pairs, ≥2 groups, non-zero variance).`,
+        reason === 'structural_identity_filtered'
+          ? `Every correlate of "${targetVariable}" was a definitional component of it (${structurallyFiltered.join(', ')}). These are accounting identities, not drivers — there is no genuine external correlation to report.`
+          : reason === 'no_target_values'
+            ? `Target "${targetVariable}" had no numeric values in first 100 rows — frame may be aggregated or column is non-numeric.`
+            : reason === 'no_numeric_pairs'
+              ? `${numericTried} numeric column(s) tried but none produced valid Pearson pairs with "${targetVariable}".`
+              : `${categoricalTried} categorical column(s) tried but none passed the η thresholds (≥5 pairs, ≥2 groups, non-zero variance).`,
     };
     logger.error('No correlations found!', diagnostic);
     return { charts: [], insights: [], diagnostic };

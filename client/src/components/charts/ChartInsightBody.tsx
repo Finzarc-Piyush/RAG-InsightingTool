@@ -1,7 +1,10 @@
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { cn } from "@/lib/utils";
 import { HelpCircle, Target } from "lucide-react";
-import { splitChartInsightLanes } from "@/shared/chartInsightLanes";
+import {
+  splitChartInsightLanes,
+  stripDashboardMetaAdviceDoLane,
+} from "@/shared/chartInsightLanes";
 import { renderInsightText } from "@/lib/insightText";
 
 /**
@@ -41,18 +44,42 @@ export interface ChartInsightBodyProps {
    * Default = the standalone neutral treatment used on muted/transparent surfaces.
    */
   tone?: "default" | "on-accent";
+  /**
+   * Deterministic "Do" action used ONLY when `keyInsight` carries no `DO:` lane
+   * of its own (e.g. an insight persisted before the always-show-a-Do change).
+   * The dashboard tile derives this from the chart's own data
+   * ([deriveTileDoLane]) so a managerial next step still renders without a
+   * regeneration. Omitted on chat surfaces → behaviour unchanged there.
+   */
+  fallbackDo?: string;
 }
 
 export function ChartInsightBody({
   keyInsight,
   tone = "default",
+  fallbackDo,
 }: ChartInsightBodyProps) {
   const hasKey = typeof keyInsight === "string" && keyInsight.trim().length > 0;
 
   if (!hasKey) return null;
 
   const onAccent = tone === "on-accent";
-  const lanes = splitChartInsightLanes(keyInsight!);
+  // Belt-and-suspenders for dashboards saved BEFORE the server-side DO gate:
+  // suppress a persisted "build a dashboard to track this" DO lane at render
+  // too, off the SAME shared vocabulary, so existing tiles read like a
+  // managerial action without a regeneration (L-018 "fix both ends").
+  const lanes = splitChartInsightLanes(stripDashboardMetaAdviceDoLane(keyInsight!));
+
+  // Always show a "Do" for managers: when the insight itself carries no DO
+  // lane (e.g. a tile persisted before the always-show-a-Do change), fall back
+  // to the deterministic, data-derived action the surface passed in. The
+  // insight's own DO lane always wins when present.
+  const doText =
+    lanes.do && lanes.do.trim()
+      ? lanes.do
+      : fallbackDo && fallbackDo.trim()
+        ? fallbackDo
+        : undefined;
 
   return (
     <>
@@ -85,7 +112,7 @@ export function ChartInsightBody({
           </span>
         </p>
       ) : null}
-      {lanes.do ? (
+      {doText ? (
         <p
           className={cn(
             "mt-1 flex items-start gap-1.5 leading-snug",
@@ -102,7 +129,7 @@ export function ChartInsightBody({
           />
           <span>
             <span className="font-semibold">Do: </span>
-            {renderInsightText(lanes.do)}
+            {renderInsightText(doText)}
           </span>
         </p>
       ) : null}

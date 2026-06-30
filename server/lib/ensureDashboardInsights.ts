@@ -50,6 +50,14 @@ export type EnsureDashboardInsightsDeps = {
     charts: ChartSpec[];
   }) => Promise<{ ok: boolean; reason?: string; patchedCount?: number }>;
   generateInsightForCharts: (charts: ChartSpec[], deps: InsightEnrichmentDeps) => Promise<ChartSpec[]>;
+  /**
+   * Recompose the tenant FMCG/Marico domain pack for orphan-tile generation, so
+   * a page-load-healed tile gets the SAME domain framing as the chat path
+   * (context parity). Tenant-level (zero-arg loader), safe to recompose here.
+   * Optional + injectable: absent in older callers/tests → orphan generation
+   * simply omits domain framing (prior behaviour).
+   */
+  loadDomainContext?: () => Promise<string | undefined>;
 };
 
 export type EnsureDashboardInsightsResult = {
@@ -81,17 +89,27 @@ function allDashboardCharts(dashboard: Dashboard): ChartSpec[] {
 }
 
 async function realDeps(): Promise<EnsureDashboardInsightsDeps> {
-  const [dashboardModel, chatModel, patchMod, genMod] = await Promise.all([
+  const [dashboardModel, chatModel, patchMod, genMod, domainMod] = await Promise.all([
     import("../models/dashboard.model.js"),
     import("../models/chat.model.js"),
     import("./patchDashboardChartInsights.js"),
     import("./generateInsightForCharts.js"),
+    import("./domainContext/loadEnabledDomainContext.js"),
   ]);
   return {
     getDashboardById: dashboardModel.getDashboardById,
     getChatBySessionIdForUser: chatModel.getChatBySessionIdForUser,
     patchDashboardChartInsights: patchMod.patchDashboardChartInsights,
     generateInsightForCharts: genMod.generateInsightForCharts,
+    loadDomainContext: async () => {
+      try {
+        const { text } = await domainMod.loadEnabledDomainContext();
+        return text?.trim() ? text : undefined;
+      } catch (err) {
+        logger.warn("ensureDashboardInsights · domain context load failed:", err);
+        return undefined;
+      }
+    },
   };
 }
 
@@ -134,12 +152,25 @@ export async function ensureDashboardInsights(params: {
   const orphans = bare.filter((c) => !reusableSigs.has(chartAxisSignature(c)));
   if (orphans.length > 0) {
     try {
+      // Context parity with the chat path (chatResponse.service.ts:50). Without
+      // the originating question + the FMCG/Marico domain pack the insight model
+      // has nothing concrete to anchor a DO on and falls back to meta-advice
+      // ("build a dashboard to track this"); feeding both makes a healed orphan
+      // tile read like chat — a real managerial action. `dashboard.name` is the
+      // question-derived title (best available question steer at page-load time).
+      const domainContext = deps.loadDomainContext
+        ? await deps.loadDomainContext()
+        : undefined;
       const generated = await deps.generateInsightForCharts(orphans, {
         // Dashboard charts carry their own frozen `data`; the row resolver
         // returns embedded data as-is, so no session rows are needed.
         filteredRawData: [],
         dataSummary: chat?.dataSummary,
-        context: { sessionAnalysisContext: chat?.sessionAnalysisContext },
+        context: {
+          userQuestion: hasText(dashboard.name) ? dashboard.name : undefined,
+          sessionAnalysisContext: chat?.sessionAnalysisContext,
+          domainContext,
+        },
         // Insight-only: never re-attach data onto the dashboard's frozen charts.
         attachData: false,
       });

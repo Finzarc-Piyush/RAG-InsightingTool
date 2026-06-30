@@ -71,10 +71,27 @@ export function finishChartSpec(
     );
   }
 
+  // W7 · when a NON-additive metric (GC%, margin %, realization …) was combined
+  // across the dimension, surface that it is a weighted average — never a total —
+  // via the existing axisReason subtitle (no client change). This is what stops a
+  // chart of GC% by channel from reading as if the bars summed to a meaningful 100%+.
+  let axisReason = spec.axisReason;
+  if (spec.metricAdditivity === "non_additive" && spec.aggPolicy && spec.aggPolicy !== "sum") {
+    const how =
+      spec.aggPolicy === "weighted_mean"
+        ? "a denominator-weighted average"
+        : spec.aggPolicy === "recompute"
+          ? "recomputed from its components (Σ numerator / Σ denominator)"
+          : "an average";
+    const note = `${spec.y} is a ratio — values shown are ${how} across ${spec.x}, not a sum.`;
+    axisReason = axisReason ? `${axisReason} ${note}` : note;
+  }
+
   return {
     ...spec,
     xLabel: spec.x,
     yLabel: spec.y,
+    ...(axisReason ? { axisReason } : {}),
     data: processed,
     ...smartDomains,
   } as ChartSpec;

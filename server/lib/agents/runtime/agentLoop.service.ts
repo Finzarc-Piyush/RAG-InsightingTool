@@ -371,7 +371,7 @@ export {
 // Import explicitly so the local binding exists (the helper is used below);
 // keep the re-export so downstream consumers continue to import it via the
 // agent loop module.
-import { appendEnvelopeInsight } from "./insightHelpers.js";
+import { appendEnvelopeInsight, mergeInsights } from "./insightHelpers.js";
 import { errorMessage } from "../../../utils/errorMessage.js";
 export { appendEnvelopeInsight };
 
@@ -695,7 +695,9 @@ export async function runAgentTurn(
       }
     }
     if (result.insights?.length) {
-      mergedInsights.push(...result.insights);
+      // W-INS-DEDUP · dedup the tool-insight batch instead of a raw push, so the
+      // same set emitted across two tool turns can't stack into "7 then 7 again".
+      mergeInsights(mergedInsights, result.insights);
     }
     if (result.table) {
       table = result.table;
@@ -2513,7 +2515,8 @@ export async function runAgentTurn(
             {
               const drivers = sanitizeLikelyDrivers(
                 narResult.likelyDrivers,
-                ctx.summary.columns.map((c) => c.name)
+                ctx.summary.columns.map((c) => c.name),
+                ctx.identityGraph
               );
               if (drivers.length) env.likelyDrivers = drivers;
             }
@@ -2577,7 +2580,8 @@ export async function runAgentTurn(
             {
               const drivers = sanitizeLikelyDrivers(
                 env.likelyDrivers,
-                ctx.summary.columns.map((c) => c.name)
+                ctx.summary.columns.map((c) => c.name),
+                ctx.identityGraph
               );
               if (drivers.length) synthEnv.likelyDrivers = drivers;
             }
@@ -2859,7 +2863,8 @@ export async function runAgentTurn(
         {
           const drivers = sanitizeLikelyDrivers(
             repaired.likelyDrivers,
-            ctx.summary.columns.map((c) => c.name)
+            ctx.summary.columns.map((c) => c.name),
+            ctx.identityGraph
           );
           if (drivers.length) envFresh.likelyDrivers = drivers;
         }

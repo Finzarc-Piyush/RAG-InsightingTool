@@ -124,6 +124,15 @@ export const chartSpecSchema = z.object({
   zLabel: z.string().optional(),
   aggregate: z.enum(["sum", "mean", "count", "none"]).optional(),
   /**
+   * Metric-semantics sidecar (W5) stamped by processChartData via
+   * financeMetricAuthority — NON-breaking, optional, never widens `aggregate`.
+   * `metricAdditivity` records whether the Y metric may be summed; `aggPolicy`
+   * records HOW it was combined across the dimension (recompute Σnum/Σden,
+   * weighted_mean, mean, or sum) so titles/labels can say "Avg"/"Σ/Σ" not "Total".
+   */
+  metricAdditivity: z.enum(["additive", "non_additive"]).optional(),
+  aggPolicy: z.enum(["sum", "mean", "weighted_mean", "recompute"]).optional(),
+  /**
    * MW3 · category sort direction for categorical bar charts. "desc" (default)
    * shows best-first; "asc" surfaces the WORST performers first (bottom-N, for
    * management-by-exception). Honoured by processChartData (server) and the
@@ -2188,6 +2197,17 @@ export const dataSummarySchema = z.object({
      * dataset-profile pass enriches the heuristic indicators. Capped at
      * 4 entries per column to keep the planner prompt compact. */
     answersQuestions: z.array(z.string().min(1).max(200)).max(4).optional(),
+    /** W6 · metric-semantics tag stamped at enrichment by financeMetricAuthority.
+     * `additivity` is the DURABLE answer to "may this column be SUMMED across a
+     * dimension?" — the semantic model object isn't on the chart context, so this
+     * is how the structured signal reaches processChartData (a non-additive column
+     * is weighted-averaged/recomputed, never summed). `ratio*Column` name the
+     * sibling parts so a ratio can be re-weighted by its denominator. See
+     * docs/conventions/metric-additivity.md. */
+    additivity: z.enum(["additive", "non_additive"]).optional(),
+    additivityKind: z.enum(["additive", "ratio_percent", "per_unit", "index_score"]).optional(),
+    ratioNumeratorColumn: z.string().max(200).optional(),
+    ratioDenominatorColumn: z.string().max(200).optional(),
   })),
   numericColumns: z.array(z.string()),
   dateColumns: z.array(z.string()),

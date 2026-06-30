@@ -72,6 +72,7 @@ import {
   facetColumnKey,
 } from "../../temporalFacetColumns.js";
 import { pickTrendGrainForSpan } from "../../queryPlanTemporalPatch.js";
+import { buildIdentityGraph, areStructurallyRelated } from "../../financeMetricAuthority.js";
 import { inferFiltersFromQuestion } from "../utils/inferFiltersFromQuestion.js";
 import { inferPeriodFilterFromQuestion } from "../utils/inferPeriodFilterFromQuestion.js";
 import { formatPriorInvestigationsForPlanner } from "./priorInvestigations.js";
@@ -142,6 +143,13 @@ export function buildAgentExecutionContext(params: {
       break;
     }
   }
+  // Build the metric identity graph ONCE per turn (W8) from the column set ∪ the
+  // semantic model. Every causation gate reads THIS instance, so the correlation
+  // filter, the verifier's tautology block, and the prompt block can't diverge.
+  const identityGraph = buildIdentityGraph({
+    columns: params.summary.columns.map((c) => c.name),
+    semanticModel: params.chatDocument?.semanticModel ?? null,
+  });
   return {
     sessionId: params.sessionId,
     username: params.username,
@@ -150,6 +158,7 @@ export function buildAgentExecutionContext(params: {
     turnStartDataRef: params.data?.length ? params.data : null,
     analysisSpec: params.analysisSpec ?? null,
     summary: params.summary,
+    identityGraph,
     chatHistory: params.chatHistory,
     chatInsights: params.chatInsights,
     mode: params.mode,
@@ -307,6 +316,14 @@ export function formatUserAndSessionJsonBlocks(
       `RAG citations remain authoritative for any figure):\n` +
       ctx.domainContext.trim().slice(0, cap);
   }
+  // W8 · the deterministic ACCOUNTING IDENTITIES gate, shipped WITH the prompt
+  // permission (L-022): a definitional pair (GC% ↔ NR) must never be reported as
+  // a discovered/causal relationship. Built from the same identityGraph the
+  // correlation filter and verifier read, so prose and gate can't diverge.
+  const identitiesBlock = ctx.identityGraph
+    ? formatAccountingIdentitiesBlock(ctx.identityGraph, ctx.summary.columns.map((c) => c.name))
+    : "";
+  if (identitiesBlock) s += `\n${identitiesBlock}`;
   // Prior-turn investigation digest, emitted as a labelled block so the planner
   // sees it as a first-class signal rather than buried inside the
   // session-context JSON dump. Empty array → empty string.
@@ -318,6 +335,42 @@ export function formatUserAndSessionJsonBlocks(
     s += `\nSessionAnalysisContextJSON:\n${JSON.stringify(ctx.sessionAnalysisContext).slice(0, opts.maxJsonChars)}`;
   }
   return s;
+}
+
+/**
+ * W8 · the ACCOUNTING IDENTITIES prompt block. Enumerates the definitional
+ * column pairs present in THIS dataset (from the shared identity graph) and
+ * states the correlation≠causation rule. Returns "" when no related pair exists,
+ * so a non-finance dataset pays no prompt cost. Caps at 12 pairs for compactness.
+ */
+export function formatAccountingIdentitiesBlock(
+  graph: import("../../financeMetricAuthority.js").IdentityGraph,
+  columns: readonly string[]
+): string {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < columns.length && lines.length < 12; i++) {
+    for (let j = i + 1; j < columns.length && lines.length < 12; j++) {
+      const a = columns[i]!;
+      const b = columns[j]!;
+      const rel = areStructurallyRelated(a, b, graph);
+      if (!rel.related) continue;
+      const key = [rel.canonicalA, rel.canonicalB].sort().join("|");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      lines.push(`  - "${a}" and "${b}" are definitionally linked (${rel.kind}); a move in one mechanically moves the other.`);
+    }
+  }
+  if (lines.length === 0) return "";
+  return (
+    `ACCOUNTING IDENTITIES — DO NOT REPORT AS CAUSAL OR AS A DISCOVERED RELATIONSHIP:\n` +
+    lines.join("\n") +
+    `\n  These are definitional (e.g. GC% = (NR − COGS)/NR, so NR is GC%'s denominator). ` +
+    `Saying "GC% is impacted by / driven by Net Revenue" is a TAUTOLOGY, not an insight — never surface it.\n` +
+    `CORRELATION ≠ CAUSATION: two metrics moving together is an ASSOCIATION. Only call something a driver ` +
+    `when the evidence is a decomposition / variance attribution, a lead-lag over time, a controlled comparison, ` +
+    `or a cited domain mechanism — otherwise label it an association to validate, not a cause.`
+  );
 }
 
 /** Tighter caps for reflector budget (planner uses larger caps in summarizeContextForPrompt). */

@@ -72,6 +72,79 @@ describe("ChartInsightBody — the shared insight presentation", () => {
     expect(container.querySelector('[aria-label="What we can do"]')).toBeNull();
   });
 
+  test("suppresses a persisted 'build a dashboard' DO lane at render (historical cleanup) but keeps headline + Why", () => {
+    const { container } = render(
+      <ChartInsightBody
+        keyInsight={
+          "West leads at 74% vs 19%.\nWHY: likely stronger metro reach.\nDO: Build a dashboard to track regional sell-through."
+        }
+      />,
+    );
+    // Headline + Why survive…
+    expect(screen.getByText(/West leads at 74% vs 19%/)).toBeTruthy();
+    expect(container.querySelector('[aria-label="Why it might be happening"]')).toBeTruthy();
+    // …but the meta-tool DO lane is dropped: no Do affordance, no "build a dashboard" text.
+    expect(container.querySelector('[aria-label="What we can do"]')).toBeNull();
+    expect(container.textContent).not.toContain("dashboard");
+  });
+
+  test("keeps a real managerial DO lane (does not over-strip 'track' / 'report' actions)", () => {
+    const { container } = render(
+      <ChartInsightBody
+        keyInsight={
+          "West leads at 74% vs 19%.\nDO: Track promo compliance with the East field team."
+        }
+      />,
+    );
+    expect(container.querySelector('[aria-label="What we can do"]')).toBeTruthy();
+    expect(screen.getByText("Track promo compliance with the East field team.")).toBeTruthy();
+  });
+
+  test("uses fallbackDo as the Do lane when the insight carries no DO of its own", () => {
+    const { container } = render(
+      <ChartInsightBody
+        keyInsight={"West leads at 74% vs 19%.\nWHY: likely stronger metro reach."}
+        fallbackDo="Compare what West does that East doesn't."
+      />,
+    );
+    expect(container.querySelector('[aria-label="What we can do"]')).toBeTruthy();
+    expect(screen.getByText("Do:")).toBeTruthy();
+    expect(screen.getByText("Compare what West does that East doesn't.")).toBeTruthy();
+  });
+
+  test("the insight's own DO lane wins over fallbackDo when both are present", () => {
+    render(
+      <ChartInsightBody
+        keyInsight={"West leads at 74% vs 19%.\nDO: audit East shelf presence."}
+        fallbackDo="this fallback must not appear"
+      />,
+    );
+    expect(screen.getByText("audit East shelf presence.")).toBeTruthy();
+    expect(screen.queryByText("this fallback must not appear")).toBeNull();
+  });
+
+  test("fallbackDo does NOT resurrect a Do when there is no headline at all", () => {
+    const { container } = render(<ChartInsightBody keyInsight="   " fallbackDo="x" />);
+    // Headline is required — an empty insight renders nothing even with a fallback.
+    expect(container.textContent).toBe("");
+  });
+
+  test("fallbackDo replaces a stripped meta-tool DO lane with a real action", () => {
+    const { container } = render(
+      <ChartInsightBody
+        keyInsight={
+          "West leads at 74% vs 19%.\nDO: Build a dashboard to track regional sell-through."
+        }
+        fallbackDo="Compare what West does that East doesn't."
+      />,
+    );
+    // The meta-tool advice is gone…
+    expect(container.textContent).not.toContain("dashboard");
+    // …and the deterministic fallback action takes its place.
+    expect(container.querySelector('[aria-label="What we can do"]')).toBeTruthy();
+    expect(screen.getByText("Compare what West does that East doesn't.")).toBeTruthy();
+  });
+
   test("on-accent tone renders the Why lane inheriting the host (drops the neutral muted text)", () => {
     const { container } = render(
       <ChartInsightBody

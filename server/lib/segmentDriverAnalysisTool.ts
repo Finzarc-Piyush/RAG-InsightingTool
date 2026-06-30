@@ -181,7 +181,9 @@ export async function runSegmentDriverAnalysisTool(
         sessionAnalysisContext: exec.sessionAnalysisContext,
         permanentContext: exec.permanentContext,
         domainContext: exec.domainContext,
-      }
+      },
+      // W9 · definitional pairs (GC% ↔ NR) are dropped before ranking/charting.
+      exec.identityGraph
     );
     // Wave WV7 · canonical FindingEvidence suffix on the correlation branch's
     // text so the downstream blackboard `addFinding` (agentLoop.service.ts)

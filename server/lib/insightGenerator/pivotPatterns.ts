@@ -1,4 +1,5 @@
 import type { ChartSpec } from "../../shared/schema.js";
+import { isNonAdditiveMetric } from "../financeMetricAuthority.js";
 
 export type PerformerRow = { x: string; y: number; share: number };
 
@@ -128,14 +129,17 @@ export function computePivotPatterns(
   }
   ranked = ranked.filter((r) => Number.isFinite(r.value));
 
-  // IUX2 · a rate / share / average metric (values bounded in [0,1]) is NOT
-  // additive — summing categories is meaningless, so downstream text must avoid
-  // "X% of the total" / concentration framing for it.
+  // IUX2 · a rate / share / average metric is NOT additive — summing categories
+  // is meaningless, so downstream text must avoid "X% of the total" / concentration
+  // framing for it. Detected two ways: values bounded in [0,1] (value heuristic),
+  // OR the metric NAME resolves non-additive via the authority (catches a "GC%"
+  // column whose values are 45/30/25, which the [0,1] test alone misses).
   const rankedValues = ranked.map((r) => r.value);
   const isRateMetric =
-    rankedValues.length > 0 &&
-    rankedValues.every((v) => v >= 0 && v <= 1) &&
-    rankedValues.some((v) => v > 0 && v < 1);
+    isNonAdditiveMetric(String(chartSpec.y ?? "")) ||
+    (rankedValues.length > 0 &&
+      rankedValues.every((v) => v >= 0 && v <= 1) &&
+      rankedValues.some((v) => v > 0 && v < 1));
 
   const positiveValues = ranked.map((r) => Math.max(0, r.value));
   const total = positiveValues.reduce((s, v) => s + v, 0);

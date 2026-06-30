@@ -50,6 +50,30 @@ This is a glossary of the metrics and acronyms most commonly used in Marico's an
 - **L4W (Last 4 Weeks)** — high-frequency trend metric, common in retail audits.
 - **YoY (Year on Year)** — same period vs. prior year, the default growth comparison.
 
+## Finance waterfall and margin identities
+
+The P&L flows top-to-bottom; each line is **defined** in terms of the ones above it. These are accounting identities, not relationships to be "discovered".
+
+- **GSV → NSV/NR**: `NSV = GSV − trade schemes − returns − taxes`. (NR / Net Revenue ≈ NSV in FMCG.)
+- **NSV → Gross Contribution (GC)**: `GC = NR − COGS` (sometimes less variable selling). COGS = raw material (RM) + packaging material (PM) + conversion cost.
+- **GC → EBITDA**: `EBITDA = GC − A&P − overheads`.
+- **Realisation / value identity**: `value = volume × price (realisation/ASP)`.
+
+Margin ratios (all NON-additive — never summed across channels/brands/periods; aggregate by recomputing from the parts or weighting by the denominator):
+
+- **GC% (Gross Contribution margin)** = `GC / NR` = `1 − COGS/NR`.
+- **Gross Margin %** = `Gross Profit / NR`. **EBITDA %** = `EBITDA / NR`. **A&P intensity** = `A&P / NSV`. **Trade spend %** = `trade spend / GSV`.
+
+## Definitional relationships are not insights
+
+A **denominator is not a driver of its own ratio**, and a **component is not a cause of its aggregate**. These pairs move together *by construction*, so a correlation between them is a tautology, never an insight:
+
+- GC% ↔ Net Revenue, GC% ↔ COGS, GC% ↔ GC; Gross Margin % ↔ COGS; EBITDA % ↔ EBITDA/NR; trade % ↔ GSV; A&P % ↔ NSV.
+- A total ↔ its parts: NR ↔ GSV / trade; GC ↔ NR / COGS; EBITDA ↔ GC / A&P; total NR ↔ a single channel's NR.
+- value ↔ volume × price.
+
+NEVER report "GC% is impacted by / driven by Net Revenue" — NR is GC%'s denominator. The **legitimate** version is a *decomposition*: "rising COGS compressed GC% by N pts" attributes the margin move to a cause and quantifies it — that is actionable, not a tautology. And a correlation between two metrics that are NOT in the same identity (e.g. A&P spend vs. volume growth) is an **association** to validate, not a proven cause — only call it a driver with decomposition, lead-lag, controlled-comparison, or a cited mechanism behind it.
+
 ## Patterns to keep in mind
 
 - "Growth" without a value/volume qualifier is ambiguous — always pin it down before drawing conclusions.

@@ -8,7 +8,7 @@
  * so this block does not duplicate it.
  */
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 // Keep rendering light: stub the markdown renderer so we assert on text, not
 // markdown internals.
@@ -133,5 +133,34 @@ describe('AnswerCard — Highlight Summary', () => {
     );
     expect(screen.getByText(/survival_rate = 0\.63\./)).toBeTruthy();
     expect(screen.queryByText(/0\.6296/)).toBeNull();
+  });
+
+  // W-BOLD2 · methodology + caveats now run through renderInsightText, so the
+  // generator's **data** tokens render as <strong> (bold emphasis "everywhere").
+  test('renders bold data tokens in caveats', () => {
+    render(
+      <AnswerCard
+        message={msg({
+          findings: [{ headline: 'A finding', evidence: 'Evidence.' }],
+          caveats: ['Only **April 2026** is in scope, so no multi-period trend.'],
+        })}
+      />
+    );
+    const strong = screen.getByText('April 2026');
+    expect(strong.tagName).toBe('STRONG');
+  });
+
+  test('renders bold data tokens in methodology when expanded', () => {
+    render(
+      <AnswerCard
+        message={msg({
+          findings: [{ headline: 'A finding', evidence: 'Evidence.' }],
+          methodology: 'Grouped **NC (Rs Cr)** by **Channel** in **DuckDB**.',
+        })}
+      />
+    );
+    fireEvent.click(screen.getByText('Methodology'));
+    const strong = screen.getByText('DuckDB');
+    expect(strong.tagName).toBe('STRONG');
   });
 });

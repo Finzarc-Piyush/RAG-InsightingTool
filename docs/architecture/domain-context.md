@@ -106,6 +106,15 @@ When sources of context speak about the same thing, follow this order:
 3. Restart `server/npm run dev` (the dev script runs `build:domain-packs`).
 4. Verify in the admin UI that the new pack appears.
 
+> **Note (Waves W1–W12, 2026-06-30):** `kpi-and-metric-glossary.md` now carries a
+> "Finance waterfall and margin identities" + "Definitional relationships are not insights"
+> section. This is PROSE for the LLM; the executable source of truth for additivity and
+> metric structural-relatedness is [`financeMetricAuthority.ts`](../../server/lib/financeMetricAuthority.ts)
+> (the `ACCOUNTING IDENTITIES` prompt block is generated from its identity graph, not from
+> the pack). Invariant **I13** asserts the pack ↔ authority stay consistent and that
+> `generatedPacks.ts` was regenerated after the edit. See ADR
+> [`centralized-metric-semantics`](../decisions/centralized-metric-semantics.md).
+
 ## Tests
 
 | File | What it covers |

@@ -6,42 +6,11 @@ import { Button } from '@/components/ui/button';
 import { Lightbulb, ChevronDown, ChevronUp } from 'lucide-react';
 import { Plus } from 'lucide-react';
 import { DashboardTableModal } from './DashboardModal/DashboardTableModal';
-import { renderInsightText } from '@/lib/insightText';
+import { renderInsightText, splitInsightHeadlineDetail, normalizeInsightText } from '@/lib/insightText';
 
 interface InsightCardProps {
   insights: Insight[];
 }
-
-// Function to break down insight into sub-points
-const parseInsightSubPoints = (text: string) => {
-  // Split by ** sections to create sub-points
-  const sections = text.split(/(\*\*[^*]+\*\*)/g);
-  const subPoints: string[] = [];
-  
-  let currentPoint = '';
-  
-  sections.forEach((section) => {
-    if (section.startsWith('**') && section.endsWith('**')) {
-      // If we have accumulated text, add it as a sub-point
-      if (currentPoint.trim()) {
-        subPoints.push(currentPoint.trim());
-        currentPoint = '';
-      }
-      // Start new sub-point with the bold section
-      currentPoint = section;
-    } else {
-      // Add to current sub-point
-      currentPoint += section;
-    }
-  });
-  
-  // Add the last sub-point if there's any content
-  if (currentPoint.trim()) {
-    subPoints.push(currentPoint.trim());
-  }
-  
-  return subPoints;
-};
 
 const TABLE_V1_PREFIX = 'TABLE_V1|';
 
@@ -70,10 +39,24 @@ export function InsightCard({ insights }: InsightCardProps) {
   
   if (!insights || insights.length === 0) return null;
 
+  // W-INS-DEDUP · Safety net for already-persisted analyses: a turn could have
+  // stacked the same insight set twice (server merge had no dedup). Drop exact
+  // (normalized-text) duplicates here so a reloaded "7 then the same 7" collapses
+  // to 7, and renumber for display.
+  const seenText = new Set<string>();
+  const dedupedInsights = insights
+    .filter((i) => {
+      const key = normalizeInsightText(i.text);
+      if (!key || seenText.has(key)) return false;
+      seenText.add(key);
+      return true;
+    })
+    .map((i, idx) => ({ ...i, id: idx + 1 }));
+
   const INITIAL_DISPLAY_COUNT = 3;
-  const hasMoreInsights = insights.length > INITIAL_DISPLAY_COUNT;
-  const displayedInsights = isExpanded ? insights : insights.slice(0, INITIAL_DISPLAY_COUNT);
-  const hiddenCount = insights.length - INITIAL_DISPLAY_COUNT;
+  const hasMoreInsights = dedupedInsights.length > INITIAL_DISPLAY_COUNT;
+  const displayedInsights = isExpanded ? dedupedInsights : dedupedInsights.slice(0, INITIAL_DISPLAY_COUNT);
+  const hiddenCount = dedupedInsights.length - INITIAL_DISPLAY_COUNT;
 
   return (
     <>
@@ -84,7 +67,7 @@ export function InsightCard({ insights }: InsightCardProps) {
           <h3 className="text-lg font-semibold text-foreground">Key Insights</h3>
           {hasMoreInsights && (
             <span className="text-xs text-muted-foreground ml-auto">
-              {insights.length} insights
+              {dedupedInsights.length} insights
             </span>
           )}
         </div>
@@ -157,19 +140,22 @@ export function InsightCard({ insights }: InsightCardProps) {
               );
             }
 
-            const subPoints = parseInsightSubPoints(insight.text);
+            const { headline, detail } = splitInsightHeadlineDetail(insight.text);
             return (
               <li key={insight.id} className="space-y-2" data-testid={`insight-${insight.id}`}>
                 <div className="flex gap-3">
                   <span className="flex-shrink-0 w-6 h-6 rounded-full bg-primary text-primary-foreground text-sm font-medium flex items-center justify-center mt-0.5">
                     {insight.id}
                   </span>
-                  <div className="flex-1 space-y-2">
-                    {subPoints.map((subPoint, subIndex) => (
-                      <div key={subIndex} className="text-sm text-foreground leading-relaxed">
-                        {renderInsightText(subPoint)}
+                  <div className="flex-1 space-y-1">
+                    <div className="text-sm text-foreground leading-relaxed">
+                      {renderInsightText(headline)}
+                    </div>
+                    {detail && (
+                      <div className="text-sm text-muted-foreground leading-relaxed">
+                        — {renderInsightText(detail)}
                       </div>
-                    ))}
+                    )}
                   </div>
                 </div>
               </li>

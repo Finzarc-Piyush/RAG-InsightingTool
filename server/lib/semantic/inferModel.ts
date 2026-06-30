@@ -57,6 +57,7 @@ import type {
   SemanticMetric,
   SemanticModel,
 } from "../../shared/schema.js";
+import { classifyMetric } from "../financeMetricAuthority.js";
 
 interface InferModelInput {
   /** Dataset summary as persisted on ChatDocument after upload. */
@@ -185,9 +186,12 @@ function summariseColumn(
 }
 
 /**
- * Build a `SUM(col)` metric for a numeric column. Currency-tagged columns
- * get `format: "currency"` + `currencyCode`. Indicator columns are
- * skipped at the caller.
+ * Build an aggregation metric for a numeric column. Currency-tagged columns
+ * get `format: "currency"` + `currencyCode`. A NON-additive column (GC%, margin %,
+ * realization …) gets `AVG(col)` + `format: "percent"|"ratio"` instead of
+ * `SUM(col)` — summing a ratio is meaningless, and the old code wrongly emitted
+ * `SUM(GC%)` with `format:number`. Additivity is decided by financeMetricAuthority.
+ * Indicator columns are skipped at the caller.
  */
 function buildSumMetric(
   col: ColumnEntry,
@@ -195,17 +199,28 @@ function buildSumMetric(
 ): SemanticMetric {
   const name = uniqueName(toSnakeCase(col.name), used);
   const isCurrency = !!col.currencyIso;
+  const cls = classifyMetric(col.name);
+  const nonAdditive = cls.additivity === "non_additive";
+  const format = nonAdditive
+    ? cls.kind === "ratio_percent"
+      ? ("percent" as const)
+      : ("ratio" as const)
+    : isCurrency
+      ? ("currency" as const)
+      : ("number" as const);
   const metric: SemanticMetric = {
     name,
     label: col.name,
-    expression: `SUM(${col.name})`,
+    expression: nonAdditive ? `AVG(${col.name})` : `SUM(${col.name})`,
     references: [col.name],
-    format: isCurrency ? "currency" : "number",
+    format,
     exposed: true,
     source: "auto",
-    description: `Sum of \`${col.name}\` — auto-inferred from upload.`,
+    description: nonAdditive
+      ? `Average of \`${col.name}\` — a non-additive ${cls.kind} metric (never summed); auto-inferred.`
+      : `Sum of \`${col.name}\` — auto-inferred from upload.`,
   };
-  if (isCurrency && col.currencyIso) {
+  if (isCurrency && col.currencyIso && !nonAdditive) {
     metric.currencyCode = col.currencyIso;
   }
   return metric;

@@ -118,7 +118,7 @@ many of these fields will be omitted entirely; for an open analytical dive sever
 fields will carry multiple entries.
 
 EMPHASIS (W-BOLD1) — in EVERY string field (body, tldr, keyInsight, findings,
-implications, recommendations, likelyDrivers), wrap each token taken FROM
+implications, recommendations, likelyDrivers, methodology, caveats), wrap each token taken FROM
 THE DATA in markdown bold (**…**): exact column / metric names, dimension or segment
 VALUES, and the numeric figures drawn from them. Example: "**PCNO(R)** leads **NC (Rs Cr)**
 at **75.9** versus **NIHAR NHO** at **24.5**." Bold ONLY data-derived tokens — never bold
@@ -188,6 +188,17 @@ W8 · Decision-grade extensions — emit only those grounded in the findings:
     (percentages, decimals, multipliers) belong in findings/magnitudes, never inside
     a "why". Category labels ("1st-class", "Pclass 3") are fine; fabricated figures
     are not.
+  • CORRELATION IS NOT A DRIVER — a driver that rests ONLY on two metrics moving
+    together is an ASSOCIATION, not a cause. Offer a driver ONLY when the evidence is
+    a DECOMPOSITION / variance attribution (how much of the move a component explains),
+    a LEAD-LAG over time, a CONTROLLED comparison (like-for-like across a segment), or a
+    cited DOMAIN MECHANISM. A bare correlation belongs in the prose as "associated with
+    / tends to move with … (worth validating)", never as a driver to act on.
+  • NEVER AN ACCOUNTING IDENTITY — never offer a "driver" that links a metric to its
+    own component, numerator, or denominator (e.g. "GC% is driven by Net Revenue", since
+    GC% = (NR − COGS)/NR). That is a definitional tautology, not a discovery. See the
+    ACCOUNTING IDENTITIES block when present. (A quantified decomposition of the same
+    pair — "rising COGS compressed GC% by N pts" — IS allowed; it attributes, not asserts.)
   Set \`confidence\` honestly: it is capped to the grounding (data→up to high,
   domain→up to medium, general→up to low — over-claims are normalized down). Set
   \`testable\` true when the dataset could (partly) confirm the mechanism. Emit an

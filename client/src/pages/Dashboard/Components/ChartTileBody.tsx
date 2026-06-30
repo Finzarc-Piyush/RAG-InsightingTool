@@ -30,10 +30,8 @@ import type {
   InsightHistoryEntry,
   InsightHistoryStore,
 } from "../lib/insightHistory";
-import {
-  deriveTileRecommendations,
-  type TileRecommendation,
-} from "../lib/tileRecommendations";
+import { deriveTileDoLane } from "../lib/tileDoFallback";
+import { clickHitsInteractiveDescendant } from "../lib/chartBodyExpand";
 import { buildExpandModalProps } from "../lib/expandModalProps";
 import { resolveInsightFooterMode } from "../lib/insightFooterState";
 
@@ -147,12 +145,14 @@ export function ChartTileBody({
   const handleBodyExpandClick = useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
       if (effectiveMode === "pivot") return;
-      const target = event.target as HTMLElement;
-      // Respect interactive children: filter controls, legend toggles, links,
-      // buttons, form controls — a click on those should do their own thing.
+      // Respect interactive children (filter controls, legend toggles, links,
+      // buttons, form controls) — a click on those should do their own thing.
+      // The container itself carries role="button" (a11y), which the predicate
+      // deliberately excludes so it doesn't suppress expand on every click.
       if (
-        target.closest(
-          '[data-chart-filter-control="true"], a, button, input, select, textarea, [role="button"]',
+        clickHitsInteractiveDescendant(
+          event.target as Element,
+          event.currentTarget,
         )
       ) {
         return;
@@ -240,32 +240,15 @@ export function ChartTileBody({
     void regen.regenerate(specLite, filteredRows);
   }, [regen, specLite, filteredRows]);
 
-  // Wave WI5 · derive per-tile "Try this" recommendations from the
-  // current spec + filtered rows + active filters. Pure-function output
-  // memoised over the same inputs the chart itself reads, so chip
-  // changes are pinned to genuine state shifts (no re-derive on parent
-  // re-renders unrelated to data / filters).
-  const recommendations = useMemo<TileRecommendation[]>(
-    () => deriveTileRecommendations(specLite, filteredRows, filters ?? {}),
-    [specLite, filteredRows, filters],
-  );
-
-  const handleRecommendationClick = useCallback(
-    (rec: TileRecommendation) => {
-      if (rec.kind === "filter-bottom" || rec.kind === "filter-top") {
-        // Pin the single categorical value — clobber any prior
-        // categorical filter on the same column (the rec only fires
-        // when the value isn't already pinned per the helper's
-        // `isValueAlreadyFiltered` guard).
-        onFiltersChange({
-          ...(filters ?? {}),
-          [rec.column]: { type: "categorical", values: [rec.value] },
-        });
-      } else if (rec.kind === "clear-filters") {
-        onFiltersChange({});
-      }
-    },
-    [filters, onFiltersChange],
+  // Always show a "Do" for managers: derive a deterministic, data-grounded next
+  // step from the current spec + filtered rows. `ChartInsightBody` uses this
+  // ONLY when the insight text itself carries no `DO:` lane — so tiles persisted
+  // before the always-show-a-Do change still surface an action without a
+  // regeneration (the consumption half of "fix both ends"). Memoised over the
+  // same inputs the chart reads so it only re-derives on genuine data shifts.
+  const doFallback = useMemo<string | undefined>(
+    () => deriveTileDoLane(specLite, filteredRows) ?? undefined,
+    [specLite, filteredRows],
   );
 
   // Wave WI6 · record a per-tile history slot whenever a fresh regen
@@ -513,8 +496,7 @@ export function ChartTileBody({
             error: regen.error,
             onRegenerate: handleRegenerate,
           }}
-          recommendations={recommendations}
-          onRecommendationClick={handleRecommendationClick}
+          fallbackDo={doFallback}
           history={historyEntries}
           onHistorySelect={handleHistorySelect}
         />

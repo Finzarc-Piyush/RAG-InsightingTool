@@ -100,3 +100,36 @@ export function renderInsightText(
     return part;
   });
 }
+
+/**
+ * W-BOLD2 · Split a Key-Insight string into a headline + optional detail at the
+ * FIRST em-dash separator ("… — …"), the shape `deriveInsightsFromEnvelope`
+ * emits. Also strips a leading bullet glyph the model sometimes prepends
+ * ("* ", "- ", "• "). This replaces the old `parseInsightSubPoints`, which split
+ * on every `**…**` marker — catastrophic once the generator bolds EVERY data
+ * token (one fragment per token → one clause per line). Splitting on the em-dash
+ * instead keeps the headline and detail as at most two lines; heavy inline bold
+ * flows WITHIN each line and can never fragment it.
+ */
+export function splitInsightHeadlineDetail(
+  text: string | null | undefined,
+): { headline: string; detail?: string } {
+  if (!text) return { headline: "" };
+  const stripped = text.replace(/^\s*[*\-•]\s+/, "");
+  const sep = stripped.search(/\s+—\s+/);
+  if (sep === -1) return { headline: stripped.trim() };
+  const headline = stripped.slice(0, sep).trim();
+  const detail = stripped.slice(sep).replace(/^\s+—\s+/, "").trim();
+  if (!headline) return { headline: detail || stripped.trim() };
+  return detail ? { headline, detail } : { headline };
+}
+
+/**
+ * W-INS-DEDUP · Canonical form for comparing two insight strings: drop bold
+ * markers, collapse whitespace, lowercase. Used to de-duplicate the rendered
+ * Key-Insights list (server mirrors this in insightHelpers.normalizeInsightText).
+ */
+export function normalizeInsightText(text: string | null | undefined): string {
+  if (!text) return "";
+  return text.replace(/\*\*/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+}

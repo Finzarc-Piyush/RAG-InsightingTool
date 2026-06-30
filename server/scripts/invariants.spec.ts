@@ -298,4 +298,113 @@ export const INVARIANTS: ReadonlyArray<Invariant> = [
       },
     ],
   },
+  {
+    id: "I13",
+    title:
+      "Metric SEMANTICS — additivity AND structural-relatedness — are decided ONLY by financeMetricAuthority; chart/sweep/pivot/correlation/verifier delegate, no private rate regex or re-derived identities",
+    checks: [
+      // The authority's two coherent views are exported.
+      {
+        kind: "symbol_exported",
+        file: "server/lib/financeMetricAuthority.ts",
+        symbol: "isNonAdditiveMetric",
+        note: "the thin-view additivity predicate every chart path imports",
+      },
+      {
+        kind: "symbol_exported",
+        file: "server/lib/financeMetricAuthority.ts",
+        symbol: "aggregationPolicyFor",
+        note: "the recompute→weighted_mean→mean→sum ladder",
+      },
+      {
+        kind: "symbol_exported",
+        file: "server/lib/financeMetricAuthority.ts",
+        symbol: "FINANCE_TERMS",
+      },
+      {
+        kind: "symbol_exported",
+        file: "server/lib/financeMetricAuthority.ts",
+        symbol: "areStructurallyRelated",
+        note: "the tautology / accounting-identity detector the causation gates delegate to",
+      },
+      {
+        kind: "symbol_exported",
+        file: "server/lib/financeMetricAuthority.ts",
+        symbol: "buildIdentityGraph",
+      },
+      {
+        kind: "symbol_exported",
+        file: "server/lib/financeMetricAuthority.ts",
+        symbol: "FINANCE_IDENTITIES",
+      },
+      // The literal-"%" capability the three legacy regexes all lacked lives here.
+      {
+        kind: "file_contains",
+        file: "server/lib/financeMetricAuthority.ts",
+        needle: 'replace(/%/g, " pct ")',
+        note: "the %→pct normaliser — the fix the \\b…\\b regexes could not express",
+      },
+      // The three drifting rate regexes are deleted; their owners delegate.
+      {
+        kind: "file_contains",
+        file: "server/lib/chartSpecCompiler.ts",
+        needle: "isNonAdditiveMetric",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/chartSpecCompiler.ts",
+        needle: "NON_ADDITIVE_METRIC_RX",
+        note: "deleted — defaultBarLayout delegates to the authority",
+      },
+      {
+        kind: "file_contains",
+        file: "server/lib/agents/runtime/dashboardFeatureSweep.ts",
+        needle: "isNonAdditiveMetric",
+      },
+      {
+        kind: "absent",
+        file: "server/lib/agents/runtime/dashboardFeatureSweep.ts",
+        needle: "RATE_METRIC_RX",
+        note: "deleted — the sweep delegates to the authority",
+      },
+      {
+        kind: "file_contains",
+        file: "server/lib/insightGenerator/pivotPatterns.ts",
+        needle: "isNonAdditiveMetric",
+        note: "the pivot rate-detector is augmented by the authority (name-based, not just [0,1])",
+      },
+      // Causation side — the identity graph is built once and every gate delegates.
+      {
+        kind: "file_contains",
+        file: "server/lib/agents/runtime/context.ts",
+        needle: "buildIdentityGraph",
+        note: "ctx.identityGraph is built ONCE per turn here; gates read this instance",
+      },
+      {
+        kind: "file_contains",
+        file: "server/lib/correlationAnalyzer.ts",
+        needle: "areStructurallyRelated",
+        note: "definitional pairs are filtered before ranking/charting",
+      },
+      {
+        kind: "file_contains",
+        file: "server/lib/agents/runtime/verifierCausalCheck.ts",
+        needle: "areStructurallyRelated",
+        note: "the NO_STRUCTURAL_IDENTITY predicate delegates to the authority",
+      },
+      // Pack ↔ authority single-source-of-truth: the glossary states the rule, and
+      // the generated bundle must carry it (so a pack edit can't ship un-regenerated).
+      {
+        kind: "file_contains",
+        file: "server/lib/domainContext/packs/kpi-and-metric-glossary.md",
+        needle: "Definitional relationships are not insights",
+      },
+      {
+        kind: "file_contains",
+        file: "server/lib/domainContext/generatedPacks.ts",
+        needle: "Definitional relationships are not insights",
+        note: "regenerate generatedPacks.ts after editing the glossary pack",
+      },
+    ],
+  },
 ];

@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest';
 import { isValidElement } from 'react';
-import { renderInsightText, plainInsightText } from './insightText';
+import {
+  renderInsightText,
+  plainInsightText,
+  splitInsightHeadlineDetail,
+  normalizeInsightText,
+} from './insightText';
 
 describe('renderInsightText', () => {
   test('bolds **data** tokens and clamps decimals to ≤2 dp', () => {
@@ -39,5 +44,60 @@ describe('plainInsightText', () => {
   test('is a no-op on nullish input', () => {
     expect(plainInsightText('')).toBe('');
     expect(plainInsightText(undefined)).toBe('');
+  });
+});
+
+describe('splitInsightHeadlineDetail', () => {
+  test('splits once at the first em-dash into headline + detail', () => {
+    const { headline, detail } = splitInsightHeadlineDetail(
+      '**CSD** has the lowest **GC %** at **28.1%** — **CSD** is the bottom channel at **28.05**',
+    );
+    expect(headline).toBe('**CSD** has the lowest **GC %** at **28.1%**');
+    expect(detail).toBe('**CSD** is the bottom channel at **28.05**');
+  });
+
+  test('only the FIRST em-dash splits — later ones stay in the detail', () => {
+    const { headline, detail } = splitInsightHeadlineDetail('Headline — part a — part b');
+    expect(headline).toBe('Headline');
+    expect(detail).toBe('part a — part b');
+  });
+
+  test('strips a leading bullet glyph the model sometimes emits', () => {
+    expect(splitInsightHeadlineDetail('* GT has the highest GC %').headline).toBe(
+      'GT has the highest GC %',
+    );
+    expect(splitInsightHeadlineDetail('- a — b')).toEqual({ headline: 'a', detail: 'b' });
+  });
+
+  test('no separator → whole string is the headline, no detail', () => {
+    expect(splitInsightHeadlineDetail('GT leads at 63.4%')).toEqual({
+      headline: 'GT leads at 63.4%',
+    });
+  });
+
+  test('a fully-bolded insight never yields more than two parts (fragmentation regression)', () => {
+    const heavy =
+      '**CSD** has the lowest **GC %** at **28.1%** — **CSD** is the bottom **channel** below **GT** and **MT B2C**';
+    const { headline, detail } = splitInsightHeadlineDetail(heavy);
+    // Exactly two render lines, regardless of how many bold tokens are present.
+    expect(headline.length).toBeGreaterThan(0);
+    expect(detail && detail.length).toBeGreaterThan(0);
+  });
+
+  test('is safe on nullish input', () => {
+    expect(splitInsightHeadlineDetail('')).toEqual({ headline: '' });
+    expect(splitInsightHeadlineDetail(undefined)).toEqual({ headline: '' });
+  });
+});
+
+describe('normalizeInsightText', () => {
+  test('two strings differing only in bold markers / whitespace / case are equal', () => {
+    expect(normalizeInsightText('**GT** leads  at 63.4%')).toBe(
+      normalizeInsightText('gt leads at 63.4%'),
+    );
+  });
+
+  test('genuinely different insights normalize differently', () => {
+    expect(normalizeInsightText('GT leads')).not.toBe(normalizeInsightText('CSD trails'));
   });
 });

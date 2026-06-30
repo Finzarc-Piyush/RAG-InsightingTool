@@ -386,7 +386,7 @@ export function AnswerCard({
               id="answer-methodology"
               className="mt-2 rounded-brand-md border border-border/40 bg-muted/30 px-3 py-2 text-[13px] leading-[20px] text-muted-foreground"
             >
-              {env.methodology}
+              {renderInsightText(env.methodology)}
             </p>
           )}
         </section>
@@ -408,7 +408,7 @@ export function AnswerCard({
               </p>
               <ul className="space-y-1 text-[13px] leading-[20px] text-foreground">
                 {env.caveats.map((c, i) => (
-                  <li key={i}>• {c}</li>
+                  <li key={i}>• {renderInsightText(c)}</li>
                 ))}
               </ul>
             </div>

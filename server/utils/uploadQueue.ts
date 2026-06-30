@@ -1125,6 +1125,31 @@ class UploadQueue {
           );
         }
 
+        // W6 · stamp metric ADDITIVITY onto the summary columns (durable signal
+        // read by processChartData — the semanticModel object isn't on the chart
+        // context, so this is how "never SUM a ratio" reaches the chart math).
+        // Name-based via financeMetricAuthority; best-effort, non-fatal.
+        try {
+          const { classifyMetric, resolveSiblingColumn } = await import(
+            "../lib/financeMetricAuthority.js"
+          );
+          const frameCols = summary.columns.map((c) => c.name);
+          for (const col of summary.columns) {
+            if (!summary.numericColumns.includes(col.name)) continue;
+            const cls = classifyMetric(col.name);
+            col.additivity = cls.additivity;
+            col.additivityKind = cls.kind;
+            if (cls.additivity === "non_additive" && cls.term?.numerator && cls.term?.denominator) {
+              const num = resolveSiblingColumn(cls.term.numerator, frameCols);
+              const den = resolveSiblingColumn(cls.term.denominator, frameCols);
+              if (num) col.ratioNumeratorColumn = num;
+              if (den) col.ratioDenominatorColumn = den;
+            }
+          }
+        } catch (additivityErr) {
+          logger.warn("W6 · additivity stamp failed (non-fatal):", additivityErr);
+        }
+
         await updateChatDocument({
           ...existingDoc,
           dataSummary: summary,

@@ -16,7 +16,6 @@ import type { ActiveChartFilters } from "@/lib/chartFilters";
 import { pickFooterText } from "../lib/insightFooterState";
 import type { InsightRegenEntry } from "../lib/insightRegenCache";
 import type { InsightHistoryEntry } from "../lib/insightHistory";
-import type { TileRecommendation } from "../lib/tileRecommendations";
 
 /**
  * Wave DR18B · collapsible keyInsight footer for chart tiles.
@@ -150,13 +149,11 @@ interface TileInsightFooterProps {
   /** WI2-wire · optional regen surface. When omitted, no button renders. */
   regen?: TileInsightFooterRegenProps;
   /**
-   * WI5 · optional per-tile "Try this" recommendation chips. When the
-   * array is empty / omitted, no row renders. Each chip's onClick fires
-   * `onRecommendationClick(rec)` so the parent (ChartTileBody) can route
-   * each kind to the right state mutation (apply filter / clear filters).
+   * Deterministic, data-derived "Do" action shown ONLY when the insight text
+   * itself carries no `DO:` lane (so already-persisted tiles still surface a
+   * managerial next step). Threaded straight through to `ChartInsightBody`.
    */
-  recommendations?: TileRecommendation[];
-  onRecommendationClick?: (rec: TileRecommendation) => void;
+  fallbackDo?: string;
   /**
    * Wave WI6 · optional per-tile insight history list (newest first).
    * When non-empty AND `onHistorySelect` is provided, a "Recent insights"
@@ -177,8 +174,7 @@ export function TileInsightFooter({
   isEditing,
   onEdit,
   regen,
-  recommendations,
-  onRecommendationClick,
+  fallbackDo,
   history,
   onHistorySelect,
 }: TileInsightFooterProps) {
@@ -247,7 +243,9 @@ export function TileInsightFooter({
           {(() => {
             const footerText = pickFooterText(regen?.entry?.text, insight);
             if (footerText) {
-              return <ChartInsightBody keyInsight={footerText} />;
+              return (
+                <ChartInsightBody keyInsight={footerText} fallbackDo={fallbackDo} />
+              );
             }
             if (emptyState) {
               return (
@@ -271,35 +269,6 @@ export function TileInsightFooter({
               <span>Sources:</span>
               {regen.entry.citations.map((packId, i) => (
                 <CitationHoverCard key={packId} packId={packId} index={i + 1} />
-              ))}
-            </div>
-          ) : null}
-          {/*
-           * WI5 · per-tile "Try this" recommendation chips. Each chip
-           * applies a single-click state mutation (categorical filter
-           * pin / clear filters) via `onRecommendationClick`. Slotted
-           * after the Sources row and before the action row so the
-           * row order goes: prose → metadata → sources → try-this →
-           * actions (Re-explain + Edit).
-           */}
-          {recommendations && recommendations.length > 0 ? (
-            <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
-              <span>Try this:</span>
-              {recommendations.map((rec) => (
-                <Button
-                  key={rec.id}
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-6 px-2 text-[11px]"
-                  aria-label={rec.label}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRecommendationClick?.(rec);
-                  }}
-                >
-                  {rec.label}
-                </Button>
               ))}
             </div>
           ) : null}

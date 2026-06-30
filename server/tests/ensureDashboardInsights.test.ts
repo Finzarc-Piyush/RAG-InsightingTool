@@ -5,6 +5,7 @@ import type {
   EnsureDashboardInsightsDeps,
 } from "../lib/ensureDashboardInsights.js";
 import { applyChartInsightsBySignature } from "../lib/applyChartInsightsBySignature.js";
+import type { ChartEnrichmentContext } from "../lib/generateInsightForCharts.js";
 import type { ChartSpec, Dashboard } from "../shared/schema.js";
 
 const chart = (over: Partial<ChartSpec>): ChartSpec =>
@@ -28,6 +29,7 @@ type Calls = {
   generate: number;
   patch: number;
   generateInput?: ChartSpec[];
+  generateContext?: ChartEnrichmentContext;
   lastPool?: ChartSpec[];
 };
 
@@ -37,6 +39,8 @@ function makeDeps(opts: {
   hasSession?: boolean;
   /** keyInsight that generation produces for an orphan; "" → generation fails. */
   genResult?: string;
+  /** when set, wires `loadDomainContext` to return this (context-parity test). */
+  domainText?: string;
 }): { deps: EnsureDashboardInsightsDeps; calls: Calls } {
   const calls: Calls = { generate: 0, patch: 0 };
   let dash = opts.dashboard;
@@ -60,15 +64,19 @@ function makeDeps(opts: {
       dash = { ...dash, charts: flat.charts, sheets };
       return { ok: true, patchedCount };
     },
-    generateInsightForCharts: async (charts) => {
+    generateInsightForCharts: async (charts, genDeps) => {
       calls.generate += 1;
       calls.generateInput = charts;
+      calls.generateContext = genDeps?.context;
       return charts.map((c) => ({
         ...c,
         keyInsight: opts.genResult ?? "",
       }));
     },
   };
+  if (opts.domainText !== undefined) {
+    deps.loadDomainContext = async () => opts.domainText;
+  }
   return { deps, calls };
 }
 
@@ -104,6 +112,30 @@ describe("ensureDashboardInsights", () => {
     assert.equal(calls.generateInput![0].x, "ASM");
     assert.ok((res.patchedCount ?? 0) > 0);
     assert.equal(res.dashboard!.charts![0].keyInsight, "ASM-level adherence varies widely.");
+  });
+
+  it("feeds orphan generation the question (dashboard name) + domain pack — parity with chat", async () => {
+    const orphan = chart({ x: "ASM", title: "rate by ASM" }); // no chat twin
+    const { deps, calls } = makeDeps({
+      dashboard: makeDashboard([orphan], { name: "PJP adherence by ASM" }),
+      chatCharts: [chart({ keyInsight: "different signature" })],
+      genResult: "ASM-level adherence varies widely.",
+      domainText: "FMCG/Marico domain pack…",
+    });
+
+    await ensureDashboardInsights({ dashboardId: "dash1", username: "u@x.com", deps });
+
+    assert.equal(calls.generate, 1);
+    assert.equal(
+      calls.generateContext?.userQuestion,
+      "PJP adherence by ASM",
+      "the question-derived dashboard name must steer orphan insight generation"
+    );
+    assert.equal(
+      calls.generateContext?.domainContext,
+      "FMCG/Marico domain pack…",
+      "the FMCG/Marico domain pack must be recomposed for orphan generation"
+    );
   });
 
   it("is idempotent: an already-insighted dashboard does nothing", async () => {

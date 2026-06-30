@@ -9,7 +9,7 @@ import { computePivotPatterns, renderPivotPatternsBlock } from './insightGenerat
 import { deriveWeekdayPattern } from './insightGenerator/weekdayPattern.js';
 import { buildPatternDrivenFallbackShort } from './insightGenerator/deterministicNarratives.js';
 import { hasHedge, STAT_NUMBER_RE } from './agents/runtime/verifierCausalCheck.js';
-import { splitChartInsightLanes, joinChartInsightLanes } from '../shared/chartInsightLanes.js';
+import { splitChartInsightLanes, joinChartInsightLanes, stripDashboardMetaAdviceDoLane } from '../shared/chartInsightLanes.js';
 import { logger } from "./logger.js";
 
 /**
@@ -61,14 +61,47 @@ export function buildDeterministicChartInsightFallback(args: {
   yP75: number;
   bottomThreshold: string;
   formatY: (n: number) => string;
+  bottomX?: unknown;
 }): string {
-  const { chartSpec, topX, topY, avgY, formatY } = args;
+  const { chartSpec, topX, topY, avgY, formatY, bottomX } = args;
   const dim = resolveTopPerfDimension(chartSpec);
   // IUX2 · plain-English, no banned jargon. Was "p75 …, prioritize …, moving
   // weaker segments above …" — which contradicted the manager-friendly ban
   // list this work introduced. Still names the leader + its value so the
   // grounding contract (name the top category/value) holds.
-  return `${dim} "${topX}" leads on ${chartSpec.y} at ${formatY(topY)}, clearly ahead of the typical ${formatY(avgY)} across the rest.`;
+  const headline = `${dim} "${topX}" leads on ${chartSpec.y} at ${formatY(topY)}, clearly ahead of the typical ${formatY(avgY)} across the rest.`;
+  // Always end with a managerial next move — the headline-only fallback used to
+  // ship with no DO lane, so a manager got the WHAT but never a next step.
+  const doLane = buildDeterministicDoLane({
+    topLabel: topX === undefined || topX === null ? '' : String(topX),
+    bottomLabel:
+      bottomX === undefined || bottomX === null ? undefined : String(bottomX),
+  });
+  return joinChartInsightLanes({ headline, do: doLane });
+}
+
+/**
+ * Build a concrete, grounded "DO:" action from the chart's named leader (and,
+ * when available, its laggard). Deliberately conservative and mechanism-anchored
+ * — it suggests a real comparison / drill-down / reallocation, never a vague
+ * "monitor" or "investigate". Used as the deterministic safety net so a manager
+ * ALWAYS gets a next step: appended whenever the model omits the DO lane (or a
+ * gate strips it), and baked into the headline-only fallback above. The client
+ * mirrors this shape in `deriveTileDoLane` for already-persisted tiles.
+ */
+export function buildDeterministicDoLane(args: {
+  topLabel: string;
+  bottomLabel?: string;
+}): string {
+  const top = (args.topLabel ?? '').trim();
+  const bottom = (args.bottomLabel ?? '').trim();
+  if (top && bottom && top !== bottom) {
+    return `Compare what **${top}** does that **${bottom}** doesn't — break the gap down by region, pack or channel and shift effort (distribution, mix or pricing) toward what's working, or decide **${bottom}** isn't worth the investment.`;
+  }
+  if (top) {
+    return `Dig into what's driving **${top}** — break it down by region, pack or channel and double down on the levers (distribution, mix or pricing) behind it.`;
+  }
+  return `Break this down by a second factor (region, pack or channel) to see where the gap concentrates, then shift effort to the biggest contributor.`;
 }
 
 const normalizeInsightText = (value: string) => (value || '').replace(/\s+/g, ' ').trim();
@@ -415,25 +448,27 @@ NUMERIC XY RELATIONSHIP (ground truth from plotted points):
   }
 
   // Fallback to model for non-numeric cases; request quantified insights explicitly
+  // W9 · a correlation is an ASSOCIATION, not an established cause. (Definitional
+  // pairs — GC% ↔ NR — are already filtered out upstream in correlationAnalyzer,
+  // so a chart that reaches here is non-definitional but still only correlation-
+  // grade.) Describe how the two MOVE TOGETHER and where the association is
+  // strongest; do NOT prescribe "change X to improve Y" — that asserts causation
+  // the data does not establish. Calibrated language ("associated with", "tends
+  // to move with"), and flag it as a hypothesis to validate, never a lever.
   const correlationContext = isCorrelationChart ? `
-CRITICAL: This is a CORRELATION/IMPACT ANALYSIS chart.
-- Y-axis (${chartSpec.y}) = TARGET VARIABLE we want to IMPROVE (${targetVariable})
-- X-axis (${chartSpec.x}) = FACTOR VARIABLE we can CHANGE (${factorVariable})
-- Suggestions MUST focus on: "How to change ${factorVariable} to improve ${targetVariable}"
+CRITICAL: This is a CORRELATION chart — it shows an ASSOCIATION, NOT a proven cause.
+- Y-axis (${chartSpec.y}) and X-axis (${chartSpec.x}) MOVE TOGETHER in the data.
+- This does NOT establish that ${factorVariable} drives ${targetVariable}. Correlation ≠ causation.
 
-X-AXIS STATISTICS (${factorVariable} - what we can change):
-- Range: ${formatX(minX)} to ${formatX(maxX)}
-- Average: ${formatX(avgX)}
-- Median: ${formatX(xP50)}
-- 25th percentile: ${formatX(xP25)}, 75th percentile: ${formatX(xP75)}, 90th percentile: ${formatX(xP90)}
-${xRangeForTopY ? `- Optimal ${factorVariable} range for top Y performers: ${formatX(xRangeForTopY.min)}-${formatX(xRangeForTopY.max)} (avg: ${formatX(avgXForTopY)}, 25th-75th percentile range: ${formatX(xRangeForTopY.p25)}-${formatX(xRangeForTopY.p75)})` : ''}
+WHERE THE ASSOCIATION IS STRONGEST (${factorVariable}):
+- Range: ${formatX(minX)} to ${formatX(maxX)}, average ${formatX(avgX)}, median ${formatX(xP50)}
+${xRangeForTopY ? `- The highest ${targetVariable} values tend to occur where ${factorVariable} is ${formatX(xRangeForTopY.min)}-${formatX(xRangeForTopY.max)} (avg ${formatX(avgXForTopY)}).` : ''}
 
-SUGGESTION FORMAT:
-- Must explain how to CHANGE ${factorVariable} (X-axis) to IMPROVE ${targetVariable} (Y-axis)
-- Use specific X-axis values/ranges from statistics above
-- NEVER use percentile labels like "P75", "P90", "P25", "P75 level", "P90 level", "P75 value", "P90 value" - ONLY use the numeric values themselves
-- Example: "To improve ${targetVariable} to ${formatY(yP75)} or higher, adjust ${factorVariable} to ${formatX(xRangeForTopY?.p75 || xP75)}" (NOT "to P75 level (${formatY(yP75)})")
-- Focus on actionable steps: "Adjust ${factorVariable} from current average of ${formatX(avgX)} to target range of ${formatX(xRangeForTopY?.p25 || xP25)}-${formatX(xRangeForTopY?.p75 || xP75)}"
+INSIGHT FORMAT (association, not action):
+- Describe the relationship: "${targetVariable} tends to be higher where ${factorVariable} is ..." using the numeric ranges above.
+- NEVER instruct the reader to CHANGE ${factorVariable} to MOVE ${targetVariable} — the data does not establish that lever.
+- If you suggest anything, suggest VALIDATION: "worth testing whether ${factorVariable} actually drives ${targetVariable}" — a hypothesis, not a directive.
+- NEVER use percentile labels ("P75", "P90") — use the numeric values themselves.
 
 ` : '';
 
@@ -495,7 +530,7 @@ ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${
 TASK: Brief a busy manager (NOT a statistician) on THIS chart in AT MOST 3 short lines. Use the real numbers from DATA FACTS / PIVOT PATTERNS / blocks below, but translate them into everyday language—never invent metrics. PIVOT PATTERNS are internal analysis signals: read them to find the story, but NEVER echo their labels (no "quartile", "concentration", "HHI", "CV", "P75", "mass", "trough"). Emit these lanes, each on its OWN line, omitting any optional lane that does not genuinely apply:
   Line 1 — HEADLINE (REQUIRED): the single most important comparison in plain words WITH the actual number(s), naming each group by its EXACT label from DATA FACTS (e.g. "Female passengers survived at 74% versus 19% for male passengers — nearly 4× higher"). One sentence. No hedge here; no "WHY:"/"DO:" prefix.
   Line 2 — start the line literally with "WHY: " then ONE clearly-hedged hypothesis for why the pattern might exist, drawn from the question and general real-world / business knowledge (OPTIONAL). It MUST open with a hedge ("likely", "may reflect", "consistent with", "one plausible reason") so it never reads as a measured fact, and MUST NOT contain any number (numbers belong in the headline). Omit the whole line if there is no credible reason. EXCEPTION — if a TEMPORAL CALENDAR block appears below, the WHY MUST use it: state the weekly rhythm plainly (e.g. "WHY: the regular dips are Sundays — a non-working day, so the weekly rise-and-fall is expected") and do NOT present that off-day pattern as a surprise, a demand swing, or a data gap. A calendar fact is observed, so a light hedge is fine but never contradict it.
-  Line 3 — start the line literally with "DO: " then ONE concrete next step the reader could actually act on (OPTIONAL). If the pattern is a fixed historical or structural fact nobody can change from this chart, OMIT this line entirely rather than forcing a generic action.
+  Line 3 — start the line literally with "DO: " then THE single most useful next move a manager could make on this — their strategic next step. Name a concrete lever (price, distribution, mix, segment, channel, cadence, season) or a specific drill-down, and tie it to the named leader/laggard (e.g. "DO: Copy SAFF GOLD's metro distribution playbook to NIHAR NHO, where the same reach should lift sell-through"). Give a DO line for essentially every chart; OMIT it ONLY when the pattern is a fixed historical or structural fact nobody could ever act on. Never pad with a vague or generic step.
 
 Keep it tight — a manager should absorb all of it in a few seconds. Drop a lane rather than padding it.
 
@@ -516,7 +551,7 @@ ${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}$
 
 OUTPUT JSON (exact keys only):
 {
-  "keyInsight": "Up to 3 lines (≤${KEY_INSIGHT_MAX_CHARS} characters total), no statistics jargon, no markdown headings. Wrap every data-derived label and number in markdown bold (**…**). Line 1 is the HEADLINE: name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS using the category's EXACT label text (not a synonym) with the real number (never labels like P75/P90), both bolded (e.g. **PCNO(R)** at **75.9**). Then, ONLY where each genuinely applies, a line starting 'WHY: ' (one clearly-hedged, number-free reason) and a line starting 'DO: ' (one concrete action). Omit the WHY and/or DO line when they do not apply."
+  "keyInsight": "Up to 3 lines (≤${KEY_INSIGHT_MAX_CHARS} characters total), no statistics jargon, no markdown headings. Wrap every data-derived label and number in markdown bold (**…**). Line 1 is the HEADLINE: name the leading ${topPerfDimension} and its ${chartSpec.y} from DATA FACTS using the category's EXACT label text (not a synonym) with the real number (never labels like P75/P90), both bolded (e.g. **PCNO(R)** at **75.9**). Then an OPTIONAL line starting 'WHY: ' (one clearly-hedged, number-free reason — omit if none is credible) and — for essentially every chart — a line starting 'DO: ' giving the single most useful managerial next move (a concrete lever or drill-down, tied to a named category). Omit the DO line only when the pattern is a fixed fact nobody could act on."
 }`;
 
   try {
@@ -529,7 +564,7 @@ OUTPUT JSON (exact keys only):
             content: `You are a senior analyst briefing a busy manager who is NOT a statistician. Output JSON with a single key "keyInsight": AT MOST 3 short lines interpreting the chart using ONLY the provided numbers, each lane on its OWN line and any optional lane omitted when it does not apply:
   • the HEADLINE — the main comparison with real numbers (no hedge, no prefix);
   • optionally a line starting "WHY: " — ONE clearly-hedged real-world reason for the pattern;
-  • optionally a line starting "DO: " — ONE concrete next step, only when the reader can actually act on it.
+  • a line starting "DO: " — the single most useful managerial next move (a concrete lever or drill-down, tied to a named category). Give one for essentially every chart; omit ONLY when the pattern is a fixed fact nobody could ever act on.
 Keep it tight: a manager should grasp all of it in a few seconds. Drop any lane rather than padding it.
 
 WRITE FOR A NON-MATH READER — translate the analysis, never parrot jargon:
@@ -541,6 +576,7 @@ ANTI-PATTERNS — do NOT write any of these:
 - "Focus on {top}" / "prioritize {leader}" without naming a *mechanism* (price, distribution, mix, segment, channel, cadence, season).
 - Sentences that only restate which value is highest or lowest with no interpretation.
 - Vague next-actions ("monitor", "investigate further", "look deeper"). If you give a next step, make it specific and clearly worth doing.
+- Meta-tool advice ("build / create / set up a dashboard, scorecard, tracker, monitoring view, or report to track this") — that is NOT a managerial action, it is just describing the surface the reader is already looking at. Recommend the underlying business decision (with a mechanism — price, distribution, mix, segment, channel, cadence, season), or OMIT the DO line.
 - A forced next step when nothing can be done: if the pattern is a fixed historical or structural fact the reader cannot change, OMIT the next step instead of inventing a generic one.
 
 The "WHY: " line is a plausible cause drawn from the question and general world / business knowledge (e.g. why one group leads, why a season spikes). It is a HYPOTHESIS: ALWAYS introduce it with a hedge ("likely", "may reflect", "consistent with") so it is unmistakably an explanation and not a measured fact, and NEVER attach a number to it (numbers stay in the measured headline). This keeps the chart's "why" consistent with the answer envelope's hedged causal lane. If there is no credible reason, OMIT the WHY line entirely — never pad it.
@@ -581,6 +617,36 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
     // Hedge-gate the WHY: lane before anything else uses the text — an unhedged
     // or numbered "why" is dropped, the headline + DO lane survive (L-022).
     modelKeyInsight = sanitizeChartWhyLane(modelKeyInsight);
+
+    // Gate the DO: lane the same way (deterministic, ships BEFORE the prompt
+    // permission per L-022): "build a dashboard / scorecard / tracker / report
+    // to track this" is meta-tool advice, not a managerial action — drop it
+    // (headline + WHY survive) rather than ship it. The prompt also bans it, but
+    // the model free-styles at temp 0.45, so the code gate is the guarantee.
+    modelKeyInsight = stripDashboardMetaAdviceDoLane(modelKeyInsight);
+
+    // Always-show-a-Do: if the model omitted the DO lane (or a gate stripped it),
+    // append a deterministic, grounded next step so a manager always gets a clear
+    // move. The model's own DO always wins when present; this is only the safety
+    // net. Restricted to categorical-x charts — naming a "leader vs laggard"
+    // action over a numeric/continuous x (scatter/trend) would read as nonsense,
+    // so those keep the model's DO or none.
+    if (isCategoricalX && !splitChartInsightLanes(modelKeyInsight).do) {
+      const topLabel =
+        topPerformers.length > 0 && topPerformers[0]!.x != null
+          ? String(topPerformers[0]!.x)
+          : '';
+      const bottomLabel =
+        bottomPerformers.length > 0 && bottomPerformers[0]?.x != null
+          ? String(bottomPerformers[0]!.x)
+          : undefined;
+      if (topLabel) {
+        modelKeyInsight = joinChartInsightLanes({
+          ...splitChartInsightLanes(modelKeyInsight),
+          do: buildDeterministicDoLane({ topLabel, bottomLabel }),
+        });
+      }
+    }
 
     const candidate = truncateInsight(modelKeyInsight);
 
@@ -650,6 +716,7 @@ Never use percentile shorthand like P75 or P90 — use numeric values. Always ab
         yP75,
         bottomThreshold: bottomThresholdStr,
         formatY,
+        bottomX: bottomPerformers.length > 0 ? bottomPerformers[0]!.x : undefined,
       });
 
       return {

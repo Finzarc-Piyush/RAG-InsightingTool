@@ -224,6 +224,14 @@ export interface AgentExecutionContext {
    */
   intentEnvelope?: IntentEnvelope;
   summary: DataSummary;
+  /**
+   * Per-turn metric identity graph (built ONCE in buildAgentExecutionContext
+   * from `summary.columns ∪ chatDocument.semanticModel`). The single instance
+   * every causation gate reads — correlation filtering, the verifier's
+   * NO_STRUCTURAL_IDENTITY predicate, and the ACCOUNTING IDENTITIES prompt block —
+   * so prevention and cleanup can never diverge. See financeMetricAuthority.
+   */
+  identityGraph?: import("../../financeMetricAuthority.js").IdentityGraph;
   chatHistory: Message[];
   chatInsights?: Insight[];
   mode: "analysis" | "dataOps" | "modeling";
