@@ -70,13 +70,20 @@ export function deriveInsightsFromCharts(charts: any[]): { id: number; text: str
   }
 
   try {
+    // SU-KI1 · Only surface a REAL chart insight. Pre-fix this echoed the chart
+    // TITLE ("Insight: total_nr by Channel") whenever `keyInsight` was empty —
+    // e.g. a minimal-depth lookup, or a turn where insight enrichment had not
+    // populated `keyInsight` yet. A title echo is noise, not an insight; emit
+    // nothing in that case (the bottom InsightCard simply renders no bullet)
+    // rather than manufacturing a placeholder.
     const derived = charts
       .map((c: any, idx: number) => {
-        const text = c?.keyInsight || (c?.title ? `Insight: ${c.title}` : null);
+        const text = typeof c?.keyInsight === "string" ? c.keyInsight.trim() : "";
         return text ? { id: idx + 1, text } : null;
       })
       .filter(Boolean) as { id: number; text: string }[];
-    return derived;
+    // Re-number sequentially so ids stay 1..n after dropping insight-less charts.
+    return derived.map((d, i) => ({ id: i + 1, text: d.text }));
   } catch {
     return [];
   }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Check } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -105,17 +106,21 @@ export function SummaryItemDialog({
                           title={o.label}
                           onClick={() => set(f.key, o.value)}
                           className={cn(
-                            "flex h-9 flex-1 items-center justify-center gap-1.5 rounded-brand-sm border text-xs font-medium transition-all",
+                            "flex h-10 flex-1 items-center justify-center gap-1.5 rounded-brand-sm border-2 text-xs font-medium transition-all",
                             SWATCH_CLASSES[o.value] ?? "border-border",
                             selected
-                              ? "ring-2 ring-foreground/70 ring-offset-1 ring-offset-background"
-                              : "opacity-70 hover:opacity-100",
+                              ? "scale-[1.03] font-semibold ring-2 ring-foreground ring-offset-2 ring-offset-background"
+                              : "opacity-45 hover:opacity-80",
                           )}
                         >
-                          <span
-                            className={cn("h-2.5 w-2.5 rounded-full", SWATCH_DOT[o.value])}
-                            aria-hidden="true"
-                          />
+                          {selected ? (
+                            <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                          ) : (
+                            <span
+                              className={cn("h-2.5 w-2.5 rounded-full", SWATCH_DOT[o.value])}
+                              aria-hidden="true"
+                            />
+                          )}
                           {o.label}
                         </button>
                       );

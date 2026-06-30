@@ -33,14 +33,16 @@ export type MagnitudeTone = "green" | "amber" | "red";
  * A card with NO tone keeps the signature gold treatment (see below).
  */
 export function magnitudeToneClasses(tone: MagnitudeTone): string {
+  // A solid coloured LEFT bar (border-l-4) + a clear tint makes the colour
+  // unmistakable at a glance — green = best, red = worst, amber = neutral.
   switch (tone) {
     case "green":
-      return "border-[hsl(var(--success)/0.4)] bg-[hsl(var(--success)/0.08)]";
+      return "border border-[hsl(var(--success)/0.30)] border-l-4 border-l-[hsl(var(--success))] bg-[hsl(var(--success)/0.12)]";
     case "red":
-      return "border-destructive/40 bg-destructive/5";
+      return "border border-destructive/30 border-l-4 border-l-destructive bg-destructive/12";
     case "amber":
     default:
-      return "border-amber-500/40 bg-amber-500/5";
+      return "border border-amber-500/30 border-l-4 border-l-amber-500 bg-amber-500/12";
   }
 }
 

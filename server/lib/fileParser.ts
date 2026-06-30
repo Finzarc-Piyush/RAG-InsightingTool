@@ -33,6 +33,7 @@ import {
 import { isFlagOn } from './featureFlags.js';
 import { matrixToGrid } from './tableStructure/grid.js';
 import { detectTableFromGrid } from './tableStructure/detectTable.js';
+import { trimTrailingSparseRows } from './tableStructure/rowProfile.js';
 import {
   regionFromOverride,
   buildHeaderKeysFromGrid,
@@ -426,7 +427,9 @@ async function parseCsvViaDetection(
   }
 
   lastTableDetection = toTableDetection(region, grid);
-  return records;
+  // Trim trailing stray-value rows (blank dimensions + a lone value) so they
+  // don't become phantom null-dimension buckets once grouped.
+  return trimTrailingSparseRows(records);
 }
 
 async function parseCsv(buffer: Buffer, opts: ParseFileOptions = {}): Promise<Record<string, any>[]> {
@@ -1183,6 +1186,19 @@ export function resolveApprovedDateColumns(
     // calendar-date columns — `parseRowDate("09:45:34")` returns null,
     // which would generate empty Day/Week/Month facet columns.
     if (isTimeOfDayColumn(col)) continue;
+    // SU-YR1 · A whitelisted NAME ("Year", "Month", "Quarter") is necessary but
+    // NOT sufficient — the column's VALUES must actually parse as dates. A fiscal
+    // column named "Year" whose values are 2-digit codes (26, 27) or a "Quarter"
+    // column holding "Q1"/"Q2" matches the name regex but contains ZERO calendar
+    // dates; approving it types the column `date`, canonicalizes 26 into a
+    // 1900-era serial and renders it "01/01/00" while nulling its derived facets.
+    // Gate on the same value evidence used for LLM-suggested columns, at a lenient
+    // floor so messy-but-real date columns still pass while pure non-date codes
+    // are rejected.
+    const whitelistValues = data
+      .slice(0, Math.min(data.length, 1000))
+      .map((r) => r[col]);
+    if (!isDateParseableAtThreshold(whitelistValues, 0.5)) continue;
     approved.push(col);
   }
 

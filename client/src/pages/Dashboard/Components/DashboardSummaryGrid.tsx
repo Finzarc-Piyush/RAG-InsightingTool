@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Layout, Layouts } from "react-grid-layout";
 import { ArrowRight, Compass, HelpCircle, ListChecks, Pencil, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Caption, Metric } from "@/components/ui/typography";
 import {
   magnitudeToneClasses,
   type MagnitudeTone,
@@ -110,14 +109,20 @@ function SummaryCardBody({
       return (
         <div
           className={cn(
-            "flex h-full flex-col gap-1 overflow-hidden rounded-brand-md border px-3 py-2.5",
+            "flex h-full w-full flex-col items-center justify-center gap-1 overflow-hidden rounded-brand-md px-3 py-2 text-center",
             magnitudeToneClasses((m.tone as MagnitudeTone) ?? "amber"),
           )}
+          // W-SBGRID · make the card a query container so the number + label
+          // font sizes scale fluidly with the card's size (cqmin = the smaller
+          // of the card's width/height), centred both ways.
+          style={{ containerType: "size" }}
         >
-          <Metric size="sm" className="text-foreground">
+          <span className="max-w-full truncate font-metric font-medium leading-none text-foreground text-[length:clamp(1rem,26cqmin,3.5rem)] [font-variant-numeric:tabular-nums]">
             {String(m.value ?? "")}
-          </Metric>
-          <Caption className="text-foreground/80">{String(m.label ?? "")}</Caption>
+          </span>
+          <span className="line-clamp-2 max-w-full leading-tight text-foreground/70 text-[length:clamp(0.58rem,8cqmin,1rem)]">
+            {String(m.label ?? "")}
+          </span>
         </div>
       );
     case "attentionAreas": {

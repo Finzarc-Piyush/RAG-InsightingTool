@@ -77,6 +77,7 @@ import { inferFiltersFromQuestion } from "../utils/inferFiltersFromQuestion.js";
 import { inferPeriodFilterFromQuestion } from "../utils/inferPeriodFilterFromQuestion.js";
 import { formatPriorInvestigationsForPlanner } from "./priorInvestigations.js";
 import { classifyHierarchyIntent } from "./planArgRepairs.js";
+import { isTrustedRollupHierarchy } from "../../detectRollupHierarchies.js";
 
 type MidTurnPersist = AgentExecutionContext["onMidTurnSessionContext"];
 
@@ -113,6 +114,16 @@ export function buildAgentExecutionContext(params: {
   onIntermediateArtifact?: AgentExecutionContext["onIntermediateArtifact"];
   abortSignal?: AbortSignal;
 }): AgentExecutionContext {
+  // AD1-FP1 · Sanitize stored dimension hierarchies at READ time so a stale
+  // low-confidence auto-detection (e.g. "GT"/General Trade wrongly flagged as a
+  // category total) can no longer silently exclude the dominant value from
+  // breakdowns. This protects sessions whose hierarchies were captured before
+  // the detector was tightened — every downstream reader (intent envelope,
+  // injectRollupExcludeFilters, the DIMENSION HIERARCHIES prompt block) sees the
+  // filtered set because they all read `ctx.sessionAnalysisContext`.
+  const sessionAnalysisContext = sanitizeSessionHierarchies(
+    params.sessionAnalysisContext
+  );
   const inferredFilters = [
     ...inferFiltersFromQuestion(params.question, params.summary),
     // Relative-period phrases ("latest 12 months", "YTD") → a concrete filter
@@ -128,7 +139,7 @@ export function buildAgentExecutionContext(params: {
   //       — survive across turns and re-apply automatically.
   const intentEnvelope = buildIntentEnvelope(
     inferredFilters,
-    params.sessionAnalysisContext,
+    sessionAnalysisContext,
     params.question,
     params.activeDirectives
   );
@@ -166,7 +177,7 @@ export function buildAgentExecutionContext(params: {
     domainContext: params.domainContext,
     activeDirectives: params.activeDirectives,
     contextTrimmedSink: params.contextTrimmedSink,
-    sessionAnalysisContext: params.sessionAnalysisContext,
+    sessionAnalysisContext,
     columnarStoragePath: params.columnarStoragePath,
     chatDocument: params.chatDocument,
     dataBlobVersion: params.dataBlobVersion,
@@ -179,6 +190,24 @@ export function buildAgentExecutionContext(params: {
     intentEnvelope:
       intentEnvelope.exclusions.length > 0 ? intentEnvelope : undefined,
     lastAssistantPivotState,
+  };
+}
+
+/**
+ * AD1-FP1 · Drop low-confidence auto-detected rollup hierarchies whose value is
+ * not actually named like a total (e.g. "GT"/General Trade). Returns the same
+ * object when nothing is dropped so identity-sensitive callers are unaffected.
+ */
+function sanitizeSessionHierarchies(
+  sac: SessionAnalysisContext | undefined
+): SessionAnalysisContext | undefined {
+  const hierarchies = sac?.dataset?.dimensionHierarchies;
+  if (!sac || !hierarchies?.length) return sac;
+  const trusted = hierarchies.filter(isTrustedRollupHierarchy);
+  if (trusted.length === hierarchies.length) return sac;
+  return {
+    ...sac,
+    dataset: { ...sac.dataset, dimensionHierarchies: trusted },
   };
 }
 

@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { detectRollupHierarchies } from "../lib/detectRollupHierarchies.js";
+import {
+  detectRollupHierarchies,
+  looksLikeTotalLabel,
+  isTrustedRollupHierarchy,
+} from "../lib/detectRollupHierarchies.js";
 import type { DataSummary } from "../shared/schema.js";
 
 function makeSummary(opts: {
@@ -24,12 +28,12 @@ function makeSummary(opts: {
   };
 }
 
-describe("AD1 · detectRollupHierarchies — Marico-VN demo case", () => {
-  it("detects FEMALE SHOWER GEL as a category total over MARICO/PURITE/OLIV/LASHE", () => {
-    // Mirrors the screenshot proportions: rollup ≈ 88% of total, ~11× the runner-up.
+describe("AD1 · detectRollupHierarchies — category total via labelled name", () => {
+  it("detects a TOTAL-labelled category over its member brands", () => {
+    // Mirrors the screenshot proportions: rollup ≈ 88% of total, ~11× the
+    // runner-up. AD1-FP1: only fires because the value is NAMED like a total.
     const data = [
-      // category-total row (could appear once or many times; sums work either way)
-      { Products: "FEMALE SHOWER GEL", Total_Sales_Value: 68_751 },
+      { Products: "TOTAL FEMALE SHOWER GEL", Total_Sales_Value: 68_751 },
       { Products: "MARICO", Total_Sales_Value: 6_000 },
       { Products: "PURITE", Total_Sales_Value: 2_000 },
       { Products: "OLIV", Total_Sales_Value: 700 },
@@ -46,11 +50,56 @@ describe("AD1 · detectRollupHierarchies — Marico-VN demo case", () => {
     });
     assert.equal(out.length, 1);
     assert.equal(out[0].column, "Products");
-    assert.equal(out[0].rollupValue, "FEMALE SHOWER GEL");
+    assert.equal(out[0].rollupValue, "TOTAL FEMALE SHOWER GEL");
     assert.equal(out[0].source, "auto");
     assert.deepEqual(out[0].itemValues, ["MARICO", "PURITE", "OLIV", "LASHE"]);
     assert.match(out[0].description ?? "", /88%/);
     assert.match(out[0].description ?? "", /Total_Sales_Value/);
+  });
+
+  it("does NOT auto-detect an UNLABELLED dominant category (AD1-FP1 guard)", () => {
+    // Same proportions, but the dominant value is a plain category name — not a
+    // total label. Mere dominance is not evidence of a rollup, so we must NOT
+    // silently exclude it. (Pre-FP1 this returned a hierarchy.)
+    const data = [
+      { Products: "FEMALE SHOWER GEL", Total_Sales_Value: 68_751 },
+      { Products: "MARICO", Total_Sales_Value: 6_000 },
+      { Products: "PURITE", Total_Sales_Value: 2_000 },
+      { Products: "OLIV", Total_Sales_Value: 700 },
+      { Products: "LASHE", Total_Sales_Value: 323 },
+    ];
+    const summary = makeSummary({
+      columns: ["Products", "Total_Sales_Value"],
+      numericColumns: ["Total_Sales_Value"],
+    });
+    const out = detectRollupHierarchies({
+      data,
+      summary,
+      datasetProfile: { measureColumns: ["Total_Sales_Value"] } as any,
+    });
+    assert.deepEqual(out, []);
+  });
+
+  it("does NOT flag a dominant legitimate channel like GT (General Trade)", () => {
+    // The Marico Channel P&L regression: GT is ~95% of Volume but is the
+    // largest LEGITIMATE channel, not a grand-total row. Must never be excluded.
+    const data = [
+      { Channel: "GT", "Volume (KL)": 9_500, NR: 6_550 },
+      { Channel: "MT", "Volume (KL)": 200, NR: 2_780 },
+      { Channel: "E-Commerce", "Volume (KL)": 150, NR: 1_150 },
+      { Channel: "Q-Commerce", "Volume (KL)": 100, NR: 590 },
+      { Channel: "CSD", "Volume (KL)": 50, NR: 1_160 },
+    ];
+    const summary = makeSummary({
+      columns: ["Channel", "Volume (KL)", "NR"],
+      numericColumns: ["Volume (KL)", "NR"],
+    });
+    const out = detectRollupHierarchies({
+      data,
+      summary,
+      datasetProfile: { measureColumns: ["Volume (KL)", "NR"] } as any,
+    });
+    assert.deepEqual(out, []);
   });
 });
 
@@ -148,7 +197,7 @@ describe("AD1 · detectRollupHierarchies — false-positive guards", () => {
 });
 
 describe("AD1 · detectRollupHierarchies — multi-column", () => {
-  it("detects multiple rollups in different columns", () => {
+  it("detects only the TOTAL-labelled dominant column (AD1-FP1)", () => {
     const data = [
       { Category: "FEMALE SHOWER GEL", Region: "All India", Sales: 10_000 },
       { Category: "MARICO", Region: "North", Sales: 200 },
@@ -162,10 +211,10 @@ describe("AD1 · detectRollupHierarchies — multi-column", () => {
     });
     const out = detectRollupHierarchies({ data, summary });
     const cols = out.map((h) => h.column).sort();
-    // Both Category and Region have rollup values that dominate (the single
-    // "FEMALE SHOWER GEL" row also corresponds to "All India" → both columns
-    // show 10000/(10000+800)=92% dominance, ratio 50×).
-    assert.deepEqual(cols, ["Category", "Region"]);
+    // Both columns dominate, but only "All India" reads like a total label;
+    // "FEMALE SHOWER GEL" is a plain category name and is left in the breakdown.
+    assert.deepEqual(cols, ["Region"]);
+    assert.equal(out[0].rollupValue, "All India");
   });
 
   it("picks the strongest measure when multiple measures exist", () => {
@@ -186,6 +235,24 @@ describe("AD1 · detectRollupHierarchies — multi-column", () => {
     assert.equal(out[0].rollupValue, "ALL");
     assert.equal(out[0].column, "Brand");
     assert.match(out[0].description ?? "", /Value/);
+  });
+});
+
+describe("AD1-FP1 · total-label + trust guards (read-time sanitization)", () => {
+  it("looksLikeTotalLabel matches total/aggregate names only", () => {
+    for (const v of ["Total", "TOTAL", "Grand Total", "All", "ALL", "All India", "Overall", "Subtotal", "Consolidated"]) {
+      assert.equal(looksLikeTotalLabel(v), true, `expected total: ${v}`);
+    }
+    for (const v of ["GT", "MT", "B2C", "GT0", "General Trade", "FEMALE SHOWER GEL", "Small", ""]) {
+      assert.equal(looksLikeTotalLabel(v), false, `expected NOT total: ${v}`);
+    }
+  });
+
+  it("isTrustedRollupHierarchy: auto 'GT' is untrusted, user 'GT' and auto 'Total' are trusted", () => {
+    assert.equal(isTrustedRollupHierarchy({ rollupValue: "GT", source: "auto" }), false);
+    assert.equal(isTrustedRollupHierarchy({ rollupValue: "GT", source: "user" }), true);
+    assert.equal(isTrustedRollupHierarchy({ rollupValue: "Total", source: "auto" }), true);
+    assert.equal(isTrustedRollupHierarchy({ rollupValue: "B2C", source: "auto" }), false);
   });
 });
 

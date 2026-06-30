@@ -58,6 +58,42 @@ interface GroupTotal {
   total: number;
 }
 
+/**
+ * AD1-FP1 · A value is only a credible AUTO-detected rollup/total when its NAME
+ * reads like a total/aggregate label. Dominance alone is NOT evidence: a genuine
+ * market leader (e.g. "GT"/General Trade — the largest FMCG channel, ~95% of
+ * volume) dominates legitimately and must never be auto-excluded from a plain
+ * breakdown. Real spreadsheet total rows are almost always labelled
+ * ("Total", "Grand Total", "All", "Overall", "Subtotal", …); category codes
+ * like "GT", "MT", "B2C" are not.
+ */
+const TOTAL_LABEL_RE =
+  /\b(grand[\s_-]*total|sub[\s_-]*total|totals?|all|overall|consolidated|aggregate|combined|cumulative)\b/i;
+
+export function looksLikeTotalLabel(value: string): boolean {
+  if (typeof value !== "string") return false;
+  const v = value.trim();
+  if (!v) return false;
+  return TOTAL_LABEL_RE.test(v);
+}
+
+/**
+ * Whether a declared hierarchy should be TRUSTED to drive destructive
+ * peer-comparison exclusion. User-declared hierarchies are explicit intent and
+ * always honoured. Auto-detected ones are heuristic guesses — trust them only
+ * when the rollup value is named like a total (see `looksLikeTotalLabel`). This
+ * is the read-time guard that protects sessions whose stored hierarchies were
+ * captured before the detector was tightened.
+ */
+export function isTrustedRollupHierarchy(h: {
+  rollupValue: string;
+  source?: string;
+}): boolean {
+  if (!h || typeof h.rollupValue !== "string") return false;
+  if (h.source !== "auto") return true;
+  return looksLikeTotalLabel(h.rollupValue);
+}
+
 const DEFAULTS: Required<DetectRollupOptions> = {
   minDominance: 0.8,
   minTopRatio: 5,
@@ -140,6 +176,10 @@ function scoreCandidate(
   const second = groups[1];
   if (!top || !second) return null;
   if (top.total <= 0 || second.total <= 0) return null;
+  // AD1-FP1 · the dominant value must also be NAMED like a total. Without this,
+  // any merely-dominant legitimate category (GT, a flagship brand) is silently
+  // excluded from breakdowns — the false positive the file header warns about.
+  if (!looksLikeTotalLabel(top.value)) return null;
   const total = groups.reduce((acc, g) => acc + g.total, 0);
   if (total <= 0) return null;
   const dominance = top.total / total;

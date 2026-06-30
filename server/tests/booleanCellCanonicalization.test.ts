@@ -187,3 +187,43 @@ describe("Wave SU-FU1 · applyTemporalFacetColumns honours TOD exclusion set", (
     assert.ok("Day · Order Date" in data[0]);
   });
 });
+
+describe("Wave SU-YR1 · whitelist date approval requires parseable values", () => {
+  it("does NOT approve a fiscal 'Year' column whose values are 2-digit codes", () => {
+    // Marico NR working file: Year=26 (FY2026), Month="Apr 26", Quarter="Q1".
+    // Pre-fix the name whitelist approved "Year" with no value check, typing it
+    // `date` and rendering 26 as a 1900-era serial ("01/01/00").
+    const data = [
+      { Year: 26, Month: "Apr 26", Quarter: "Q1", NR: 100 },
+      { Year: 26, Month: "May 26", Quarter: "Q1", NR: 200 },
+      { Year: 26, Month: "Jun 26", Quarter: "Q1", NR: 300 },
+      { Year: 27, Month: "Apr 27", Quarter: "Q2", NR: 400 },
+    ];
+    const profile = {
+      shortDescription: "test",
+      dateColumns: [],
+      suggestedQuestions: [],
+    };
+    const approved = resolveApprovedDateColumns(data, profile);
+    // Year (2-digit codes) and Quarter ("Q1") are NOT calendar dates → rejected.
+    assert.equal(approved.includes("Year"), false);
+    assert.equal(approved.includes("Quarter"), false);
+    // "Apr 26" parses as a monthly period → Month stays a legitimate date column.
+    assert.equal(approved.includes("Month"), true);
+  });
+
+  it("still approves a whitelisted column whose values ARE dates", () => {
+    const data = [
+      { "Report Year": "2024-01-01" },
+      { "Report Year": "2025-01-01" },
+      { "Report Year": "2026-01-01" },
+    ];
+    const profile = {
+      shortDescription: "test",
+      dateColumns: [],
+      suggestedQuestions: [],
+    };
+    const approved = resolveApprovedDateColumns(data, profile);
+    assert.equal(approved.includes("Report Year"), true);
+  });
+});
