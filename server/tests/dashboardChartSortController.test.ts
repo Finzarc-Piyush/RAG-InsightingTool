@@ -37,7 +37,7 @@ function makeRes() {
 }
 
 describe("updateChartInsightOrRecommendationController · validation (Wave S6)", () => {
-  it("rejects with 400 when neither keyInsight nor sort is provided", async () => {
+  it("rejects with 400 when neither keyInsight, sort, nor limit is provided", async () => {
     const res = makeRes();
     await updateChartInsightOrRecommendationController(makeReq({}), res);
     assert.equal(res.statusCode, 400);
@@ -51,5 +51,25 @@ describe("updateChartInsightOrRecommendationController · validation (Wave S6)",
     );
     assert.equal(res.statusCode, 400);
     assert.match(JSON.stringify(res.body), /Invalid sort payload/);
+  });
+
+  it("rejects with 400 when the limit payload is invalid (bad mode)", async () => {
+    const res = makeRes();
+    await updateChartInsightOrRecommendationController(
+      makeReq({ limit: { mode: "sideways", n: 5 } }),
+      res,
+    );
+    assert.equal(res.statusCode, 400);
+    assert.match(JSON.stringify(res.body), /Invalid limit payload/);
+  });
+
+  it("rejects with 400 when the limit n is not a positive integer", async () => {
+    const res = makeRes();
+    await updateChartInsightOrRecommendationController(
+      makeReq({ limit: { mode: "top", n: 0 } }),
+      res,
+    );
+    assert.equal(res.statusCode, 400);
+    assert.match(JSON.stringify(res.body), /Invalid limit payload/);
   });
 });

@@ -928,6 +928,23 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
                   }
                 : undefined
             }
+            onLimitChange={
+              canEdit
+                ? (limit) => {
+                    void updateChartInsightOrRecommendation(
+                      dashboardId,
+                      tile.index,
+                      { limit },
+                      sheetId,
+                    )
+                      .then(() => onUpdate?.())
+                      .catch(() => {
+                        // Best-effort persistence; the Top/Bottom-N selection
+                        // already applied locally in ChartTileBody.
+                      });
+                  }
+                : undefined
+            }
             insightRegenCache={insightRegenCache}
             insightHistoryStore={insightHistoryStore}
           />,

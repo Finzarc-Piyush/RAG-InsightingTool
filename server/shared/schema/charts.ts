@@ -105,6 +105,25 @@ export const barSortSpecSchema = z.object({
 });
 export type BarSortSpec = z.infer<typeof barSortSpecSchema>;
 
+/**
+ * Durable Top-N / Bottom-N SELECTION for a categorical bar/column chart — the
+ * persisted sibling of the ephemeral client `ChartLimit`
+ * (client/src/components/charts/ChartLimitControl.tsx). `mode:"top"` keeps the N
+ * largest BY VALUE, `mode:"bottom"` the N smallest; selection runs FIRST and is
+ * fully decoupled from the display `sort` and from `maxRows` (see
+ * applyChartSort in server/shared/chartSort.ts). The full category set still
+ * lives in `data` — `limit` only narrows what the chart RENDERS, never what the
+ * "View all … as a sortable table" path can reach. Newly built high-cardinality
+ * bar charts bake `{mode:"top", n:15}` here so they default to an honest Top-N
+ * instead of a deceptive best+worst merge. This shape MUST stay in lock-step
+ * with the `ChartLimit` type on the client.
+ */
+export const chartLimitSpecSchema = z.object({
+  mode: z.enum(["top", "bottom"]),
+  n: z.number().int().positive().max(10_000),
+});
+export type ChartLimitSpec = z.infer<typeof chartLimitSpecSchema>;
+
 export const chartSpecSchema = z.object({
   type: chartTypeSchema,
   title: z.string(),
@@ -148,6 +167,15 @@ export const chartSpecSchema = z.object({
    * are never retroactively reordered. See server/shared/chartSort.ts.
    */
   sort: barSortSpecSchema.optional(),
+  /**
+   * Durable Top-N / Bottom-N selection (decoupled from `sort` and `maxRows`).
+   * Baked by the dashboard feature sweep so high-cardinality bar charts default
+   * to an honest Top-15 instead of dropping the middle; toggled live by the
+   * inline ChartLimitControl and persisted via the dashboard charts PATCH.
+   * Selection narrows what RENDERS; `data` keeps the full category set so the
+   * "View all … as a sortable table" path always reaches every record.
+   */
+  limit: chartLimitSpecSchema.optional(),
   /**
    * MW3 · optional cap on charted categories (e.g. a "Worst 10" view). Omitted
    * = ALL categories — a manager must be able to reach every record, so the

@@ -444,7 +444,7 @@ export const useDashboardState = () => {
   );
 
   const updateChartInsightOrRecommendationMutation = useMutation({
-    mutationFn: async ({ dashboardId, chartIndex, updates, sheetId }: { dashboardId: string; chartIndex: number; updates: { keyInsight?: string; sort?: { by: "value" | "category"; direction: "asc" | "desc" } }; sheetId?: string }) => {
+    mutationFn: async ({ dashboardId, chartIndex, updates, sheetId }: { dashboardId: string; chartIndex: number; updates: { keyInsight?: string; sort?: { by: "value" | "category"; direction: "asc" | "desc" }; limit?: { mode: "top" | "bottom"; n: number } | null }; sheetId?: string }) => {
       const updated = await dashboardsApi.updateChartInsightOrRecommendation(dashboardId, chartIndex, updates, sheetId);
       return normalizeDashboard(updated);
     },
@@ -509,7 +509,7 @@ export const useDashboardState = () => {
   });
 
   const updateChartInsightOrRecommendation = useCallback(
-    (dashboardId: string, chartIndex: number, updates: { keyInsight?: string }, sheetId?: string) =>
+    (dashboardId: string, chartIndex: number, updates: { keyInsight?: string; sort?: { by: "value" | "category"; direction: "asc" | "desc" }; limit?: { mode: "top" | "bottom"; n: number } | null }, sheetId?: string) =>
       updateChartInsightOrRecommendationMutation.mutateAsync({ dashboardId, chartIndex, updates, sheetId }),
     [updateChartInsightOrRecommendationMutation]
   );

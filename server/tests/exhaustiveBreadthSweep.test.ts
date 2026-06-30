@@ -139,21 +139,12 @@ test("computeDimensionLeaders returns null with fewer than 2 groups", () => {
   assert.equal(computeDimensionLeaders(rows, "X", "m"), null);
 });
 
-test("bucketTopAndBottom keeps only the best-K and worst-K groups by mean (worst not hidden)", () => {
-  // 40 groups g0..g39 with mean = the index, so g0 is worst, g39 is best.
-  const rows = Array.from({ length: 40 }, (_, i) => ({ g: `g${i}`, m: i }));
-  const kept = breadthTest.bucketTopAndBottom(rows, "g", 3, "m");
-  const keys = new Set(kept.map((r) => r.g));
-  // Top-3 (g39,g38,g37) and bottom-3 (g0,g1,g2) survive; the middle is dropped.
-  for (const k of ["g39", "g38", "g37", "g0", "g1", "g2"]) {
-    assert.ok(keys.has(k), `${k} (an extreme) should be kept`);
-  }
-  assert.ok(!keys.has("g20"), "a middle group should be dropped");
-  assert.equal(keys.size, 6, "exactly 2·K groups kept");
-});
-
-test("high-card dim in exhaustive mode yields a best+worst chart (worst visible, no 'Other')", () => {
-  // 600 distinct names, mean adherence = (i % 100) / 100 → a real spread.
+test("high-card dim (> EMBED_CAP) yields an HONEST top-N + visible 'Other' (no silent best+worst merge)", () => {
+  // 600 distinct names (> MEDIUM_CARDINALITY_MAX) — too many to embed or chart in
+  // full. The sweep no longer drops the middle into a fake-continuous best+worst
+  // ranking; it rolls the long tail into a VISIBLE "Other" bucket instead. The
+  // worst performers are surfaced explicitly via the inline Bottom-N control, not
+  // by a silent extremes merge.
   const rows = Array.from({ length: 600 }, (_, i) => ({
     Name: `tse_${i}`,
     pjp_adherence_rate: (i % 100) / 100,
@@ -168,6 +159,7 @@ test("high-card dim in exhaustive mode yields a best+worst chart (worst visible,
   const nameChart = charts.find((c) => c.x === "Name");
   assert.ok(nameChart, "high-card name column charted");
   const cats = new Set((nameChart!.data as Array<Record<string, unknown>>).map((d) => d.Name));
-  assert.ok(!cats.has("Other"), "best+worst view has no 'Other' bucket that hides the worst");
-  assert.ok(cats.size <= breadthTest.TOP_BOTTOM_K * 2, "shows at most 2·K bars (best + worst)");
+  assert.ok(cats.has("Other"), "long tail is rolled into a VISIBLE 'Other' bucket, not silently dropped");
+  // Top-15 native + 1 "Other" = at most 16 distinct categories.
+  assert.ok(cats.size <= breadthTest.TOP_N_BUCKET + 1, "top-15 + Other");
 });

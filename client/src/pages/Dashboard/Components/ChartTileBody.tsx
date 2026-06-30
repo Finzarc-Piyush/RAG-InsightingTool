@@ -13,6 +13,7 @@ import { TileInsightFooter } from "./TileInsightFooter";
 import { ChartTilePivotView } from "@/components/charts/ChartTilePivotView";
 import { chartSpecToPivotConfig } from "@/components/charts/chartSpecToPivotConfig";
 import { ChartSortControl } from "@/components/charts/ChartSortControl";
+import { ChartLimitControl, type ChartLimit } from "@/components/charts/ChartLimitControl";
 import {
   useChartSort,
   chartSupportsSort,
@@ -92,6 +93,13 @@ interface ChartTileBodyProps {
    */
   onSortChange?: (sort: ChartSortSpec) => void;
   /**
+   * Persist the chart's Top-N / Bottom-N selection (parent owns sheetId + the
+   * dashboards PATCH + refetch). Omitted → the limit change is an ephemeral view
+   * change (still instant), e.g. for viewers without edit permission. `null`
+   * clears the limit (show all). See docs/conventions/chart-limit-durable.md.
+   */
+  onLimitChange?: (limit: ChartLimit) => void;
+  /**
    * Wave WI2-wire-bind · shared LRU+TTL insight regen cache passed
    * down from `DashboardView`. When omitted the `useInsightRegen`
    * hook falls back to a per-tile cache, which is fine but loses
@@ -118,6 +126,7 @@ export function ChartTileBody({
   onDeleteClick,
   onEditInsight,
   onSortChange,
+  onLimitChange,
   insightRegenCache,
   insightHistoryStore,
 }: ChartTileBodyProps) {
@@ -132,6 +141,20 @@ export function ChartTileBody({
       onSortChange?.(next);
     },
     [setSort, onSortChange],
+  );
+  // Durable Top-N / Bottom-N selection. Seeded from the server-baked / persisted
+  // `limit`; the change re-renders instantly (ChartRenderer applies it) and
+  // `onLimitChange` (parent) persists it. Reset when the tile shows a new chart.
+  const [limit, setLimit] = useState<ChartLimit>(tile.chart.limit ?? null);
+  useEffect(() => {
+    setLimit(tile.chart.limit ?? null);
+  }, [tile.id, tile.chart.limit]);
+  const handleLimitChange = useCallback(
+    (next: ChartLimit) => {
+      setLimit(next);
+      onLimitChange?.(next);
+    },
+    [onLimitChange],
   );
   const [isExpandOpen, setIsExpandOpen] = useState(false);
   const canPivot = chartSpecToPivotConfig(tile.chart) !== null;
@@ -225,6 +248,16 @@ export function ChartTileBody({
   }, [filteredRows, tile.chart.type, tile.chart.x]);
   const showViewAllCta =
     canPivot && effectiveMode === "chart" && categoryCount > 12;
+  // Surface the durable Top/Bottom-N control on the tile when a bar chart carries
+  // more categories than fit comfortably (matches the fullscreen modal's >10 gate).
+  const showLimitControl = showSortControl && categoryCount > 10;
+  // Inject the live limit into the spec the CHART renders, so the bars narrow to
+  // the selection. The pivot / "View all … as a sortable table" path keeps the
+  // full `sortedSpec` so every record stays reachable.
+  const renderedSpec = useMemo<ChartSpec>(
+    () => ({ ...(sortedSpec as ChartSpec), limit: limit ?? undefined }),
+    [sortedSpec, limit],
+  );
 
   const regen = useInsightRegen({
     tileId: tile.id,
@@ -320,6 +353,13 @@ export function ChartTileBody({
           value={sort ?? tile.chart.sort}
           onChange={handleSortChange}
           axisLabel={tile.chart.xLabel || tile.chart.x}
+        />
+      ) : null}
+      {showLimitControl ? (
+        <ChartLimitControl
+          value={limit}
+          onChange={handleLimitChange}
+          total={categoryCount}
         />
       ) : null}
       {canPivot ? (
@@ -434,10 +474,10 @@ export function ChartTileBody({
             >
               <Suspense fallback={<Skeleton className="h-full w-full" />}>
                 <ChartShim
-                  spec={sortedSpec}
+                  spec={renderedSpec}
                   legacy={() => (
                     <ChartRenderer
-                      chart={sortedSpec}
+                      chart={renderedSpec}
                       index={tile.index}
                       isSingleChart={false}
                       showAddButton={false}
@@ -459,6 +499,11 @@ export function ChartTileBody({
           )}
           </DashboardTileProvider>
         </div>
+        {limit && categoryCount > limit.n ? (
+          <div className="self-start text-xs text-muted-foreground">
+            {limit.mode === "top" ? "Top" : "Bottom"} {limit.n} of {categoryCount}
+          </div>
+        ) : null}
         {showViewAllCta ? (
           <button
             type="button"

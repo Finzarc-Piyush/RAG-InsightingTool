@@ -133,9 +133,11 @@ export function ChartOnlyModal({
   const { sort, setSort } = useChartSort(chart);
   const showSortControl = chartSupportsSort(chart);
 
-  // Top-N / Bottom-N view limiter for bar charts with many categories. Ephemeral
-  // (view-only; not persisted), decoupled from the display sort.
-  const [limit, setLimit] = useState<ChartLimit>(null);
+  // Top-N / Bottom-N view limiter for bar charts with many categories. Seeded
+  // from the chart's durable `limit` (server-baked default or the tile's saved
+  // choice) so fullscreen opens in agreement with the tile; further changes here
+  // are ephemeral (view-only), decoupled from the display sort.
+  const [limit, setLimit] = useState<ChartLimit>(chart.limit ?? null);
 
   // Wave F3 · field-aware axis tick formatters (parity with ChartRenderer F2)
   // so the expand view formats rate columns as "%", currency with symbols, etc.

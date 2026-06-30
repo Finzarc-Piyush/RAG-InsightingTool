@@ -250,8 +250,12 @@ test("skips dimensions already covered by mergedCharts", () => {
   assert.ok(xs.includes("Category"));
 });
 
-test("DB4: medium-cardinality dimensions (60 < uniques ≤ 500) are charted via top-N + Other bucketing", () => {
-  const rows = Array.from({ length: 200 }, (_, i) => ({
+test("DB4: very-high-cardinality dimensions (EMBED_CAP < uniques ≤ 500) are charted via top-N + Other bucketing", () => {
+  // 400 distinct IDs > EMBED_CAP (300): too many to embed/chart in full, so the
+  // dim is rolled into top-15 + a visible "Other". (Dims ≤ EMBED_CAP now embed
+  // the full set and bake an honest Top-N display default instead — see the
+  // "full-embed" test below.)
+  const rows = Array.from({ length: 400 }, (_, i) => ({
     CustomerID: `C-${i}`,
     Region: i % 4 === 0 ? "East" : "West",
     Sales: i + 1,
@@ -267,9 +271,9 @@ test("DB4: medium-cardinality dimensions (60 < uniques ≤ 500) are charted via 
   );
   const out = enumerateMissingDashboardCharts(ctx, []);
   const xs = out.map((c) => c.x);
-  // Pre-DB4 CustomerID was silently skipped because >60 uniques. DB4 buckets
-  // the dim into top-15 + Other so the chart is legible AND the dim appears.
-  assert.ok(xs.includes("CustomerID"), "medium-cardinality dim should be bucketed and charted");
+  // CustomerID exceeds EMBED_CAP, so it is bucketed into top-15 + Other — legible
+  // AND the dim still appears (a plain hard skip would silently drop it).
+  assert.ok(xs.includes("CustomerID"), "very-high-cardinality dim should be bucketed and charted");
   assert.ok(xs.includes("Region"));
   const customerChart = out.find((c) => c.x === "CustomerID");
   assert.ok(customerChart);
@@ -282,6 +286,36 @@ test("DB4: medium-cardinality dimensions (60 < uniques ≤ 500) are charted via 
   // Top-15 native rows + 1 Other row = at most 16 distinct categories.
   const distinct = new Set(xsInChartData);
   assert.ok(distinct.size <= 16, `expected ≤16 distinct x values, got ${distinct.size}`);
+});
+
+test("bar-limit: high-cardinality dim ≤ EMBED_CAP embeds the FULL set + bakes an honest Top-N (no middle dropped)", () => {
+  // 87 distinct brands ≤ EMBED_CAP (300): the sweep embeds EVERY brand (so the
+  // "View all … as a sortable table" path reaches all of them) and bakes a
+  // durable Top-15 display default — never the old best+worst merge that dropped
+  // the middle. This is the exact case from the bug report ("16 of 87 brands").
+  const rows = Array.from({ length: 87 }, (_, i) => ({
+    Brand: `B-${i}`,
+    NR: i + 1,
+  }));
+  const ctx = makeCtx(
+    makeBrief({
+      outcomeMetricColumn: "NR",
+      segmentationDimensions: ["Brand"],
+      requestsDashboard: true,
+    }),
+    rows,
+    ["NR"]
+  );
+  const out = enumerateMissingDashboardCharts(ctx, []);
+  const brandChart = out.find((c) => c.x === "Brand");
+  assert.ok(brandChart, "the brand dimension is charted");
+  const cats = new Set(
+    (brandChart!.data as Array<Record<string, unknown>>).map((r) => String(r.Brand))
+  );
+  assert.equal(cats.size, 87, "every brand is embedded — no middle dropped");
+  assert.ok(!cats.has("Other"), "no 'Other' rollup when fully embedded");
+  assert.deepEqual(brandChart!.limit, { mode: "top", n: 15 }, "honest Top-15 display default baked");
+  assert.equal(brandChart!.sort?.direction, "desc", "value-desc sort baked so Top-N selects the biggest");
 });
 
 test("DB4: high-cardinality dimensions (>500 uniques) are still skipped and reported", () => {

@@ -13,6 +13,8 @@ import {
   dashboardReorderSheetsRequestSchema,
   barSortSpecSchema,
   type BarSortSpec,
+  chartLimitSpecSchema,
+  type ChartLimitSpec,
 } from "../shared/schema.js";
 import {
   addTableToDashboardRequestSchema,
@@ -436,20 +438,21 @@ export const updateChartInsightOrRecommendationController = async (req: Request,
   try {
     const username = requireUsername(req);
     const { dashboardId, chartIndex: chartIndexParam } = req.params as { dashboardId: string; chartIndex: string };
-    const { sheetId, keyInsight, sort } = req.body;
+    const { sheetId, keyInsight, sort, limit } = req.body;
     const chartIndex = parseInt(chartIndexParam, 10);
 
     if (isNaN(chartIndex) || chartIndex < 0) {
       return res.status(400).json({ error: 'Valid chartIndex is required' });
     }
 
-    // Wave S6 · this endpoint now also persists a chart's "Sort by" choice, so
-    // accept EITHER a keyInsight or a sort patch (reject only when both absent).
-    if (keyInsight === undefined && sort === undefined) {
-      return res.status(400).json({ error: 'keyInsight or sort must be provided' });
+    // This endpoint persists a chart's keyInsight, its "Sort by" choice, AND its
+    // Top-N / Bottom-N selection — accept any of the three (reject only when all
+    // are absent).
+    if (keyInsight === undefined && sort === undefined && limit === undefined) {
+      return res.status(400).json({ error: 'keyInsight, sort, or limit must be provided' });
     }
 
-    const updates: { keyInsight?: string; sort?: BarSortSpec } = {};
+    const updates: { keyInsight?: string; sort?: BarSortSpec; limit?: ChartLimitSpec | null } = {};
     if (keyInsight !== undefined) {
       updates.keyInsight = typeof keyInsight === 'string' ? keyInsight : undefined;
     }
@@ -459,6 +462,18 @@ export const updateChartInsightOrRecommendationController = async (req: Request,
         return res.status(400).json({ error: 'Invalid sort payload', details: parsed.error.flatten() });
       }
       updates.sort = parsed.data;
+    }
+    if (limit !== undefined) {
+      // `null` clears the selection (show all); otherwise validate the shape.
+      if (limit === null) {
+        updates.limit = null;
+      } else {
+        const parsed = chartLimitSpecSchema.safeParse(limit);
+        if (!parsed.success) {
+          return res.status(400).json({ error: 'Invalid limit payload', details: parsed.error.flatten() });
+        }
+        updates.limit = parsed.data;
+      }
     }
 
     const updated = await updateChartInsightOrRecommendation(

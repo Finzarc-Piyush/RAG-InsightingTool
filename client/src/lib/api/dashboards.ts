@@ -48,6 +48,8 @@ export const dashboardsApi = {
       keyInsight?: string;
       /** Wave S6 · persist the chart's "Sort by" choice. */
       sort?: { by: "value" | "category"; direction: "asc" | "desc" };
+      /** Persist the chart's Top-N / Bottom-N selection; `null` clears it. */
+      limit?: { mode: "top" | "bottom"; n: number } | null;
     },
     sheetId?: string
   ) =>

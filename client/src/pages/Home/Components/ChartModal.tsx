@@ -178,9 +178,11 @@ export function ChartModal({
   const { sort, setSort } = useChartSort(chart);
   const showSortControl = chartSupportsSort(chart);
 
-  // Top-N / Bottom-N view limiter for bar charts with many categories. Ephemeral
-  // (view-only; not persisted), decoupled from the display sort above.
-  const [limit, setLimit] = useState<ChartLimit>(null);
+  // Top-N / Bottom-N view limiter for bar charts with many categories. Seeded
+  // from the chart's durable `limit` so the zoom view opens in agreement with the
+  // inline tile; further changes here are ephemeral (view-only), decoupled from
+  // the display sort above.
+  const [limit, setLimit] = useState<ChartLimit>(chart.limit ?? null);
 
   const parseTableV1KeyInsight = (keyInsight: string | undefined): DashboardTableSpec | null => {
     if (!keyInsight || typeof keyInsight !== 'string' || !keyInsight.startsWith(TABLE_V1_PREFIX)) return null;

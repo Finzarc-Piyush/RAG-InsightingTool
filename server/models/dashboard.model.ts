@@ -9,6 +9,7 @@ import {
   DashboardTableSpec,
   DashboardPivotSpec,
   type BarSortSpec,
+  type ChartLimitSpec,
   type CreateReportDashboardRequest,
   type DashboardNarrativeBlock,
   type DashboardSpec,
@@ -838,7 +839,7 @@ export const updateChartInsightOrRecommendation = async (
   username: string,
   chartIndex: number,
   sheetId: string | undefined,
-  updates: { keyInsight?: string; sort?: BarSortSpec }
+  updates: { keyInsight?: string; sort?: BarSortSpec; limit?: ChartLimitSpec | null }
 ): Promise<Dashboard> => {
   const normalizedUsername = username.toLowerCase();
   
@@ -907,6 +908,10 @@ export const updateChartInsightOrRecommendation = async (
   if (updates.sort !== undefined) {
     chart.sort = updates.sort;
   }
+  // Persist the Top-N / Bottom-N selection (null clears it → show all).
+  if (updates.limit !== undefined) {
+    chart.limit = updates.limit ?? undefined;
+  }
 
   // Also update in the legacy charts array for backward compatibility
   // Find the matching chart in the main charts array
@@ -920,6 +925,9 @@ export const updateChartInsightOrRecommendation = async (
     }
     if (updates.sort !== undefined) {
       dashboard.charts[mainChartIndex]!.sort = updates.sort;
+    }
+    if (updates.limit !== undefined) {
+      dashboard.charts[mainChartIndex]!.limit = updates.limit ?? undefined;
     }
   }
 

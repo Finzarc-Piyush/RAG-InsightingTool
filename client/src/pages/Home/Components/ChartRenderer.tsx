@@ -347,6 +347,29 @@ export function ChartRenderer({
   
   const chartData = baseChartData;
 
+  // Durable Top-N / Bottom-N selection (server-baked default, or the inline
+  // ChartLimitControl). Bar/column only. It selects BY VALUE — decoupled from the
+  // display `sort` — and runs BEFORE the width-based compaction, so the full
+  // category set still lives in `chartData` (the "View all … as a sortable table"
+  // path is fed that, never this) while the bars render an honest subset. See
+  // docs/conventions/chart-limit-durable.md.
+  const limitedBarData = useMemo(() => {
+    if (
+      type !== 'bar' ||
+      !chart.limit ||
+      typeof x !== 'string' ||
+      typeof y !== 'string' ||
+      chartData.length <= chart.limit.n
+    ) {
+      return chartData;
+    }
+    return applyChartSort(
+      chartData as Array<Record<string, unknown>>,
+      chart.sort ?? { by: 'value', direction: 'desc' },
+      { xCol: x, yCol: y, seriesKeys: specSeriesKeys, limit: chart.limit },
+    ) as typeof chartData;
+  }, [type, chart.limit, chart.sort, chartData, x, y, specSeriesKeys]);
+
   const lineAreaSortedData = useMemo(
     () =>
       sortRowsForLineAreaChart(
@@ -434,35 +457,40 @@ export function ChartRenderer({
   // (never below the historical floor of MAX_COMPACT_X_TICKS), not a fixed 6 —
   // a wider tile keeps more bars. Labels are still thinned by `maxXLabels`.
   const compactBarLimit = useMemo(() => {
-    if (chartWidth <= 0) return MAX_COMPACT_X_TICKS;
-    const axisW = chartWidth - X_AXIS_MARGIN_PX;
-    const fit = Math.floor(axisW / MIN_COMPACT_BAR_SLOT_PX);
-    // No magic upper cap: a wider tile keeps as many bars as fit at the legible
-    // 14px slot, floored at MAX_COMPACT_X_TICKS. Labels are then thinned to the
-    // width-aware budget by `maxXLabels` (the shared authority), so this only
-    // governs how many BARS render, not how many labels.
-    return Math.max(MAX_COMPACT_X_TICKS, fit);
-  }, [chartWidth]);
+    const widthFloor =
+      chartWidth <= 0
+        ? MAX_COMPACT_X_TICKS
+        : // No magic upper cap: a wider tile keeps as many bars as fit at the
+          // legible 14px slot, floored at MAX_COMPACT_X_TICKS. Labels are then
+          // thinned to the width-aware budget by `maxXLabels` (the shared
+          // authority), so this only governs how many BARS render, not labels.
+          Math.max(MAX_COMPACT_X_TICKS, Math.floor((chartWidth - X_AXIS_MARGIN_PX) / MIN_COMPACT_BAR_SLOT_PX));
+    // When a Top/Bottom-N limit is active, never compact BELOW the selected count:
+    // the user/server deliberately chose those N categories, so the width cap must
+    // only thin LABELS (via maxXLabels), never drop a selected bar.
+    if (type === 'bar' && chart.limit) return Math.max(widthFloor, chart.limit.n);
+    return widthFloor;
+  }, [chartWidth, type, chart.limit]);
 
-  const shouldCompactView = type === 'bar' && !fillParent && !isSingleChart && chartData.length > compactBarLimit;
+  const shouldCompactView = type === 'bar' && !fillParent && !isSingleChart && limitedBarData.length > compactBarLimit;
   const compactBarData = useMemo(() => {
-    if (!shouldCompactView) return chartData;
-    if (typeof x !== 'string') return chartData.slice(0, compactBarLimit);
+    if (!shouldCompactView) return limitedBarData;
+    if (typeof x !== 'string') return limitedBarData.slice(0, compactBarLimit);
     // Wave S6 · when the user explicitly sorted by the CATEGORY axis, the data
     // is axis-ordered, so a plain head-slice would drop the biggest bars and
     // keep the smallest categories. Pick the top-N BY VALUE, then restore the
     // chosen axis order for display (applyChartSort owns both steps).
     if (chart.sort?.by === "category" && typeof y === "string") {
       return applyChartSort(
-        chartData as Array<Record<string, unknown>>,
+        limitedBarData as Array<Record<string, unknown>>,
         chart.sort,
         { xCol: x, yCol: y, seriesKeys: specSeriesKeys, maxRows: compactBarLimit },
-      ) as typeof chartData;
+      ) as typeof limitedBarData;
     }
     const xLower = x.toLowerCase();
     const nameSuggestsDate = /\b(date|month|week|year|time|period)\b/i.test(xLower);
-    const sample = chartData
-      .slice(0, Math.min(5, chartData.length))
+    const sample = limitedBarData
+      .slice(0, Math.min(5, limitedBarData.length))
       .map((row) => String((row as Record<string, unknown>)[x] ?? ''));
     const allLookLikeDates =
       sample.length > 0 &&
@@ -473,9 +501,9 @@ export function ChartRenderer({
       });
     const temporal = nameSuggestsDate || allLookLikeDates;
     if (!temporal) {
-      return chartData.slice(0, compactBarLimit);
+      return limitedBarData.slice(0, compactBarLimit);
     }
-    const sorted = [...chartData].sort((a, b) => {
+    const sorted = [...limitedBarData].sort((a, b) => {
       const av = parseDateLike((a as Record<string, unknown>)[x]);
       const bv = parseDateLike((b as Record<string, unknown>)[x]);
       if (av !== null && bv !== null) return av - bv;
@@ -484,8 +512,8 @@ export function ChartRenderer({
       );
     });
     return sorted.slice(0, compactBarLimit);
-  }, [chartData, shouldCompactView, x, y, specSeriesKeys, chart.sort, compactBarLimit]);
-  const visibleBarData = shouldCompactView ? compactBarData : chartData;
+  }, [limitedBarData, shouldCompactView, x, y, specSeriesKeys, chart.sort, compactBarLimit]);
+  const visibleBarData = shouldCompactView ? compactBarData : limitedBarData;
 
   const lineAreaXTicks = useMemo(() => {
     if (type !== 'line' && type !== 'area') return undefined;

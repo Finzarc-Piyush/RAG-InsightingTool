@@ -10,9 +10,13 @@
  *   dimensions + candidate driver dimensions) and, for any that isn't already
  *   charted against the main outcome metric, builds an "outcome by dimension"
  *   chart. It also adds a primary time-trend on the best date column if one
- *   isn't there yet. To stay legible it caps how many charts it adds and
- *   handles high-cardinality dimensions by bucketing the long tail into "Other"
- *   (top 15 values kept), and skips dimensions with too many distinct values.
+ *   isn't there yet. To stay legible it caps how many charts it adds and, for a
+ *   high-cardinality dimension, embeds the FULL category set but bakes an honest
+ *   Top-N display default (durable `limit`) — so the bars stay readable while the
+ *   "View all … as a sortable table" path still reaches every record. Only when a
+ *   dimension exceeds EMBED_CAP does it fall back to a top-15 + visible "Other"
+ *   rollup; dimensions past MEDIUM_CARDINALITY_MAX are skipped. It never drops the
+ *   middle silently (the old best+worst merge that this wave removed).
  *
  * WHY IT MATTERS
  *   Dashboards are a headline feature, and "the dashboard missed the obvious
@@ -60,24 +64,37 @@ import type { DepthBudget } from "./queryIntentAuthority.js";
 
 /**
  * Cardinality regime (how many distinct values a dimension has):
- *  - 2 ≤ uniques ≤ LOW_CARDINALITY_MAX → chart natively.
- *  - LOW_CARDINALITY_MAX < uniques ≤ MEDIUM_CARDINALITY_MAX → chart against a
- *    top-N + Other bucketing of the dim column. Captures the long-tail
- *    contribution that a plain hard skip would silently drop (e.g. 200-unique
- *    customer columns) without producing illegible 200-bar charts.
- *  - uniques > MEDIUM_CARDINALITY_MAX → skipped; reported in
- *    `skippedHighCardinality` so the caller can emit telemetry.
+ *  - 2 ≤ uniques ≤ EMBED_CAP → chart against the FULL category set (every row
+ *    embedded), so the "View all … as a sortable table" path reaches every
+ *    record. When uniques > DEFAULT_DISPLAY_N the chart bakes an HONEST Top-N
+ *    display default (durable `limit`) so the bars stay legible WITHOUT dropping
+ *    data — the user flips to Bottom-N / a different N / All with the inline
+ *    ChartLimitControl. See docs/conventions/chart-limit-durable.md.
+ *  - EMBED_CAP < uniques ≤ MEDIUM_CARDINALITY_MAX → too many to embed or chart in
+ *    full, so chart against a top-N + a VISIBLE "Other" rollup of the dim column.
+ *    Honest by construction — never the old best+worst merge, which dropped the
+ *    middle silently and read as a continuous ranking.
+ *  - uniques > MEDIUM_CARDINALITY_MAX → skipped (reported in
+ *    `skippedHighCardinality`) unless the caller opts into the "Other" leaderboard
+ *    via bucketHighCardinality.
  */
-const LOW_CARDINALITY_MAX = 60;
 const MEDIUM_CARDINALITY_MAX = 500;
 const TOP_N_BUCKET = 15;
 const OTHER_BUCKET_LABEL = "Other";
 /**
- * Per-side count for the best+worst leaderboard used in exhaustive breadth:
- * a bucketed dimension shows its top-K AND bottom-K groups (2·K bars), so the
- * WORST performers are visible instead of being lumped into "Other".
+ * Embed the FULL category set (no row dropping) up to this many distinct values,
+ * so a high-cardinality bar chart stays fully reachable in the "View all" table
+ * while the bars default to an honest Top-N. Bounded to keep the persisted chart
+ * `data` well under the Cosmos 2 MB doc limit — feature-sweep rows are narrow
+ * (one aggregated dim + outcome), so ~300 rows is a few KB per chart.
  */
-const TOP_BOTTOM_K = 8;
+const EMBED_CAP = 300;
+/**
+ * Default number of bars a high-cardinality bar chart renders before the user
+ * touches the inline control. The full set stays in `data`; this only caps what
+ * RENDERS (baked as a durable `limit:{mode:"top", n}`).
+ */
+const DEFAULT_DISPLAY_N = 15;
 // Aligned with `DASHBOARD_CHART_HARD_CAP` and the per-sheet schema ceiling
 // (`dashboardSheetSpecSchema.charts.max(24)`). This is only the FALLBACK
 // ceiling — agentLoop.service.ts always passes
@@ -247,43 +264,39 @@ export function enumerateMissingDashboardCharts(
     }
     const uniques = countUniqueValuesUpTo(sourceRows, dim, MEDIUM_CARDINALITY_MAX + 1);
     if (uniques < 2) continue;
-    if (uniques > MEDIUM_CARDINALITY_MAX) {
-      report?.skippedHighCardinality.push({ dimension: dim, uniques });
-      // Default: hard-skip for legibility. With bucketHighCardinality the dim is
-      // top-N+Other bucketed into a leaderboard instead — so a high-card name
-      // column (e.g. TSO_TSE Name) still surfaces its top performers rather than
-      // vanishing silently.
-      if (!opts.bucketHighCardinality) continue;
-      // Exhaustive breadth: show the BEST and WORST performers, not top-N+Other
-      // (which buries the worst — the exact thing the user wants for people-level
-      // dimensions like TSO_TSE Name).
-      const bucketed = bucketTopAndBottom(sourceRows, dim, TOP_BOTTOM_K, outcome);
+
+    // Too many distinct values to embed or chart in full: fall back to an HONEST
+    // top-N + a VISIBLE "Other" rollup — never the old best+worst merge, which
+    // dropped the middle silently and read as a continuous ranking. Beyond
+    // MEDIUM_CARDINALITY_MAX the dim is hard-skipped for legibility unless the
+    // caller opts into the leaderboard (bucketHighCardinality).
+    if (uniques > EMBED_CAP) {
+      if (uniques > MEDIUM_CARDINALITY_MAX) {
+        report?.skippedHighCardinality.push({ dimension: dim, uniques });
+        if (!opts.bucketHighCardinality) continue;
+      }
+      const bucketed = bucketRowsTopN(sourceRows, dim, TOP_N_BUCKET, outcome);
       const built = tryBuildChart(ctx, bucketed, "bar", dim, outcome);
       if (built) {
         out.push(built);
-        report?.bucketedDimensions.push({ dimension: dim, uniques, topN: TOP_BOTTOM_K * 2 });
+        report?.bucketedDimensions.push({ dimension: dim, uniques, topN: TOP_N_BUCKET });
       }
       continue;
     }
-    if (uniques > LOW_CARDINALITY_MAX) {
-      // Bucket a medium-cardinality dim into a legible chart. In exhaustive
-      // breadth we keep top-K AND bottom-K (best+worst visible); the legacy
-      // dashboard-only path keeps top-N+Other (long-tail aggregate preserved).
-      const bucketed = opts.bucketHighCardinality
-        ? bucketTopAndBottom(sourceRows, dim, TOP_BOTTOM_K, outcome)
-        : bucketRowsTopN(sourceRows, dim, TOP_N_BUCKET, outcome);
-      const built = tryBuildChart(ctx, bucketed, "bar", dim, outcome);
-      if (built) {
-        out.push(built);
-        report?.bucketedDimensions.push({
-          dimension: dim,
-          uniques,
-          topN: opts.bucketHighCardinality ? TOP_BOTTOM_K * 2 : TOP_N_BUCKET,
-        });
+
+    // ≤ EMBED_CAP: embed the FULL category set (no rows dropped) so the "View all
+    // … as a sortable table" path reaches every record. When there are more
+    // categories than fit legibly, bake an HONEST Top-N display default + the
+    // durable value sort; the user flips to Bottom-N / a different N / All with
+    // the inline ChartLimitControl. See docs/conventions/chart-limit-durable.md.
+    const built = tryBuildChart(ctx, sourceRows, "bar", dim, outcome);
+    if (built) {
+      if (uniques > DEFAULT_DISPLAY_N) {
+        built.sort = { by: "value", direction: "desc" };
+        built.limit = { mode: "top", n: DEFAULT_DISPLAY_N };
+        report?.bucketedDimensions.push({ dimension: dim, uniques, topN: DEFAULT_DISPLAY_N });
       }
-    } else {
-      const built = tryBuildChart(ctx, sourceRows, "bar", dim, outcome);
-      if (built) out.push(built);
+      out.push(built);
     }
   }
 
@@ -325,57 +338,14 @@ function bucketRowsTopN(
   });
 }
 
-/**
- * Keep ONLY the top-K and bottom-K groups of `dim`, ranked by the MEAN of
- * `outcome` (size-normalised — correct for a rate; a raw SUM would just reward
- * the biggest group), and DROP the middle. The resulting chart shows the BEST
- * and WORST performers of a high-cardinality dimension side by side, instead of
- * a top-N+Other view that hides the worst. Kept groups retain ALL their rows so
- * per-group means stay exact. Pure: returns a filtered (not mutated) row array;
- * returns the input unchanged when there are ≤ 2·K groups (already small enough).
- */
-function bucketTopAndBottom(
-  rows: Record<string, unknown>[],
-  dim: string,
-  k: number,
-  outcome: string
-): Record<string, unknown>[] {
-  const agg = new Map<string, { sum: number; n: number }>();
-  for (const r of rows) {
-    const raw = r?.[dim];
-    if (raw == null || raw === "") continue;
-    // toNumber (not bare Number) so the ranking agrees with how the chart
-    // aggregates — handles "85%"/"1,234" string cells the same way.
-    const y = toNumber(r?.[outcome]);
-    if (!Number.isFinite(y)) continue;
-    const key = String(raw);
-    const cur = agg.get(key) ?? { sum: 0, n: 0 };
-    cur.sum += y;
-    cur.n += 1;
-    agg.set(key, cur);
-  }
-  const means = [...agg.entries()].map(([key, { sum, n }]) => ({ key, mean: sum / n }));
-  if (means.length <= 2 * k) return rows;
-  means.sort((a, b) => b.mean - a.mean);
-  const keep = new Set<string>([
-    ...means.slice(0, k).map((m) => m.key),
-    ...means.slice(means.length - k).map((m) => m.key),
-  ]);
-  return rows.filter((r) => {
-    const raw = r?.[dim];
-    return raw != null && raw !== "" && keep.has(String(raw));
-  });
-}
-
 // Exposed for tests so the bucketing helper can be pinned independently.
 export const __test__ = {
   bucketRowsTopN,
-  bucketTopAndBottom,
   pickStrongestDateColumn,
-  LOW_CARDINALITY_MAX,
   MEDIUM_CARDINALITY_MAX,
   TOP_N_BUCKET,
-  TOP_BOTTOM_K,
+  EMBED_CAP,
+  DEFAULT_DISPLAY_N,
   DEFAULT_MAX_SWEEP_CHARTS,
 };
 

@@ -162,6 +162,67 @@ describe("WI2-wire-bind · DashboardTiles forwards the cache without modificatio
   });
 });
 
+describe("bar-limit · inline Top/Bottom-N control wiring (ChartTileBody)", () => {
+  it("imports ChartLimitControl + the ChartLimit type", () => {
+    assert.match(
+      bodySrc,
+      /import \{ ChartLimitControl, type ChartLimit \} from "@\/components\/charts\/ChartLimitControl"/,
+    );
+  });
+
+  it("declares an optional onLimitChange prop and destructures it", () => {
+    assert.match(bodySrc, /onLimitChange\?: \(limit: ChartLimit\) => void;/);
+    assert.match(bodySrc, /^\s*onLimitChange,\s*$/m);
+  });
+
+  it("seeds the limit state from the chart's durable limit (server-baked / persisted)", () => {
+    assert.match(
+      bodySrc,
+      /const \[limit, setLimit\] = useState<ChartLimit>\(tile\.chart\.limit \?\? null\)/,
+    );
+  });
+
+  it("gates the control on a bar chart with > 10 categories (parity with the modal)", () => {
+    assert.match(
+      bodySrc,
+      /const showLimitControl = showSortControl && categoryCount > 10;/,
+    );
+  });
+
+  it("renders ChartLimitControl wired to the live limit + categoryCount total", () => {
+    assert.match(
+      bodySrc,
+      /<ChartLimitControl[\s\S]*?value=\{limit\}[\s\S]*?onChange=\{handleLimitChange\}[\s\S]*?total=\{categoryCount\}[\s\S]*?\/>/,
+    );
+  });
+
+  it("injects the live limit into the CHART spec but keeps the pivot/table on the full data", () => {
+    // renderedSpec carries the limit (so the bars narrow); the "View all" pivot
+    // gets the limit-free sortedSpec so every record stays reachable.
+    assert.match(
+      bodySrc,
+      /const renderedSpec = useMemo<ChartSpec>\(\s*\(\) => \(\{ \.\.\.\(sortedSpec as ChartSpec\), limit: limit \?\? undefined \}\)/,
+    );
+    assert.match(bodySrc, /spec=\{renderedSpec\}/);
+    assert.match(bodySrc, /chart=\{renderedSpec\}/);
+    assert.match(bodySrc, /<ChartTilePivotView chart=\{sortedSpec\}/);
+  });
+
+  it("renders a live 'Top/Bottom N of M' honesty caption derived from the effective limit", () => {
+    assert.match(bodySrc, /limit && categoryCount > limit\.n/);
+    assert.match(bodySrc, /limit\.mode === "top" \? "Top" : "Bottom"/);
+  });
+});
+
+describe("bar-limit · DashboardTiles persists the limit via the charts PATCH", () => {
+  it("forwards onLimitChange that PATCHes { limit } through updateChartInsightOrRecommendation", () => {
+    assert.match(
+      tilesSrc,
+      /onLimitChange=\{[\s\S]*?updateChartInsightOrRecommendation\(\s*dashboardId,\s*tile\.index,\s*\{ limit \},\s*sheetId,\s*\)/,
+    );
+  });
+});
+
 describe("WI2-wire-bind · DashboardView mounts a single shared cache", () => {
   it("imports createInsightRegenCache from the WI2-cache module", () => {
     assert.match(
