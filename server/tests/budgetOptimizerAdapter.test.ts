@@ -107,9 +107,9 @@ describe("buildMagnitudesFromBudgetOptimizer", () => {
     assert.equal(mags[0].label, "Projected lift");
     assert.equal(mags[0].value, "8.0%");
     assert.equal(mags[1].label, "Total budget held");
-    // Canonical compact format (shared formatCompactNumber authority): uppercase
-    // K, trailing zero stripped — "28K", not the old bespoke "28.0k".
-    assert.match(mags[1].value, /28K|28000/);
+    // Canonical compact format (shared formatCompactNumber authority): Indian
+    // spaced suffix, trailing zero stripped — "28 K", not the old bespoke "28.0k".
+    assert.match(mags[1].value, /28 K|28000/);
     assert.match(mags[2].label, /Biggest shift/);
   });
 

@@ -84,23 +84,24 @@ describe("format · formatKMB", () => {
     expect(formatKMB(999)).toBe("999");
   });
 
-  it("formats thousands with K suffix", () => {
-    expect(formatKMB(1000)).toBe("1K");
-    expect(formatKMB(1234)).toBe("1.2K");
-    expect(formatKMB(50_000)).toBe("50K");
-    expect(formatKMB(999_999)).toBe("1000K"); // boundary
+  it("formats thousands with a spaced K suffix", () => {
+    expect(formatKMB(1000)).toBe("1 K");
+    expect(formatKMB(1234)).toBe("1.23 K");
+    expect(formatKMB(50_000)).toBe("50 K");
+    expect(formatKMB(999_999)).toBe("10 Lac"); // boundary rounds up into the lakh tier
   });
 
-  it("formats millions / billions / trillions", () => {
-    expect(formatKMB(1_000_000)).toBe("1M");
-    expect(formatKMB(1_500_000)).toBe("1.5M");
-    expect(formatKMB(2_000_000_000)).toBe("2B");
-    expect(formatKMB(3_500_000_000_000)).toBe("3.5T");
+  it("formats lakhs / crores (Indian system)", () => {
+    expect(formatKMB(1_000_000)).toBe("10 Lac");
+    expect(formatKMB(1_500_000)).toBe("15 Lac");
+    expect(formatKMB(481_000)).toBe("4.81 Lac");
+    expect(formatKMB(2_000_000_000)).toBe("200 Cr");
+    expect(formatKMB(1_049_389_992.94)).toBe("104.9 Cr");
   });
 
   it("preserves negative sign", () => {
-    expect(formatKMB(-1234)).toBe("-1.2K");
-    expect(formatKMB(-1_000_000)).toBe("-1M");
+    expect(formatKMB(-1234)).toBe("-1.23 K");
+    expect(formatKMB(-1_000_000)).toBe("-10 Lac");
   });
 
   it("returns em-dash for non-finite", () => {
@@ -110,13 +111,14 @@ describe("format · formatKMB", () => {
 });
 
 describe("format · formatCurrency", () => {
-  it("prepends symbol and formats magnitude", () => {
-    expect(formatCurrency(1234)).toBe("$1.2K");
-    expect(formatCurrency(1_500_000, "₹")).toBe("₹1.5M");
+  it("prepends ₹ by default (data is INR) and Indian-formats the magnitude", () => {
+    expect(formatCurrency(1234)).toBe("₹1.23 K");
+    expect(formatCurrency(1_500_000, "₹")).toBe("₹15 Lac");
+    expect(formatCurrency(311_587_406.72)).toBe("₹31.2 Cr");
   });
 
   it("handles negatives with sign before symbol", () => {
-    expect(formatCurrency(-1234)).toBe("-$1.2K");
+    expect(formatCurrency(-1234)).toBe("-₹1.23 K");
   });
 });
 
@@ -152,14 +154,17 @@ describe("format · formatDateSmart", () => {
 });
 
 describe("format · formatChartValue (universal)", () => {
-  it("uses field-name inference by default", () => {
-    expect(formatChartValue(1234, "Revenue")).toBe("$1.2K");
+  it("uses field-name inference by default (₹ on currency fields)", () => {
+    expect(formatChartValue(1234, "Revenue")).toBe("₹1.23 K");
     expect(formatChartValue(0.42, "ConversionRate")).toBe("42.0%");
-    expect(formatChartValue(1234, "Volume")).toBe("1.2K");
+    expect(formatChartValue(1234, "Volume")).toBe("1.23 K");
+    // The screenshot bug: an unmapped currency field (retailer margin) used to
+    // render "$10.5M"; it must now read ₹ + Cr/Lac.
+    expect(formatChartValue(10_500_000, "Retailer Margin")).toBe("₹1.05 Cr");
   });
 
   it("respects explicit format override", () => {
-    expect(formatChartValue(1234, "Revenue", { format: "kmb" })).toBe("1.2K");
+    expect(formatChartValue(1234, "Revenue", { format: "kmb" })).toBe("1.23 K");
     expect(formatChartValue(0.42, "Volume", { format: "percent" })).toBe("42.0%");
   });
 
@@ -169,8 +174,8 @@ describe("format · formatChartValue (universal)", () => {
     expect(formatChartValue("", "X")).toBe("—");
   });
 
-  it("custom precision", () => {
-    expect(formatChartValue(1234, "Revenue", { precision: 2 })).toBe("$1.23K");
+  it("magnitude decimals are adaptive (1 dp ≥10 scaled, 2 dp below)", () => {
+    expect(formatChartValue(1234, "Revenue", { precision: 2 })).toBe("₹1.23 K");
   });
 
   it("magnitude guard: ordinal values on a date-NAMED axis render as plain numbers, not 1-Jan-1970", () => {
@@ -195,12 +200,12 @@ describe("Wave F1 · makeAxisTickFormatter (field-aware axis ticks)", () => {
     expect(fmt(0.04)).toBe("4.0%");
   });
 
-  it("renders currency columns with symbol + K/M/B", () => {
-    expect(makeAxisTickFormatter("Revenue")(1234)).toBe("$1.2K");
+  it("renders currency columns with ₹ + Cr/Lac/K", () => {
+    expect(makeAxisTickFormatter("Revenue")(1234)).toBe("₹1.23 K");
   });
 
-  it("renders plain numeric measures with K/M/B", () => {
-    expect(makeAxisTickFormatter("Units Sold")(1500)).toBe("1.5K");
+  it("renders plain numeric measures with Cr/Lac/K", () => {
+    expect(makeAxisTickFormatter("Units Sold")(1500)).toBe("1.5 K");
   });
 
   it("renders duration columns as durations (DUR1)", () => {

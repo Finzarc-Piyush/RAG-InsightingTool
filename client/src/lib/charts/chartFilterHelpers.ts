@@ -65,9 +65,13 @@ export const getDynamicDomain = (values: number[], paddingFraction: number = 0.1
 
 /**
  * Field-blind smart axis-label formatter: small decimals → 4dp, sub-1000
- * decimals → 2dp, then K/M/B suffixes at 1dp. This is the legacy field-AGNOSTIC
- * formatter; the field-AWARE `makeAxisTickFormatter` in `format.ts` is separate
- * and unaffected.
+ * decimals → 2dp, then INDIAN Cr / Lac / K suffixes. This is the legacy
+ * field-AGNOSTIC formatter; the field-AWARE `makeAxisTickFormatter` in
+ * `format.ts` is separate and unaffected.
+ *
+ * INDIAN TIER LADDER — keep in sync with server/lib/formatCompactNumber.ts,
+ * client/src/lib/charts/format.ts (formatKMB), client/src/lib/chartNumberFormat.ts.
+ * See docs/conventions/indian-number-format.md.
  */
 export const formatAxisLabelFieldBlind = (value: number): string => {
   if (Math.abs(value) < 0.01 && value !== 0) {
@@ -77,12 +81,20 @@ export const formatAxisLabelFieldBlind = (value: number): string => {
     return value.toFixed(2);
   }
   const absValue = Math.abs(value);
-  if (absValue >= 1e9) {
-    return (value / 1e9).toFixed(1) + 'B';
-  } else if (absValue >= 1e6) {
-    return (value / 1e6).toFixed(1) + 'M';
+  // 1 dp for |scaled| ≥ 10, 2 dp below; strip trailing zeros; space before suffix.
+  const tier = (factor: number, suffix: string): string => {
+    const v = value / factor;
+    const fixed = (Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2))
+      .replace(/\.0+$/, '')
+      .replace(/(\.\d*?)0+$/, '$1');
+    return `${fixed} ${suffix}`;
+  };
+  if (absValue >= 1e7) {
+    return tier(1e7, 'Cr');
+  } else if (absValue >= 1e5) {
+    return tier(1e5, 'Lac');
   } else if (absValue >= 1e3) {
-    return (value / 1e3).toFixed(1) + 'K';
+    return tier(1e3, 'K');
   }
   return value.toFixed(0);
 };

@@ -12,19 +12,22 @@ function parseFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+// INDIAN TIER LADDER — keep in sync with server/lib/formatCompactNumber.ts,
+// client/src/lib/charts/format.ts (formatKMB), and chartFilterHelpers.ts.
+// See docs/conventions/indian-number-format.md.
 function formatScaledWithSuffix(n: number, divisor: number, suffix: string): string {
   const v = n / divisor;
-  const av = Math.abs(v);
-  if (av < 10) {
-    const s = v.toFixed(2).replace(/\.?0+$/, '');
-    return `${s}${suffix}`;
-  }
-  return `${Math.round(v)}${suffix}`;
+  // 1 dp for |scaled| ≥ 10, 2 dp below; strip trailing zeros; space before suffix.
+  const fixed = (Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2))
+    .replace(/\.0+$/, '')
+    .replace(/(\.\d*?)0+$/, '$1');
+  return `${fixed} ${suffix}`;
 }
 
 /**
- * Format a numeric chart value for tooltips.
- * Decimals allowed only when |n| < 10 (or |scaled value before K/M/B| < 10).
+ * Format a numeric chart value for tooltips (Indian: Cr / Lac / K).
+ * Decimals follow the scaled value (1 dp ≥10, 2 dp below); raw |n| < 10 keeps
+ * up to 2 dp.
  */
 export function formatChartTooltipValue(value: unknown): string {
   const n = parseFiniteNumber(value);
@@ -32,8 +35,8 @@ export function formatChartTooltipValue(value: unknown): string {
 
   const abs = Math.abs(n);
 
-  if (abs >= 1e9) return formatScaledWithSuffix(n, 1e9, 'B');
-  if (abs >= 1e6) return formatScaledWithSuffix(n, 1e6, 'M');
+  if (abs >= 1e7) return formatScaledWithSuffix(n, 1e7, 'Cr');
+  if (abs >= 1e5) return formatScaledWithSuffix(n, 1e5, 'Lac');
   if (abs >= 1e3) return formatScaledWithSuffix(n, 1e3, 'K');
 
   if (abs < 10) {

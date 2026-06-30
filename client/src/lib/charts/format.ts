@@ -92,14 +92,21 @@ export function inferFormatHint(
 }
 
 /**
- * Format a number with K/M/B/T suffixes.
- *   1234         → "1.2K"
- *   1_234_000    → "1.2M"
- *   1_234_000_000 → "1.2B"
- *   123          → "123"
+ * Format a number in the INDIAN numbering system (Cr / Lac / K).
+ *   1234          → "1.23 K"
+ *   1_234_000     → "12.3 Lac"
+ *   1_049_389_992 → "104.9 Cr"
+ *   123           → "123"
  *
- * `precision` controls decimals after the suffix (default 1).
- * Negatives keep their sign.
+ * INDIAN TIER LADDER — keep in sync with the three mirrored ladders:
+ *   server/lib/formatCompactNumber.ts, client/src/lib/chartNumberFormat.ts,
+ *   client/src/lib/charts/chartFilterHelpers.ts (formatAxisLabelFieldBlind).
+ * See docs/conventions/indian-number-format.md.
+ *
+ * Magnitude decimals follow the scaled value (1 dp for ≥10, 2 dp below), so
+ * 104.94 → "104.9 Cr" and 4.81 → "4.81 Lac". A SPACE precedes the suffix.
+ * `precision` controls decimals only on the sub-1000 plain path. Negatives
+ * keep their sign.
  */
 export function formatKMB(value: number, precision = 1): string {
   if (!Number.isFinite(value)) return "—";
@@ -109,29 +116,29 @@ export function formatKMB(value: number, precision = 1): string {
     return sign + abs.toFixed(abs % 1 === 0 ? 0 : precision);
   }
   const tiers: Array<[number, string]> = [
-    [1e12, "T"],
-    [1e9, "B"],
-    [1e6, "M"],
+    [1e7, "Cr"],
+    [1e5, "Lac"],
     [1e3, "K"],
   ];
   for (const [factor, suffix] of tiers) {
     if (abs >= factor) {
       const v = abs / factor;
-      // Drop trailing .0 for integers.
-      const fixed = v.toFixed(precision);
-      const trimmed = fixed.endsWith(".0")
-        ? fixed.slice(0, -2)
-        : fixed.replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
-      return `${sign}${trimmed}${suffix}`;
+      // 1 dp for scaled ≥ 10, 2 dp below; then drop trailing zeros.
+      const fixed = v.toFixed(v >= 10 ? 1 : 2);
+      const trimmed = fixed
+        .replace(/\.0+$/, "")
+        .replace(/(\.\d*?)0+$/, "$1");
+      return `${sign}${trimmed} ${suffix}`;
     }
   }
   return sign + abs.toFixed(precision);
 }
 
-/** Currency formatter: prepends the symbol, then K/M/B-formats the magnitude. */
+/** Currency formatter: prepends the symbol (₹ by default — data is INR), then
+ *  Indian-formats the magnitude. */
 export function formatCurrency(
   value: number,
-  symbol = "$",
+  symbol = "₹",
   precision = 1,
 ): string {
   if (!Number.isFinite(value)) return "—";
@@ -217,8 +224,8 @@ export function formatChartValue(
         opts.currencySymbol ??
         (field
           ? CURRENCY_SYMBOLS_BY_FIELD[field.toLowerCase().match(/\b\w+\b/g)?.[0] ?? ""] ??
-            "$"
-          : "$");
+            "₹"
+          : "₹");
       return formatCurrency(num, sym, opts.precision ?? 1);
     }
     return String(value);
