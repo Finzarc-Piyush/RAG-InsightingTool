@@ -5,6 +5,7 @@ import {
   deleteSummaryItem,
   makeSummaryItem,
   summaryItemToValues,
+  ensureSummaryIds,
 } from "./summaryBandEdit";
 import type { DashboardAnswerEnvelope } from "@/shared/schema";
 
@@ -25,19 +26,27 @@ describe("summaryBandEdit · pure mutations", () => {
   it("adds a magnitude to the answerEnvelope (not attentionAreas)", () => {
     const patch = addSummaryItem(
       "magnitudes",
-      { value: "18.9%", label: "male · survival", confidence: "" },
+      { value: "18.9%", label: "male · survival", tone: "green" },
       envelope(),
       undefined,
     );
     expect(patch.attentionAreas).toBeUndefined();
     expect(patch.answerEnvelope?.magnitudes).toHaveLength(2);
-    expect(patch.answerEnvelope?.magnitudes?.[1]).toEqual({
+    // W-SBCOLOR · tone replaces confidence on key numbers.
+    expect(patch.answerEnvelope?.magnitudes?.[1]).toMatchObject({
       label: "male · survival",
       value: "18.9%",
+      tone: "green",
     });
     // L-021 · other envelope fields ride along untouched.
     expect(patch.answerEnvelope?.findings).toHaveLength(1);
     expect(patch.answerEnvelope?.likelyDrivers).toHaveLength(1);
+  });
+
+  it("defaults a key number with no chosen colour to amber", () => {
+    const item = makeSummaryItem("magnitudes", { value: "5", label: "x", tone: "" });
+    expect(item).toMatchObject({ label: "x", value: "5", tone: "amber" });
+    expect(item).not.toHaveProperty("confidence");
   });
 
   it("routes attentionAreas edits to the top-level field", () => {
@@ -89,7 +98,7 @@ describe("summaryBandEdit · pure mutations", () => {
       basis: "data",
       testable: "true",
     });
-    expect(item).toEqual({
+    expect(item).toMatchObject({
       explanation: "Boarding mix differs by port",
       basis: "data",
       confidence: "high",
@@ -105,8 +114,50 @@ describe("summaryBandEdit · pure mutations", () => {
   });
 
   it("round-trips an item through toValues → makeSummaryItem", () => {
-    const original = { label: "female · survival", value: "74.2%", confidence: "high" };
+    const original = { label: "female · survival", value: "74.2%", tone: "green" };
     const values = summaryItemToValues("magnitudes", original);
-    expect(makeSummaryItem("magnitudes", values)).toEqual(original);
+    expect(makeSummaryItem("magnitudes", values)).toMatchObject(original);
+  });
+});
+
+describe("summaryBandEdit · stable ids (W-SBGRID)", () => {
+  it("mints an id on add and preserves it on edit", () => {
+    const added = makeSummaryItem("magnitudes", { value: "1", label: "a", tone: "amber" });
+    expect(typeof added.id).toBe("string");
+    expect(added.id).toBeTruthy();
+
+    const edited = makeSummaryItem(
+      "magnitudes",
+      { value: "2", label: "a", tone: "red" },
+      added, // prev carries the id
+    );
+    expect(edited.id).toBe(added.id); // id survives the edit
+    expect(edited.value).toBe("2");
+  });
+
+  it("ensureSummaryIds backfills ids for legacy cards and reports changed", () => {
+    const env = {
+      magnitudes: [{ label: "a", value: "1" }, { label: "b", value: "2", id: "mag_keep" }],
+      findings: [{ headline: "h", evidence: "e" }],
+    } as unknown as DashboardAnswerEnvelope;
+    const areas = [
+      { dimension: "d", unit: "u", metric: "m", value: 1, benchmark: 2, variancePct: -10, status: "amber" as const },
+    ];
+    const { changed, patch } = ensureSummaryIds(env, areas);
+    expect(changed).toBe(true);
+    const mags = patch.answerEnvelope?.magnitudes as Array<Record<string, unknown>>;
+    expect(typeof mags[0].id).toBe("string"); // backfilled
+    expect(mags[1].id).toBe("mag_keep"); // existing id untouched
+    expect(typeof (patch.attentionAreas?.[0] as Record<string, unknown>).id).toBe("string");
+  });
+
+  it("ensureSummaryIds is a no-op (changed=false) when every card has an id", () => {
+    const env = {
+      magnitudes: [{ label: "a", value: "1", id: "mag_1" }],
+    } as unknown as DashboardAnswerEnvelope;
+    const { changed, patch } = ensureSummaryIds(env, []);
+    expect(changed).toBe(false);
+    expect(patch.answerEnvelope).toBeUndefined();
+    expect(patch.attentionAreas).toBeUndefined();
   });
 });

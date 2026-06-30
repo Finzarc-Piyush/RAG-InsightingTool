@@ -140,3 +140,49 @@ describe("dashboardPatchSchema · editable Executive Summary band (Wave C1)", ()
     assert.equal(parsed.success, false);
   });
 });
+
+describe("dashboardPatchSchema · free-form summary layout (W-SBGRID)", () => {
+  it("accepts a summaryGridLayout patch keyed by breakpoint", () => {
+    const parsed = dashboardPatchSchema.safeParse({
+      summaryGridLayout: {
+        lg: [
+          { i: "mag_abc", x: 0, y: 0, w: 2, h: 3, minW: 1, minH: 2 },
+          { i: "attn_def", x: 2, y: 0, w: 4, h: 4 },
+        ],
+        sm: [{ i: "mag_abc", x: 0, y: 0, w: 3, h: 3 }],
+      },
+    });
+    assert.equal(parsed.success, true);
+  });
+
+  it("accepts per-card ids on summary items (stable grid keys)", () => {
+    const parsed = dashboardPatchSchema.safeParse({
+      answerEnvelope: {
+        magnitudes: [{ label: "GT · NR", value: "470.92", tone: "green", id: "mag_abc" }],
+        findings: [{ headline: "h", evidence: "e", id: "find_1" }],
+        recommendations: [{ action: "a", rationale: "r", id: "rec_1" }],
+        implications: [{ statement: "s", soWhat: "w", id: "imp_1" }],
+        likelyDrivers: [
+          { explanation: "x", basis: "data", confidence: "high", id: "drv_1" },
+        ],
+      },
+      attentionAreas: [
+        {
+          dimension: "Embarked",
+          unit: "S",
+          metric: "m",
+          value: 1,
+          benchmark: 2,
+          variancePct: -10,
+          status: "amber",
+          id: "attn_1",
+        },
+      ],
+    });
+    assert.equal(parsed.success, true);
+    if (parsed.success) {
+      assert.equal(parsed.data.answerEnvelope?.magnitudes?.[0]?.id, "mag_abc");
+      assert.equal(parsed.data.attentionAreas?.[0]?.id, "attn_1");
+    }
+  });
+});

@@ -211,3 +211,64 @@ describe("DPF1 · dashboardAnswerEnvelopeSchema caps now match messageAnswerEnve
     );
   });
 });
+
+describe("W-SBCOLOR · key-number cards carry a colour tone", () => {
+  it("accepts a magnitude with a tone (green/amber/red)", () => {
+    for (const tone of ["green", "amber", "red"] as const) {
+      const env = { magnitudes: [{ label: "GT · NR", value: "470.92", tone }] };
+      assert.equal(
+        dashboardAnswerEnvelopeSchema.safeParse(env).success,
+        true,
+        `tone=${tone} should be accepted`
+      );
+    }
+  });
+
+  it("rejects an unknown tone value", () => {
+    const env = { magnitudes: [{ label: "GT · NR", value: "470.92", tone: "blue" }] };
+    assert.equal(dashboardAnswerEnvelopeSchema.safeParse(env).success, false);
+  });
+
+  it("back-compat: a magnitude with neither tone nor confidence still parses", () => {
+    const env = { magnitudes: [{ label: "GT · NR", value: "470.92" }] };
+    assert.equal(dashboardAnswerEnvelopeSchema.safeParse(env).success, true);
+  });
+
+  it("back-compat: a legacy magnitude with confidence still parses", () => {
+    const env = { magnitudes: [{ label: "GT · NR", value: "470.92", confidence: "medium" }] };
+    assert.equal(dashboardAnswerEnvelopeSchema.safeParse(env).success, true);
+  });
+});
+
+describe("W-SBGRID · dashboard doc carries the free-form summary layout", () => {
+  it("accepts a dashboard with summaryGridLayout + per-card ids", () => {
+    const doc = {
+      ...baseValidDashboard(),
+      answerEnvelope: {
+        magnitudes: [{ label: "GT · NR", value: "470.92", tone: "green", id: "mag_abc" }],
+      },
+      attentionAreas: [
+        {
+          dimension: "Brand",
+          unit: "NHR_SRSOH",
+          metric: "NR (Rs Cr) (avg) by P3 Brand",
+          value: 0,
+          benchmark: 1,
+          variancePct: -103,
+          status: "amber" as const,
+          id: "attn_1",
+        },
+      ],
+      summaryGridLayout: {
+        lg: [{ i: "mag_abc", x: 0, y: 0, w: 2, h: 3 }],
+      },
+    } satisfies Dashboard;
+    const out = dashboardSchema.safeParse(doc);
+    assert.equal(out.success, true, out.success ? "" : JSON.stringify(out.error.issues));
+  });
+
+  it("back-compat: a dashboard without summaryGridLayout still parses", () => {
+    const out = dashboardSchema.safeParse(baseValidDashboard());
+    assert.equal(out.success, true);
+  });
+});

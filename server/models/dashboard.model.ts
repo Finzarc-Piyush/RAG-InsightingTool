@@ -1539,6 +1539,10 @@ export const patchDashboard = async (
   if (patch.attentionAreas !== undefined) {
     dashboard.attentionAreas = patch.attentionAreas;
   }
+  // W-SBGRID · whole-field replace of the Executive-Summary free-form layout.
+  if (patch.summaryGridLayout !== undefined) {
+    dashboard.summaryGridLayout = patch.summaryGridLayout;
+  }
 
   dashboard.sheets = sheets;
   dashboard.charts = sheets.flatMap((s) =>

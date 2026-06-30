@@ -16,6 +16,7 @@
  * (server/shared/schema/charts.ts) — the server validates against those, and a
  * wrong-object edit would be rejected (or, per L-021, silently stripped).
  */
+import type { Layouts } from "react-grid-layout";
 import type {
   AttentionAreaSpec,
   DashboardAnswerEnvelope,
@@ -32,11 +33,17 @@ export type SummaryGroupKey =
 export interface SummaryField {
   key: string;
   label: string;
-  control: "text" | "textarea" | "select" | "number";
+  /** "color" renders the option values as selectable colour swatches (W-SBCOLOR). */
+  control: "text" | "textarea" | "select" | "number" | "color";
   options?: ReadonlyArray<{ value: string; label: string }>;
   optional?: boolean;
   placeholder?: string;
 }
+
+/** W-SBCOLOR · the three key-number card colours; the value IS the colour. */
+export const MAGNITUDE_TONES = ["green", "amber", "red"] as const;
+export type MagnitudeToneValue = (typeof MAGNITUDE_TONES)[number];
+const DEFAULT_MAGNITUDE_TONE: MagnitudeToneValue = "amber";
 
 export interface SummaryGroupConfig {
   key: SummaryGroupKey;
@@ -68,15 +75,15 @@ export const SUMMARY_GROUPS: Record<SummaryGroupKey, SummaryGroupConfig> = {
       { key: "value", label: "Value", control: "text", placeholder: "74.2%" },
       { key: "label", label: "Label", control: "text", placeholder: "female · survival rate" },
       {
-        key: "confidence",
-        label: "Confidence",
-        control: "select",
-        optional: true,
+        // W-SBCOLOR · colour replaces the old "Confidence" select. Green for the
+        // best/positive numbers, red for the worst, amber (default) for neutral.
+        key: "tone",
+        label: "Colour",
+        control: "color",
         options: [
-          { value: "", label: "—" },
-          { value: "low", label: "Low" },
-          { value: "medium", label: "Medium" },
-          { value: "high", label: "High" },
+          { value: "green", label: "Green" },
+          { value: "amber", label: "Amber" },
+          { value: "red", label: "Red" },
         ],
       },
     ],
@@ -189,21 +196,54 @@ function clean(v: string | undefined): string {
   return (v ?? "").trim();
 }
 
+/** W-SBGRID · per-group id prefix (aids debugging the saved grid layout). */
+const ID_PREFIX: Record<SummaryGroupKey, string> = {
+  magnitudes: "mag",
+  attentionAreas: "attn",
+  findings: "find",
+  likelyDrivers: "drv",
+  implications: "imp",
+  recommendations: "rec",
+};
+
+/** Fresh stable card id, mirroring AddTileMenu's `${prefix}_${ts}_${hex}`. */
+export function genSummaryCardId(key: SummaryGroupKey): string {
+  const ts = Date.now().toString(36);
+  const rand = Math.random().toString(16).slice(2, 8);
+  return `${ID_PREFIX[key]}_${ts}_${rand}`;
+}
+
 /** Build a schema-valid item from the dialog's string values, preserving any
- *  required-but-hidden fields from the item being edited (`prev`). */
+ *  required-but-hidden fields from the item being edited (`prev`) — including
+ *  its stable `id` (a fresh one is minted on add). */
 export function makeSummaryItem(
+  key: SummaryGroupKey,
+  values: Values,
+  prev?: Record<string, unknown>,
+): Record<string, unknown> {
+  const base = summaryItemFields(key, values, prev);
+  // W-SBGRID · keep the card's existing id on edit; mint one on add.
+  const id =
+    typeof prev?.id === "string" && prev.id ? prev.id : genSummaryCardId(key);
+  return { ...base, id };
+}
+
+function summaryItemFields(
   key: SummaryGroupKey,
   values: Values,
   prev?: Record<string, unknown>,
 ): Record<string, unknown> {
   switch (key) {
     case "magnitudes": {
-      const item: Record<string, unknown> = {
+      const tone = (MAGNITUDE_TONES as readonly string[]).includes(values.tone)
+        ? values.tone
+        : DEFAULT_MAGNITUDE_TONE;
+      // W-SBCOLOR · tone supersedes confidence; we no longer write confidence.
+      return {
         label: clean(values.label),
         value: clean(values.value),
+        tone,
       };
-      if (clean(values.confidence)) item.confidence = values.confidence;
-      return item;
     }
     case "attentionAreas": {
       const variancePct = Number(clean(values.variancePct)) || 0;
@@ -263,7 +303,10 @@ export function makeSummaryItem(
 export function blankSummaryValues(key: SummaryGroupKey): Values {
   const out: Values = {};
   for (const f of SUMMARY_GROUPS[key].fields) {
-    if (f.control === "select" && !f.optional) {
+    if (f.control === "color") {
+      // W-SBCOLOR · a new key number starts amber (neutral) by default.
+      out[f.key] = DEFAULT_MAGNITUDE_TONE;
+    } else if (f.control === "select" && !f.optional) {
       out[f.key] = f.options?.[0]?.value ?? "";
     } else {
       out[f.key] = "";
@@ -301,6 +344,8 @@ export function summaryGroupItems(
 export interface SummaryPatch {
   answerEnvelope?: DashboardAnswerEnvelope;
   attentionAreas?: AttentionAreaSpec[];
+  /** W-SBGRID · the free-form card layout (whole-field replace). */
+  summaryGridLayout?: Layouts;
 }
 
 function patchFor(
@@ -357,4 +402,56 @@ export function deleteSummaryItem(
   const items = summaryGroupItems(key, envelope, attentionAreas);
   const next = items.filter((_, i) => i !== index);
   return patchFor(key, next, envelope);
+}
+
+/** The five envelope-sourced groups (attentionAreas lives on its own field). */
+const ENVELOPE_GROUPS: SummaryGroupKey[] = [
+  "magnitudes",
+  "findings",
+  "likelyDrivers",
+  "implications",
+  "recommendations",
+];
+
+/**
+ * W-SBGRID · backfill a stable `id` onto every band card that lacks one
+ * (legacy / synthesizer-produced items). Pure: returns the changed fields only
+ * so the caller can persist a minimal patch. `changed` is false when every card
+ * already has an id (no write needed). Stable ids are what make the free-form
+ * grid's saved positions survive a sibling delete.
+ */
+export function ensureSummaryIds(
+  envelope: DashboardAnswerEnvelope | undefined,
+  attentionAreas: AttentionAreaSpec[] | undefined,
+): { changed: boolean; patch: SummaryPatch } {
+  let envChanged = false;
+  const nextEnvelope = { ...(envelope ?? {}) } as Record<string, unknown>;
+  const envRecord = envelope as Record<string, unknown> | undefined;
+  for (const g of ENVELOPE_GROUPS) {
+    const arr = envRecord?.[g] as Array<Record<string, unknown>> | undefined;
+    if (!arr?.length) continue;
+    let groupChanged = false;
+    const nextArr = arr.map((it) => {
+      if (typeof it.id === "string" && it.id) return it;
+      groupChanged = true;
+      return { ...it, id: genSummaryCardId(g) };
+    });
+    if (groupChanged) {
+      nextEnvelope[g] = nextArr;
+      envChanged = true;
+    }
+  }
+
+  let attnChanged = false;
+  const nextAttn = (attentionAreas ?? []).map((a) => {
+    const rec = a as unknown as Record<string, unknown>;
+    if (typeof rec.id === "string" && rec.id) return a;
+    attnChanged = true;
+    return { ...a, id: genSummaryCardId("attentionAreas") };
+  });
+
+  const patch: SummaryPatch = {};
+  if (envChanged) patch.answerEnvelope = nextEnvelope as DashboardAnswerEnvelope;
+  if (attnChanged) patch.attentionAreas = nextAttn as AttentionAreaSpec[];
+  return { changed: envChanged || attnChanged, patch };
 }

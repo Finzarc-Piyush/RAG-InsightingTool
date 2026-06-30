@@ -6,9 +6,13 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Trash2, Edit2, Loader2 } from 'lucide-react';
-import { Responsive, WidthProvider, Layout, Layouts } from 'react-grid-layout';
-import 'react-grid-layout/css/styles.css';
-import 'react-resizable/css/styles.css';
+import type { Layout, Layouts } from 'react-grid-layout';
+import {
+  ResponsiveGridLayout,
+  GRID_COLS as COLS,
+  GRID_ROW_HEIGHT as ROW_HEIGHT,
+  GRID_MARGIN,
+} from './dashboardGridConstants';
 import { EditInsightModal } from './EditInsightModal';
 import { EditTableCaptionModal } from './EditTableCaptionModal';
 import { useToast } from '@/hooks/use-toast';
@@ -31,8 +35,6 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-
-const ResponsiveGridLayout = WidthProvider(Responsive);
 
 import { ActiveChartFilters } from '@/lib/chartFilters';
 import type { InsightRegenCache } from '../lib/insightRegenCache';
@@ -99,11 +101,9 @@ interface DashboardTilesProps {
   insightHistoryStore?: InsightHistoryStore;
 }
 
-const COLS = { lg: 12, md: 10, sm: 6, xs: 4, xxs: 2 } as const;
-const ROW_HEIGHT = 32;
-// DR8 · tighter gutters give the canvas a denser, dashboard-grade feel
-// without compromising drag-grip ergonomics.
-const GRID_MARGIN: [number, number] = [16, 16];
+// COLS / ROW_HEIGHT / GRID_MARGIN / ResponsiveGridLayout now come from the
+// shared `dashboardGridConstants` module (W-SBGRID) so the summary grid stays
+// in lockstep with this canvas.
 const STORAGE_PREFIX = 'dashboard-grid-layout:';
 const HIDDEN_TILE_PREFIX = 'dashboard-hidden-tiles:';
 

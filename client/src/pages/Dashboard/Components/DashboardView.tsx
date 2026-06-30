@@ -342,6 +342,7 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
   }, [activeSheet, dashboard.updatedAt, sheets, dashboard.answerEnvelope]);
 
   const persistGridTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistSummaryGridTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handlePersistGrid = useCallback(
     (layouts: Layouts) => {
       if (!canEdit || !currentSheetId) return;
@@ -437,6 +438,31 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
           variant: 'destructive',
         });
       }
+    },
+    [canEdit, dashboard.id, onRefresh, refetchDashboards, toast],
+  );
+
+  // W-SBGRID · debounced persist of the Executive-Summary free-form card layout.
+  // Mirrors `handlePersistGrid` (the tile-canvas saver) but targets the
+  // dashboard-level `summaryGridLayout` field via the band's `/patch` route.
+  const handlePersistSummaryGrid = useCallback(
+    (layouts: Layouts) => {
+      if (!canEdit) return;
+      if (persistSummaryGridTimerRef.current) clearTimeout(persistSummaryGridTimerRef.current);
+      persistSummaryGridTimerRef.current = setTimeout(async () => {
+        try {
+          await dashboardsApi.patch(dashboard.id, { summaryGridLayout: layouts });
+          if (onRefresh) await onRefresh();
+          await refetchDashboards();
+        } catch (e) {
+          logger.error(e);
+          toast({
+            title: 'Could not save layout',
+            description: e instanceof Error ? e.message : 'Try again.',
+            variant: 'destructive',
+          });
+        }
+      }, 700);
     },
     [canEdit, dashboard.id, onRefresh, refetchDashboards, toast],
   );
@@ -1034,6 +1060,10 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                     }
                     onOpenSummary={() => setSummaryDrawerOpen(true)}
                     onUpdate={canEdit ? handleSummaryUpdate : undefined}
+                    summaryGridLayout={
+                      (dashboard.summaryGridLayout as Layouts | undefined) ?? null
+                    }
+                    onPersistSummaryLayout={canEdit ? handlePersistSummaryGrid : undefined}
                   />
                 ) : null}
 

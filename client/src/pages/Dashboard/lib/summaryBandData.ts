@@ -131,7 +131,9 @@ export function selectSummaryBandData(
     .map((m) => ({
       label: m.label,
       value: m.value,
-      ...(m.confidence ? { confidence: m.confidence } : {}),
+      // W-SBCOLOR · carry the user-chosen colour through to the card; fall back
+      // to the legacy confidence chip only for un-toned (legacy) magnitudes.
+      ...(m.tone ? { tone: m.tone } : m.confidence ? { confidence: m.confidence } : {}),
     }));
 
   const findings: SummaryBandFinding[] = (envelope?.findings ?? [])

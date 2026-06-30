@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { Layouts } from 'react-grid-layout';
 import {
   ChartSpec,
   Dashboard as ServerDashboard,
@@ -46,6 +47,8 @@ export interface DashboardData {
   priorInvestigationsSnapshot?: PriorInvestigationItem[];
   /** MW4 · management-by-exception attention areas. */
   attentionAreas?: AttentionAreaSpec[];
+  /** W-SBGRID · saved free-form positions for the Executive-Summary cards. */
+  summaryGridLayout?: Layouts;
   /**
    * Wave DR15 · source session id. Persisted by the server's
    * `from-spec` / `from-analysis` create paths when supplied. Drives
@@ -132,6 +135,7 @@ export const normalizeDashboard = (dashboard: PersistedDashboard): DashboardData
     investigationSummary: dashboard.investigationSummary,
     priorInvestigationsSnapshot: dashboard.priorInvestigationsSnapshot,
     attentionAreas: dashboard.attentionAreas,
+    summaryGridLayout: dashboard.summaryGridLayout as Layouts | undefined,
     sessionId: dashboard.sessionId,
   };
   

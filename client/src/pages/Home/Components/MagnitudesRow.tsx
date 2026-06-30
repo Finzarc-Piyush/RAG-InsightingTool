@@ -17,7 +17,31 @@ import { cn } from "@/lib/utils";
 export interface MagnitudeItem {
   label: string;
   value: string;
+  /** @deprecated legacy field — no longer surfaced on key-number cards. */
   confidence?: "low" | "medium" | "high";
+  /** W-SBCOLOR · user-chosen card colour. The value IS the colour:
+   *  green = best/positive, red = worst/negative, amber = neutral. */
+  tone?: MagnitudeTone;
+}
+
+export type MagnitudeTone = "green" | "amber" | "red";
+
+/**
+ * W-SBCOLOR · colour classes for a tone-coded key-number card. Reuses the
+ * existing semantic tokens (`--success`, `--destructive`, Tailwind `amber-500`)
+ * already used by the Attention-areas callout, so the palette stays consistent.
+ * A card with NO tone keeps the signature gold treatment (see below).
+ */
+export function magnitudeToneClasses(tone: MagnitudeTone): string {
+  switch (tone) {
+    case "green":
+      return "border-[hsl(var(--success)/0.4)] bg-[hsl(var(--success)/0.08)]";
+    case "red":
+      return "border-destructive/40 bg-destructive/5";
+    case "amber":
+    default:
+      return "border-amber-500/40 bg-amber-500/5";
+  }
 }
 
 export interface MagnitudesRowProps {
@@ -48,38 +72,45 @@ export function MagnitudesRow({ items, className, label = "Magnitudes" }: Magnit
           flex-wrap: KPI cards line up in clean columns and share a row height,
           so the band reads as an aligned strip rather than uneven cards. */}
       <div className="grid auto-rows-fr grid-cols-[repeat(auto-fill,minmax(140px,1fr))] gap-3">
-        {items.slice(0, MAX_KPI_CARDS).map((m, idx) => (
-          <div
-            key={`${m.label}-${idx}`}
-            className={cn(
-              "relative flex flex-col gap-1",
-              "rounded-brand-md border border-[hsl(var(--accent-gold)/0.35)]",
-              "bg-[hsl(var(--accent-gold)/0.08)]",
-              "px-3 py-2.5"
-            )}
-            // Single-use gold hairline at the top edge — the "one gold
-            // stroke per view" rule lives on the magnitudes row because
-            // this is the signature Phase-1 surface.
-            style={{
-              boxShadow: "inset 0 1px 0 0 hsl(var(--accent-gold) / 0.6)",
-            }}
-          >
-            <Metric size="sm" className="text-foreground">
-              {m.value}
-            </Metric>
-            <Caption className="text-foreground/80">{m.label}</Caption>
-            {m.confidence ? (
-              <div className="mt-0.5">
-                <Badge
-                  variant={confidenceVariant(m.confidence)}
-                  className="px-1.5 py-0 text-[10px] leading-4"
-                >
-                  {m.confidence}
-                </Badge>
-              </div>
-            ) : null}
-          </div>
-        ))}
+        {items.slice(0, MAX_KPI_CARDS).map((m, idx) => {
+          // W-SBCOLOR · a tone-coded card uses the semantic colour; a card with
+          // no tone keeps the signature single-use gold treatment (unchanged
+          // chat behaviour). Confidence is only shown on the legacy gold card.
+          const toned = !!m.tone;
+          return (
+            <div
+              key={`${m.label}-${idx}`}
+              className={cn(
+                "relative flex flex-col gap-1 rounded-brand-md border px-3 py-2.5",
+                toned
+                  ? magnitudeToneClasses(m.tone!)
+                  : "border-[hsl(var(--accent-gold)/0.35)] bg-[hsl(var(--accent-gold)/0.08)]"
+              )}
+              // Single-use gold hairline at the top edge — only on the
+              // untoned (signature) card, per the "one gold stroke per view" rule.
+              style={
+                toned
+                  ? undefined
+                  : { boxShadow: "inset 0 1px 0 0 hsl(var(--accent-gold) / 0.6)" }
+              }
+            >
+              <Metric size="sm" className="text-foreground">
+                {m.value}
+              </Metric>
+              <Caption className="text-foreground/80">{m.label}</Caption>
+              {!toned && m.confidence ? (
+                <div className="mt-0.5">
+                  <Badge
+                    variant={confidenceVariant(m.confidence)}
+                    className="px-1.5 py-0 text-[10px] leading-4"
+                  >
+                    {m.confidence}
+                  </Badge>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

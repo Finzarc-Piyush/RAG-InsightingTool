@@ -1644,6 +1644,10 @@ export const likelyDriverSchema = z
     basis: z.enum(["data", "domain", "general"]),
     confidence: z.enum(["low", "medium", "high"]),
     testable: z.boolean().optional(),
+    // W-SBGRID · stable per-card id so the Executive-Summary free-form grid
+    // keeps a card's saved position when siblings are added/deleted. Optional
+    // + back-compat — the synthesizer never sets it; the dashboard editor does.
+    id: z.string().max(120).optional(),
   })
   .transform((d) => {
     const cap = LIKELY_DRIVER_MAX_CONFIDENCE[d.basis];
@@ -2748,6 +2752,8 @@ export const dashboardAnswerEnvelopeSchema = z.object({
         headline: z.string().max(400),
         evidence: z.string().max(3000),
         magnitude: z.string().max(160).optional(),
+        // W-SBGRID · stable per-card id for the free-form summary grid.
+        id: z.string().max(120).optional(),
       })
     )
     .max(15)
@@ -2758,6 +2764,7 @@ export const dashboardAnswerEnvelopeSchema = z.object({
         statement: z.string().max(600),
         soWhat: z.string().max(800),
         confidence: z.enum(["low", "medium", "high"]).optional(),
+        id: z.string().max(120).optional(),
       })
     )
     .max(12)
@@ -2769,6 +2776,7 @@ export const dashboardAnswerEnvelopeSchema = z.object({
         rationale: z.string().max(800),
         expectedImpact: z.string().max(240).optional(),
         horizon: z.enum(["now", "this_quarter", "strategic"]).optional(),
+        id: z.string().max(120).optional(),
       })
     )
     .max(12)
@@ -2786,7 +2794,14 @@ export const dashboardAnswerEnvelopeSchema = z.object({
       z.object({
         label: z.string().max(200),
         value: z.string().max(160),
+        // Legacy: still accepted so old persisted dashboards validate, but the
+        // key-number card no longer surfaces it — `tone` replaces it (W-SBCOLOR).
         confidence: z.enum(["low", "medium", "high"]).optional(),
+        // W-SBCOLOR · user-chosen card colour. The enum value IS the colour:
+        // green = best/positive, red = worst/negative, amber = neutral (default).
+        tone: z.enum(["green", "amber", "red"]).optional(),
+        // W-SBGRID · stable per-card id for the free-form summary grid.
+        id: z.string().max(120).optional(),
       })
     )
     .optional(),
@@ -2860,6 +2875,8 @@ export const attentionAreaSchema = z.object({
   benchmark: z.number(),
   variancePct: z.number(),
   status: z.enum(["red", "amber"]),
+  // W-SBGRID · stable per-card id for the free-form summary grid (optional).
+  id: z.string().max(120).optional(),
 });
 export type AttentionAreaSpec = z.infer<typeof attentionAreaSchema>;
 
@@ -2905,6 +2922,13 @@ export const dashboardSchema = z.object({
     .optional(),
   /** MW4 · management-by-exception attention areas (mirrors DashboardSpec). */
   attentionAreas: z.array(attentionAreaSchema).max(12).optional(),
+  /**
+   * W-SBGRID · react-grid-layout positions (keyed by breakpoint) for the
+   * Executive-Summary band's free-form card canvas. Dashboard-level — the band
+   * data (answerEnvelope + attentionAreas) is dashboard-level, not per-sheet.
+   * Optional + back-compat: a dashboard without it falls back to auto-placement.
+   */
+  summaryGridLayout: dashboardGridLayoutsSchema.optional(),
   /**
    * Wave DR15 · Session this dashboard was created from. Optional —
    * existing Cosmos documents (and dashboards created via the bare
@@ -3153,6 +3177,9 @@ export const dashboardPatchSchema = z.object({
   // (magnitudes / likelyDrivers) on the round-trip. See lesson L-021.
   answerEnvelope: dashboardAnswerEnvelopeSchema.optional(),
   attentionAreas: z.array(attentionAreaSchema).max(12).optional(),
+  // W-SBGRID · the Executive-Summary free-form card layout. Whole-field replace,
+  // debounced from the band's react-grid-layout on drag/resize.
+  summaryGridLayout: dashboardGridLayoutsSchema.optional(),
 });
 
 export type DashboardPatch = z.infer<typeof dashboardPatchSchema>;
