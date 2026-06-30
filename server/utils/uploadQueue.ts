@@ -922,6 +922,9 @@ class UploadQueue {
               const seededCtx = await seedSessionAnalysisContextLLM({
                 datasetProfile,
                 dataSummary: summary,
+                // D2 · pass the same domain context used for profiling so the
+                // seeded follow-ups use real brand/channel/KPI vocabulary.
+                domainContext: datasetProfileDomainContext,
               });
               // AD1 · auto-detect dimension rollup rows (a single value in a
               // dimension column that aggregates the rest — e.g. FEMALE SHOWER

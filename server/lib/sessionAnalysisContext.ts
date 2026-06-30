@@ -66,7 +66,7 @@ Nested field types (all required — do not deviate):
 const SEED_SYSTEM = `You output only a JSON object matching the given schema (version 1).
 Build the initial session analysis context from the provided dataset profile and numeric summary.
 Populate dataset.* from the profile and column list. Leave userIntent mostly empty unless the input includes user notes.
-Add suggestedFollowUps (short analytical questions) inferred from the data — do not copy a fixed template; base them on actual columns and description. Do NOT suggest questions about identifier/key columns (listed in datasetProfile.idColumns — they are row keys, not analysis dimensions). For date columns, ask how a numeric metric changes over time rather than asking the date column itself to "trend". Each question MUST ask exactly ONE thing — NEVER use the word "or" to offer alternatives (BAD: "sales by cluster or state"); split any compound ask into separate single questions.
+Add suggestedFollowUps (short analytical questions) inferred from the data — do not copy a fixed template; base them on actual columns and description. Make them DECISION-RELEVANT, not flat "X by Y" descriptions a manager already knows: prefer COMPARISONS (which segment/brand/region/channel leads or trails on a key metric), MOVEMENTS (what changed and where), and OUTLIERS — the questions whose answer would change a decision. When DOMAIN_CONTEXT is provided and the columns borrow its vocabulary (brands, channels like GT/MT/Q-com, regions, KPIs), phrase the questions in those business terms. Do NOT suggest questions about identifier/key columns (listed in datasetProfile.idColumns — they are row keys, not analysis dimensions). For date columns, ask how a numeric metric changes over time rather than asking the date column itself to "trend". Each question MUST ask exactly ONE thing — NEVER use the word "or" to offer alternatives (BAD: "sales by cluster or state"); split any compound ask into separate single questions.
 Set lastUpdated.reason to "seed" and lastUpdated.at to the current ISO-8601 timestamp.
 
 Required top-level shape (all fields mandatory, no extras at the top level):
@@ -129,10 +129,15 @@ function compactSummaryForPrompt(summary: DataSummary) {
 export async function seedSessionAnalysisContextLLM(params: {
   datasetProfile: DatasetProfile;
   dataSummary: DataSummary;
+  /** D2 · composed FMCG/Marico domain text so the seeded suggestedFollowUps
+   *  use real brand/channel/KPI vocabulary. Optional; capped to stay small. */
+  domainContext?: string;
 }): Promise<SessionAnalysisContext> {
+  const dc = params.domainContext?.trim();
   const user = JSON.stringify({
     datasetProfile: params.datasetProfile,
     dataSummary: compactSummaryForPrompt(params.dataSummary),
+    ...(dc ? { domainContext: dc.slice(0, 2000) } : {}),
   });
   const out = await completeJson(SEED_SYSTEM, user, sessionAnalysisContextSchema, {
     turnId: "session_ctx_seed",
