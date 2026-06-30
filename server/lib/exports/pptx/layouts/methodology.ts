@@ -18,6 +18,7 @@ import {
   addCard,
   attachSpeakerNotes,
   bulletList,
+  charsPerLine,
   eyebrow,
   renderActionTitle,
 } from "../master.js";
@@ -92,12 +93,22 @@ export function renderMethodology(
 
   const caveats = (spec.slots.caveats ?? []).filter((c) => c.trim().length > 0);
   const hasCaveats = caveats.length > 0;
-  const paragraphs = splitParagraphs(spec.slots.body);
+
+  // The body can be up to 3500 chars; clamp it to what the column legibly holds
+  // (so fit:"shrink" never crushes it to an unreadable size) and preserve the
+  // full text in the speaker notes.
+  const bodyW = hasCaveats ? CONTENT_BOX.w * 0.62 : CONTENT_BOX.w;
+  const bodyLineH = (PPTX_TYPE.bodyTight / 72) * 1.15;
+  const bodyMaxLines = Math.max(1, Math.floor(colH / Math.max(bodyLineH, 0.01)));
+  const bodyBudget = Math.max(40, Math.floor(bodyMaxLines * charsPerLine(bodyW, PPTX_TYPE.bodyTight) * 0.92));
+  const rawBody = spec.slots.body.trim();
+  const bodyTruncated = rawBody.length > bodyBudget;
+  const bodyText = bodyTruncated ? `${rawBody.slice(0, bodyBudget - 1).trimEnd()}…` : rawBody;
+  const paragraphs = splitParagraphs(bodyText);
 
   if (hasCaveats) {
     // Two columns: body ~62% left, caveats card ~34% right, ~4% gutter.
     const gutter = CONTENT_BOX.w * 0.04;
-    const bodyW = CONTENT_BOX.w * 0.62;
     const cardW = CONTENT_BOX.w - bodyW - gutter;
     const cardX = CONTENT_BOX.x + bodyW + gutter;
 
@@ -138,10 +149,11 @@ export function renderMethodology(
     renderBody(slide, paragraphs, {
       x: CONTENT_BOX.x,
       y: bodyTop,
-      w: CONTENT_BOX.w,
+      w: bodyW,
       h: colH,
     });
   }
 
-  attachSpeakerNotes(slide, spec.speakerNotes);
+  const notes = bodyTruncated ? `${spec.speakerNotes}\n\nFull methodology:\n${rawBody}` : spec.speakerNotes;
+  attachSpeakerNotes(slide, notes);
 }

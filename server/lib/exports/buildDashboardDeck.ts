@@ -49,6 +49,7 @@ import type {
 import { renderDeckPlanToPptxBuffer } from "./pptx/render.js";
 import { renderDeckPlanToPdfBuffer } from "./pdf/render.js";
 import { errorMessage } from "../../utils/errorMessage.js";
+import { splitChartInsightLanes } from "../../shared/chartInsightLanes.js";
 
 export interface BuildDeckOptions extends DeckPlannerOptions {
   /** ISO date (yyyy-mm-dd) — defaults to today. */
@@ -243,8 +244,7 @@ function chartInsightSlide(
   chart: ChartSpec,
   sheetIdx: number,
   chartIdx: number,
-  ordinal: number,
-  total: number
+  ordinal: number
 ): SlideSpec {
   const spec = chart as ChartSpec & { keyInsight?: string };
   const title = (spec.title ?? "").trim() || `Chart ${ordinal}`;
@@ -253,9 +253,17 @@ function chartInsightSlide(
     ki.length >= 10
       ? clampMax(ki, 400)
       : clampMax(`Chart "${title}" — see the underlying data for detail.`, 400);
+  // Prefer the chart's own insight HEADLINE as the action title (an actual
+  // takeaway), falling back to the chart title. No mechanical "chart N of M"
+  // suffix — that reads as filler, not a finding. Guard the schema's min-4-char
+  // floor so a pathologically short title can't fail validation (and sink the
+  // whole deck to the legacy stub).
+  const headline = splitChartInsightLanes(ki).headline.trim();
+  const candidate = headline.length >= 12 ? headline : title;
+  const actionTitle = candidate.trim().length >= 4 ? candidate : `Chart ${ordinal}: ${candidate}`.trim();
   return {
     layout: LAYOUT_KIND.ChartWithInsight,
-    actionTitle: clampMax(`${title} — chart ${ordinal} of ${total} in this deck`, 280),
+    actionTitle: clampMax(actionTitle, 280),
     speakerNotes: clampMax(`Presenter notes for "${title}" — review the chart before presenting.`, 1500),
     slots: { chartId: chartIdFor(sheetIdx, chartIdx), insight },
   };
@@ -322,9 +330,12 @@ export function buildFallbackDeckPlan(
     });
   }
 
+  // Only LABELLED magnitudes become KPI tiles — an unlabelled tile renders as a
+  // bare number with no context (the "470.92 / 257.02 / 677.86" look the user hit).
   const kpis = (env?.magnitudes ?? [])
+    .filter((m) => (m.label ?? "").trim().length > 0)
     .slice(0, 5)
-    .map((m) => ({ label: clampMax(m.label, 120), value: clampMax(String(m.value), 80) }));
+    .map((m) => ({ label: clampMax(m.label.trim(), 120), value: clampMax(String(m.value), 80) }));
   if (kpis.length >= 2) {
     front.push({
       layout: LAYOUT_KIND.KpiRow,
@@ -356,13 +367,20 @@ export function buildFallbackDeckPlan(
     env?.methodology && env.methodology.trim().length >= 20
       ? clampMax(env.methodology.trim(), 3500)
       : "Deterministic export — slides were rendered directly from the dashboard's chart inventory because the structured deck planner was unavailable. Each chart above is reproduced from its saved specification.";
+  // Provenance signal: this fallback runs ONLY when the narrative deck planner
+  // didn't deliver a usable plan, so always surface that here — otherwise a
+  // silently-degraded "chart dump" deck looks intentional. (Ops also see
+  // `buildDeck.plannerNull` in the logs.)
+  const provenanceCaveat =
+    "This deck was auto-composed from the dashboard's chart inventory; the narrative deck planner did not run for this export.";
+  const caveats = [provenanceCaveat, ...(env?.caveats?.slice(0, 9).map((c) => clampMax(c, 400)) ?? [])];
   const methodologySlide: SlideSpec = {
     layout: LAYOUT_KIND.Methodology,
     actionTitle: clampMax(`Methodology · captured ${generatedAt} from ${totalCharts} charts`, 280),
     speakerNotes: "Closing slide describing how this deck was produced.",
     slots: {
       body: methodologyBody,
-      caveats: env?.caveats?.slice(0, 10).map((c) => clampMax(c, 400)),
+      caveats,
     },
   };
 
@@ -375,13 +393,13 @@ export function buildFallbackDeckPlan(
   let appendix: SlideSpec | null = null;
   if (totalCharts <= chartBudget) {
     flatCharts.forEach((fc, i) =>
-      chartSlides.push(chartInsightSlide(fc.chart, fc.sheetIdx, fc.chartIdx, i + 1, totalCharts))
+      chartSlides.push(chartInsightSlide(fc.chart, fc.sheetIdx, fc.chartIdx, i + 1))
     );
   } else {
     const shown = Math.max(0, chartBudget - 1); // reserve one slot for the Appendix
     flatCharts
       .slice(0, shown)
-      .forEach((fc, i) => chartSlides.push(chartInsightSlide(fc.chart, fc.sheetIdx, fc.chartIdx, i + 1, totalCharts)));
+      .forEach((fc, i) => chartSlides.push(chartInsightSlide(fc.chart, fc.sheetIdx, fc.chartIdx, i + 1)));
     const overflow = flatCharts.slice(shown);
     const titles = overflow.map((fc) => (fc.chart.title ?? "untitled").trim() || "untitled").join("; ");
     appendix = {

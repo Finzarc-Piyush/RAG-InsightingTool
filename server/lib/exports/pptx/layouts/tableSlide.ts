@@ -16,7 +16,7 @@
  */
 import {
   CONTENT_BOX, MASTER_NAME, PPTX_BRAND, PPTX_FONT, PPTX_TYPE,
-  addCard, eyebrow, renderActionTitle, renderDataTable, attachSpeakerNotes,
+  addCard, eyebrow, estimateTextHeight, renderActionTitle, renderDataTable, attachSpeakerNotes,
 } from "../master.js";
 import type { PptxPres, PptxSlide, PptxRectShape } from "../types.js";
 import type { SlideSpec } from "../../../../shared/exportSchema.js";
@@ -66,9 +66,10 @@ export function renderTableSlide(
 
   let y = top;
 
-  // Optional one-line lead insight (the "so-what") under the title.
+  // Optional lead insight (the "so-what") under the title — sized to its text so
+  // a 2-line insight doesn't crush to an unreadable size or shove the table off.
   if (spec.slots.insight) {
-    const insightH = 0.5;
+    const insightH = Math.min(1.0, Math.max(0.4, estimateTextHeight(spec.slots.insight, CONTENT_BOX.w, PPTX_TYPE.lead)));
     slide.addText(spec.slots.insight, {
       x: CONTENT_BOX.x, y, w: CONTENT_BOX.w, h: insightH,
       fontFace: PPTX_FONT, fontSize: PPTX_TYPE.lead, color: PPTX_BRAND.foreground,

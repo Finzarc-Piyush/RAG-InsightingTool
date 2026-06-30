@@ -17,6 +17,7 @@ import {
   PPTX_TYPE,
   addCard,
   attachSpeakerNotes,
+  charsPerLine,
   chip,
   renderActionTitle,
 } from "../master.js";
@@ -77,8 +78,14 @@ export function renderExecSummary(
       { solid: true, fontSize: badgeFont, align: "center", bold: true }
     );
 
-    // Takeaway sentence — middle-aligned, shrinks to fit the row.
-    slide.addText(text, {
+    // Takeaway sentence — clamped to what the row holds so it can't spill onto
+    // the neighbouring card, then middle-aligned (clamp guarantees it fits).
+    const tLineH = (textFont / 72) * 1.02;
+    const tMaxLines = Math.max(1, Math.floor(rowH / Math.max(tLineH, 0.01)));
+    const tMaxChars = Math.max(8, tMaxLines * charsPerLine(textW - railPad, textFont));
+    const t = (text ?? "").trim();
+    const shownText = t.length > tMaxChars ? `${t.slice(0, tMaxChars - 1).trimEnd()}…` : t;
+    slide.addText(shownText, {
       x: textX + railPad, y: rowY, w: textW - railPad, h: rowH,
       fontFace: PPTX_FONT, fontSize: textFont,
       bold: lead,

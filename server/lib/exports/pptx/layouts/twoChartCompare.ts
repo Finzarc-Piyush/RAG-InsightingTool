@@ -19,14 +19,19 @@ import {
   PPTX_BRAND,
   PPTX_FONT,
   PPTX_TYPE,
-  addCard,
   attachSpeakerNotes,
   eyebrow,
   renderActionTitle,
 } from "../master.js";
 import type { PptxPres, PptxSlide, PptxRectShape } from "../types.js";
 import type { SlideSpec } from "../../../../shared/exportSchema.js";
-import { placeChartOrPlaceholder, type ChartLayoutDeps } from "./chartWithInsight.js";
+import {
+  placeChartOrPlaceholder,
+  insightCalloutHeight,
+  renderInsightCallout,
+  type ChartLayoutDeps,
+} from "./chartWithInsight.js";
+import { splitChartInsightLanes } from "../../../../shared/chartInsightLanes.js";
 
 /** Draw the per-pane eyebrow (chart title) + framed chart card for one side. */
 function renderPane(
@@ -61,17 +66,21 @@ export function renderTwoChartCompare(
   const top = renderActionTitle(slide, spec.actionTitle);
   const contentBottom = CONTENT_BOX.y + CONTENT_BOX.h; // 6.98 — keep all content above ~6.92
 
-  // Bottom-up budget: reserve the callout + (optional) source first, then give
-  // the rest to the two panes so nothing ever collides with the footer.
+  // Bottom-up budget: size the comparison callout to its content (capped so the
+  // two panes always keep the majority of the band), then give the rest to the
+  // panes so nothing collides with the footer or spills onto a chart.
   const gutter = 0.3;
   const eyebrowH = 0.26;
   const gap = 0.16;
-  const insightH = 0.84;
   const sourceH = spec.slots.source ? 0.28 : 0;
 
-  // Panes fill everything between the action title and the callout block.
   const panesTop = top + 0.02;
-  const panesH = contentBottom - panesTop - gap - insightH - (sourceH ? gap * 0.5 + sourceH : 0);
+  const band = contentBottom - panesTop;
+  const lanes = splitChartInsightLanes(spec.slots.insight);
+  const maxInsightH = band * 0.34; // two panes need the lion's share of the band
+  const insightH = insightCalloutHeight(lanes, CONTENT_BOX.w, maxInsightH);
+
+  const panesH = band - gap - insightH - (sourceH ? gap * 0.5 + sourceH : 0);
   const paneW = (CONTENT_BOX.w - gutter) / 2;
 
   const leftBox: PptxRectShape = { x: CONTENT_BOX.x, y: panesTop, w: paneW, h: panesH };
@@ -82,13 +91,8 @@ export function renderTwoChartCompare(
 
   // Comparison insight — gold-railed soft callout spanning both panes.
   const insightY = panesTop + panesH + gap;
-  addCard(slide, { x: CONTENT_BOX.x, y: insightY, w: CONTENT_BOX.w, h: insightH }, {
-    fill: PPTX_BRAND.surfaceMuted, accent: PPTX_BRAND.accent, shadow: false,
-  });
-  slide.addText(spec.slots.insight, {
-    x: CONTENT_BOX.x + 0.32, y: insightY, w: CONTENT_BOX.w - 0.56, h: insightH,
-    fontFace: PPTX_FONT, fontSize: PPTX_TYPE.lead, color: PPTX_BRAND.foreground,
-    align: "left", valign: "middle", lineSpacingMultiple: 1.05, fit: "shrink",
+  const overflow = renderInsightCallout(slide, lanes, {
+    x: CONTENT_BOX.x, y: insightY, w: CONTENT_BOX.w, h: insightH,
   });
 
   if (spec.slots.source) {
@@ -99,5 +103,6 @@ export function renderTwoChartCompare(
     });
   }
 
-  attachSpeakerNotes(slide, spec.speakerNotes);
+  const notes = overflow ? `${spec.speakerNotes}\n\n${overflow}` : spec.speakerNotes;
+  attachSpeakerNotes(slide, notes);
 }

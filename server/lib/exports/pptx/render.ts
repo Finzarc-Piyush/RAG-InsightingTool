@@ -45,6 +45,8 @@ import { chartSpecToAddChart } from "./chartSpecToAddChart.js";
 import { LAYOUT_KIND, type SlideDeckPlan } from "../../../shared/exportSchema.js";
 import type { Dashboard, DashboardSheet } from "../../../shared/schema.js";
 import type { PptxPres } from "./types.js";
+import { agentLog } from "../../agents/runtime/agentLogger.js";
+import { errorMessage } from "../../../utils/errorMessage.js";
 
 interface RenderDeckOptions {
   /** Default "Marico Insighting Tool — internal use". */
@@ -128,12 +130,24 @@ export async function renderDeckPlanToPptxBuffer(
     slide: { addChart: (...args: unknown[]) => unknown; addImage: (opts: Record<string, unknown>) => unknown },
     box: { x: number; y: number; w: number; h: number }
   ): boolean => {
-    if (!preferSvg && chartSpecToAddChart(spec, slide, box)) return true;
-    const svg = renderChartSpecToSvg(spec, { width: Math.round(box.w * 200), height: Math.round(box.h * 200) });
-    if (!svg) return false;
-    const base64 = Buffer.from(svg, "utf8").toString("base64");
-    slide.addImage({ x: box.x, y: box.y, w: box.w, h: box.h, data: `data:image/svg+xml;base64,${base64}` });
-    return true;
+    try {
+      if (!preferSvg && chartSpecToAddChart(spec, slide, box)) return true;
+      const svg = renderChartSpecToSvg(spec, { width: Math.round(box.w * 200), height: Math.round(box.h * 200) });
+      if (!svg) return false;
+      const base64 = Buffer.from(svg, "utf8").toString("base64");
+      slide.addImage({ x: box.x, y: box.y, w: box.w, h: box.h, data: `data:image/svg+xml;base64,${base64}` });
+      return true;
+    } catch (err) {
+      // A single bad chart must never corrupt the file or 500 the export — return
+      // false so the caller draws a visible placeholder, and log so this stops
+      // being invisible to ops.
+      agentLog("pptxRender.chartFailed", {
+        chartType: String((spec as { type?: unknown }).type ?? ""),
+        title: String((spec as { title?: unknown }).title ?? "").slice(0, 80),
+        error: errorMessage(err).slice(0, 200),
+      });
+      return false;
+    }
   };
 
   const chartLayoutDeps = {
@@ -151,50 +165,59 @@ export async function renderDeckPlanToPptxBuffer(
   };
 
   for (const slide of plan.slides) {
-    switch (slide.layout) {
-      case LAYOUT_KIND.TitleSlide:
-        renderTitleSlide(pres, slide, {
-          deckTitle: plan.title,
-          deckSubtitle: plan.subtitle,
-          generatedAt: plan.generatedAt,
-          confidentiality: plan.confidentiality ?? "Internal",
-          preparedFor: plan.preparedFor,
-        });
-        break;
-      case LAYOUT_KIND.ExecSummary:
-        renderExecSummary(pres, slide);
-        break;
-      case LAYOUT_KIND.KpiRow:
-        renderKpiRow(pres, slide);
-        break;
-      case LAYOUT_KIND.ChartWithInsight:
-        renderChartWithInsight(pres, slide, chartLayoutDeps);
-        break;
-      case LAYOUT_KIND.TwoChartCompare:
-        renderTwoChartCompare(pres, slide, chartLayoutDeps);
-        break;
-      case LAYOUT_KIND.TableSlide:
-        renderTableSlide(pres, slide, tableLayoutDeps);
-        break;
-      case LAYOUT_KIND.ImplicationsByHorizon:
-        renderImplicationsByHorizon(pres, slide);
-        break;
-      case LAYOUT_KIND.Recommendations:
-        renderRecommendations(pres, slide);
-        break;
-      case LAYOUT_KIND.Methodology:
-        renderMethodology(pres, slide);
-        break;
-      case LAYOUT_KIND.Appendix:
-        renderAppendix(pres, slide, { ...chartLayoutDeps, ...tableLayoutDeps });
-        break;
-      default: {
-        // Compile-time exhaustiveness check — adding an 11th LayoutKind
-        // to W-EXP-1 forces a case here.
-        const _exhaustive: never = slide;
-        void _exhaustive;
-        break;
+    // Per-slide isolation: one malformed layout can never abort the whole deck
+    // (which would 500 the export) or leave a half-written slide. Skip + log.
+    try {
+      switch (slide.layout) {
+        case LAYOUT_KIND.TitleSlide:
+          renderTitleSlide(pres, slide, {
+            deckTitle: plan.title,
+            deckSubtitle: plan.subtitle,
+            generatedAt: plan.generatedAt,
+            confidentiality: plan.confidentiality ?? "Internal",
+            preparedFor: plan.preparedFor,
+          });
+          break;
+        case LAYOUT_KIND.ExecSummary:
+          renderExecSummary(pres, slide);
+          break;
+        case LAYOUT_KIND.KpiRow:
+          renderKpiRow(pres, slide);
+          break;
+        case LAYOUT_KIND.ChartWithInsight:
+          renderChartWithInsight(pres, slide, chartLayoutDeps);
+          break;
+        case LAYOUT_KIND.TwoChartCompare:
+          renderTwoChartCompare(pres, slide, chartLayoutDeps);
+          break;
+        case LAYOUT_KIND.TableSlide:
+          renderTableSlide(pres, slide, tableLayoutDeps);
+          break;
+        case LAYOUT_KIND.ImplicationsByHorizon:
+          renderImplicationsByHorizon(pres, slide);
+          break;
+        case LAYOUT_KIND.Recommendations:
+          renderRecommendations(pres, slide);
+          break;
+        case LAYOUT_KIND.Methodology:
+          renderMethodology(pres, slide);
+          break;
+        case LAYOUT_KIND.Appendix:
+          renderAppendix(pres, slide, { ...chartLayoutDeps, ...tableLayoutDeps });
+          break;
+        default: {
+          // Compile-time exhaustiveness check — adding an 11th LayoutKind
+          // to W-EXP-1 forces a case here.
+          const _exhaustive: never = slide;
+          void _exhaustive;
+          break;
+        }
       }
+    } catch (err) {
+      agentLog("pptxRender.slideFailed", {
+        layout: String((slide as { layout?: unknown }).layout ?? ""),
+        error: errorMessage(err).slice(0, 200),
+      });
     }
   }
 

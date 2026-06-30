@@ -20,6 +20,7 @@ import {
   PPTX_TYPE,
   addCard,
   attachSpeakerNotes,
+  charsPerLine,
   chip,
   renderActionTitle,
   renderDataTable,
@@ -111,8 +112,15 @@ export function renderAppendix(
       renderDataTable(slide, box, block.table, { maxRows, fontSize: PPTX_TYPE.table });
     } else {
       addCard(slide, box, { fill: PPTX_BRAND.surfaceMuted, shadow: false, accent: PPTX_BRAND.accent });
-      slide.addText(block.text, {
-        x: box.x + 0.3, y: box.y + 0.12, w: box.w - 0.54, h: box.h - 0.24,
+      // Clamp the body to what the block holds so it stays legible (no extreme
+      // shrink) and never overruns the card.
+      const bw = box.w - 0.54;
+      const bLineH = (PPTX_TYPE.bodyTight / 72) * 1.06;
+      const bMaxLines = Math.max(1, Math.floor((box.h - 0.24) / Math.max(bLineH, 0.01)));
+      const bMaxChars = Math.max(40, bMaxLines * charsPerLine(bw, PPTX_TYPE.bodyTight));
+      const bShown = block.text.length > bMaxChars ? `${block.text.slice(0, bMaxChars - 1).trimEnd()}…` : block.text;
+      slide.addText(bShown, {
+        x: box.x + 0.3, y: box.y + 0.12, w: bw, h: box.h - 0.24,
         fontFace: PPTX_FONT, fontSize: PPTX_TYPE.bodyTight, color: PPTX_BRAND.inkSoft,
         align: "left", valign: "top", lineSpacingMultiple: 1.06, fit: "shrink",
       });

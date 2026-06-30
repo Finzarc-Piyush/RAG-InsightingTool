@@ -21,6 +21,14 @@ import type { ChartSpec } from "../../../shared/schema.js";
 import { pivotSeries } from "../chartSpecSeries.js";
 import { scatterSeries } from "../chartSpecSeries.js";
 import { inferColumnFormat } from "../numberFormatExport.js";
+import {
+  finiteOrZero,
+  sanitizeValues,
+  maxFiniteAbs,
+  safeLabel,
+  safeSeriesName,
+  isDegenerateNative,
+} from "./chartValueSanitize.js";
 
 interface AddChartTarget {
   addChart: (chartType: unknown, data: unknown, options: Partial<PptxRectShape> & Record<string, unknown>) => unknown;
@@ -31,7 +39,7 @@ type NativeSeries = { name: string; labels: string[]; values: number[] };
 /** Excel number-format code for data labels / value axis, from column + magnitude. */
 function formatCodeFor(values: number[], columnName: string | undefined): string {
   const kind = inferColumnFormat(columnName);
-  const maxAbs = values.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  const maxAbs = maxFiniteAbs(values);
   if (kind === "percent") return maxAbs <= 1 ? "0.0%" : '#,##0.0"%"';
   if (maxAbs >= 1000) return '[>=1000000]#,##0.0,,"M";[>=1000]#,##0.0,"K";#,##0';
   return "#,##0.##";
@@ -92,20 +100,30 @@ export function chartSpecToAddChart(
     case "line":
     case "area": {
       const pivot = pivotSeries(data, spec.x, yKey, { seriesColumn, seriesKeys, seriesName: spec.yLabel ?? yKey });
+      const categories = pivot.categories.map(safeLabel);
       const series: NativeSeries[] = pivot.series.map((s) => ({
-        name: s.name,
-        labels: pivot.categories,
-        values: s.values.map((v) => v ?? 0),
+        name: safeSeriesName(s.name, spec.yLabel ?? yKey),
+        labels: categories,
+        values: sanitizeValues(s.values),
       }));
+      // Empty / all-zero charts serialize to corrupt OOXML — bail to the
+      // caller's placeholder instead of emitting a broken chart part.
+      if (isDegenerateNative({ categories, series })) return false;
+
       const multi = series.length > 1;
       const allVals = series.flatMap((s) => s.values);
       const valFmt = formatCodeFor(allVals, spec.yLabel ?? yKey);
-      const totalMarks = pivot.categories.length * series.length;
+      const totalMarks = categories.length * series.length;
       const showLabels = (spec as ChartSpec & { dataLabels?: boolean }).dataLabels !== false && totalMarks <= 26;
       const stacked = (spec as ChartSpec & { barLayout?: "grouped" | "stacked" }).barLayout === "stacked";
       const base = commonOpts(bounds, { multi, valFmt });
 
-      if (spec.type === "bar") {
+      // A single-point line/area is a meaningless lone dot (the deck's "by Month"
+      // single-period chart) — render it as a bar (a clean value callout) instead,
+      // reusing the tested bar branch. Honors the in-app single-point suppression
+      // on the export path.
+      const effectiveBar = spec.type === "bar" || categories.length <= 1;
+      if (effectiveBar) {
         target.addChart(PPTX_CHART_TYPE.bar, series, {
           ...base,
           barDir: "col",
@@ -130,12 +148,10 @@ export function chartSpecToAddChart(
     }
 
     case "pie": {
-      const labels = data.map((r) => String(r[spec.x] ?? ""));
-      const values = data.map((r) => {
-        const v = r[yKey];
-        return typeof v === "number" && Number.isFinite(v) ? v : Number(v) || 0;
-      });
-      target.addChart(PPTX_CHART_TYPE.doughnut, [{ name: spec.yLabel ?? yKey, labels, values }], {
+      const labels = data.map((r) => safeLabel(r[spec.x]));
+      const values = data.map((r) => finiteOrZero(r[yKey]));
+      if (values.every((v) => v === 0)) return false;
+      target.addChart(PPTX_CHART_TYPE.doughnut, [{ name: safeSeriesName(spec.yLabel ?? yKey), labels, values }], {
         ...bounds,
         chartColors: PPTX_BRAND.categorical,
         showTitle: false,
@@ -158,13 +174,14 @@ export function chartSpecToAddChart(
 
     case "scatter": {
       const pts = scatterSeries(data, spec.x, spec.y, spec.yLabel ?? spec.y).values;
-      const xs = pts.map((p) => p[0]);
-      const ys = pts.map((p) => p[1]);
+      if (pts.length < 1) return false;
+      const xs = pts.map((p) => finiteOrZero(p[0]));
+      const ys = pts.map((p) => finiteOrZero(p[1]));
       target.addChart(
         PPTX_CHART_TYPE.scatter,
         [
           { name: "X", values: xs },
-          { name: spec.yLabel ?? spec.y, values: ys },
+          { name: safeSeriesName(spec.yLabel ?? spec.y), values: ys },
         ],
         {
           ...commonOpts(bounds, { multi: false, valFmt: formatCodeFor(ys, spec.yLabel ?? spec.y) }),

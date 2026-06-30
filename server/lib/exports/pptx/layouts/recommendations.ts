@@ -21,7 +21,9 @@ import {
   PPTX_TYPE,
   addCard,
   attachSpeakerNotes,
+  charsPerLine,
   chip,
+  estimateLineCount,
   renderActionTitle,
   tint,
 } from "../master.js";
@@ -30,6 +32,14 @@ import type { SlideSpec } from "../../../../shared/exportSchema.js";
 
 type Horizon = "now" | "this_quarter" | "strategic";
 type Confidence = "low" | "medium" | "high";
+
+/** Truncate `text` to at most `max` chars with an ellipsis; report if it cut. */
+function clampToChars(text: string, max: number): { text: string; truncated: boolean } {
+  const t = (text ?? "").trim();
+  if (max <= 0) return { text: "", truncated: t.length > 0 };
+  if (t.length <= max) return { text: t, truncated: false };
+  return { text: `${t.slice(0, Math.max(1, max - 1)).trimEnd()}…`, truncated: true };
+}
 
 /** Filled-dot count for the three-dot confidence meter. */
 const CONFIDENCE_FILLED: Record<Confidence, number> = { low: 1, medium: 2, high: 3 };
@@ -98,9 +108,29 @@ export function renderRecommendations(
   const rightX = CONTENT_BOX.x + CONTENT_BOX.w - rightW - padX;
   const textW = rightX - textX - 0.16;
 
+  // Each row holds action (bold) + rationale in a FIXED-height box. The rationale
+  // can be up to 800 chars — far more than a dense 0.46in row holds — so clamp
+  // both to a per-row char budget (and TOP-align) instead of letting shrink-to-fit
+  // spill text over the row. The full untruncated text is preserved in notes.
+  const overflowNotes: string[] = [];
+  const innerH = rowH - 0.12;
+  const aLineH = (actionFs / 72) * 1.02;
+  const rLineH = (rationaleFs / 72) * 1.02;
+
   items.forEach((item, i) => {
     const y = top + i * (rowH + rowGap);
     const meta = horizonMeta(item.horizon as Horizon);
+
+    // Per-row char budgets: action gets ≤2 lines, rationale gets the remainder.
+    const aMaxLines = Math.min(2, estimateLineCount(item.action, textW, actionFs));
+    const aClamp = clampToChars(item.action, aMaxLines * charsPerLine(textW, actionFs));
+    const aHeight = aMaxLines * aLineH + 2 / 72; // + paraSpaceAfter
+    const rRemaining = Math.max(rLineH, innerH - aHeight);
+    const rLines = Math.max(1, Math.floor(rRemaining / rLineH));
+    const rClamp = clampToChars(item.rationale, rLines * charsPerLine(textW, rationaleFs));
+    if (aClamp.truncated || rClamp.truncated) {
+      overflowNotes.push(`${i + 1}. ${(item.action ?? "").trim()} — ${(item.rationale ?? "").trim()}`);
+    }
 
     // Card row — white, hairline border, no shadow (stacked rows want calm).
     addCard(slide, { x: CONTENT_BOX.x, y, w: CONTENT_BOX.w, h: rowH }, {
@@ -120,11 +150,12 @@ export function renderRecommendations(
       { solid: true, align: "center", bold: true, fontSize: dense ? 11 : 13 }
     );
 
-    // Action (bold) + rationale (ink-soft) as two runs in one shrinking box.
+    // Action (bold) + rationale (ink-soft) as two runs, clamped to fit + TOP-
+    // aligned so neither spills over the row.
     slide.addText(
       [
         {
-          text: item.action,
+          text: aClamp.text,
           options: {
             bold: true,
             fontSize: actionFs,
@@ -134,7 +165,7 @@ export function renderRecommendations(
           },
         },
         {
-          text: item.rationale,
+          text: rClamp.text,
           options: {
             fontSize: rationaleFs,
             color: PPTX_BRAND.inkSoft,
@@ -148,7 +179,7 @@ export function renderRecommendations(
         w: textW,
         h: rowH - 0.12,
         fontFace: PPTX_FONT,
-        valign: "middle",
+        valign: "top",
         lineSpacingMultiple: 1.02,
         fit: "shrink",
       }
@@ -193,5 +224,8 @@ export function renderRecommendations(
     }
   });
 
-  attachSpeakerNotes(slide, spec.speakerNotes);
+  const notes = overflowNotes.length
+    ? `${spec.speakerNotes}\n\nFull recommendations:\n${overflowNotes.join("\n")}`
+    : spec.speakerNotes;
+  attachSpeakerNotes(slide, notes);
 }

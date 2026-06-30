@@ -69,7 +69,11 @@ export function renderKpiRow(
   const innerW = tileW - railInset - pad;
 
   const deltaChipH = 0.36;
-  const labelH = 0.34;
+  // When NO tile carries a label, drop the eyebrow band entirely so the value
+  // centres in the tile instead of floating below an empty strip (the cause of
+  // the "bare unlabeled numbers" look). Labels themselves are populated upstream.
+  const hasAnyLabel = kpis.some((k) => (k.label ?? "").trim().length > 0);
+  const labelH = hasAnyLabel ? 0.34 : 0;
   const valueH = Math.max(0.9, tileH - labelH - deltaChipH - pad * 2 - 0.18);
 
   kpis.forEach((kpi, i) => {
@@ -81,13 +85,15 @@ export function renderKpiRow(
       { fill: PPTX_BRAND.background, shadow: true, accent: confidenceRail(kpi.confidence) }
     );
 
-    // Eyebrow label — muted, top of the card.
-    eyebrow(
-      slide,
-      { x: innerX(x), y: tileY + pad, w: innerW, h: labelH },
-      kpi.label,
-      { color: PPTX_BRAND.muted, align: "center" }
-    );
+    // Eyebrow label — muted, top of the card (only when this tile has one).
+    if (labelH > 0 && (kpi.label ?? "").trim()) {
+      eyebrow(
+        slide,
+        { x: innerX(x), y: tileY + pad, w: innerW, h: labelH },
+        kpi.label,
+        { color: PPTX_BRAND.muted, align: "center" }
+      );
+    }
 
     // Big value — centred, bold, shrink-to-fit, single line (never wraps).
     slide.addText(kpi.value, {
