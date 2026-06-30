@@ -49,11 +49,42 @@ export {
   type PriorInvestigationItem,
 } from "../../../shared/schema.js";
 
-const MAX_PRIOR = 5;
+// A1 · 5 → 8. Carrying a couple more turns of context is what lets the agent
+// "build up" across a working session (the user's core complaint) without
+// blowing the prompt budget — each digest is small and number-dense.
+const MAX_PRIOR = 8;
 const MAX_HYPOTHESIS_TEXT = 200;
 const MAX_QUESTION_TEXT = 280;
 const MAX_HEADLINE_FINDING = 280;
 const PER_BUCKET_MAX = 5;
+const MAX_KEY_NUMBERS = 3;
+const MAX_KEY_NUMBER_LABEL = 200;
+const MAX_KEY_NUMBER_VALUE = 120;
+
+/** Loose shape of an answer-envelope magnitude (label + value). */
+export interface DigestMagnitude {
+  label?: string;
+  value?: string;
+}
+
+/**
+ * Distil the answer envelope's magnitudes into the 2-3 most useful labelled
+ * numbers to carry forward. Pure + order-preserving; drops entries missing a
+ * label or value so the recall block never renders a dangling "= ".
+ */
+function buildKeyNumbers(
+  magnitudes: ReadonlyArray<DigestMagnitude> | undefined
+): { label: string; value: string }[] {
+  if (!magnitudes?.length) return [];
+  const out: { label: string; value: string }[] = [];
+  for (const m of magnitudes) {
+    const label = clip(m?.label, MAX_KEY_NUMBER_LABEL);
+    const value = clip(m?.value, MAX_KEY_NUMBER_VALUE);
+    if (label && value) out.push({ label, value });
+    if (out.length >= MAX_KEY_NUMBERS) break;
+  }
+  return out;
+}
 
 export type PriorInvestigation = NonNullable<
   NonNullable<SessionAnalysisContext["sessionKnowledge"]>["priorInvestigations"]
@@ -74,10 +105,15 @@ function clip(s: string | undefined, max: number): string {
 export function buildPriorInvestigationDigest(
   question: string,
   summary: InvestigationSummary | undefined,
-  at: string = new Date().toISOString()
+  at: string = new Date().toISOString(),
+  // A1 · `at` stays 3rd-positional for backward compatibility (existing
+  // callers pass a timestamp here); magnitudes is appended as the 4th arg.
+  magnitudes?: ReadonlyArray<DigestMagnitude>
 ): PriorInvestigation | undefined {
   const q = clip(question, MAX_QUESTION_TEXT);
   if (!q) return undefined;
+
+  const keyNumbers = buildKeyNumbers(magnitudes);
 
   const hypsByStatus = (status: string): string[] =>
     (summary?.hypotheses ?? [])
@@ -107,7 +143,8 @@ export function buildPriorInvestigationDigest(
     confirmed.length === 0 &&
     refuted.length === 0 &&
     open.length === 0 &&
-    !headlineFinding
+    !headlineFinding &&
+    keyNumbers.length === 0
   ) {
     return undefined;
   }
@@ -119,6 +156,7 @@ export function buildPriorInvestigationDigest(
     hypothesesRefuted: refuted,
     hypothesesOpen: open,
     ...(headlineFinding ? { headlineFinding } : {}),
+    ...(keyNumbers.length > 0 ? { keyNumbers } : {}),
   };
 }
 
@@ -161,6 +199,15 @@ export function formatPriorInvestigationsForPlanner(
     lines.push(`  [${i + 1}] ${p.at} · Q: ${p.question}`);
     if (p.headlineFinding) {
       lines.push(`      Headline: ${p.headlineFinding}`);
+    }
+    // A1 · the actual numbers this turn established, so the agent can build on
+    // them (e.g. compare to "last month") instead of re-running the query.
+    if (p.keyNumbers && p.keyNumbers.length > 0) {
+      lines.push(
+        `      Numbers: ${p.keyNumbers
+          .map((k) => `${k.label} = ${k.value}`)
+          .join("; ")}`
+      );
     }
     if (p.hypothesesConfirmed.length > 0) {
       lines.push(`      Confirmed: ${p.hypothesesConfirmed.join("; ")}`);

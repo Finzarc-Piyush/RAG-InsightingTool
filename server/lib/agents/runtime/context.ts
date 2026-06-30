@@ -76,6 +76,7 @@ import { buildIdentityGraph, areStructurallyRelated } from "../../financeMetricA
 import { inferFiltersFromQuestion } from "../utils/inferFiltersFromQuestion.js";
 import { inferPeriodFilterFromQuestion } from "../utils/inferPeriodFilterFromQuestion.js";
 import { formatPriorInvestigationsForPlanner } from "./priorInvestigations.js";
+import { formatPriorTurnsForPrompt } from "./priorTurnState.js";
 import { classifyHierarchyIntent } from "./planArgRepairs.js";
 import { isTrustedRollupHierarchy } from "../../detectRollupHierarchies.js";
 
@@ -359,6 +360,13 @@ export function formatUserAndSessionJsonBlocks(
   const priorBlock = formatPriorInvestigationsForPlanner(ctx.sessionAnalysisContext);
   if (priorBlock) {
     s += `\n${priorBlock}`;
+  }
+  // A2 · detailed per-finding state from the last finalised turns. Previously
+  // built (Wave B9) but never wired into any prompt — connecting it here lets a
+  // follow-up reference a SPECIFIC earlier finding instead of starting cold.
+  const priorTurnsBlock = formatPriorTurnsForPrompt(ctx.chatHistory);
+  if (priorTurnsBlock) {
+    s += `\n${priorTurnsBlock}`;
   }
   if (ctx.sessionAnalysisContext) {
     s += `\nSessionAnalysisContextJSON:\n${JSON.stringify(ctx.sessionAnalysisContext).slice(0, opts.maxJsonChars)}`;

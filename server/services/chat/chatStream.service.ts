@@ -2010,6 +2010,13 @@ export async function processStreamChat(params: ProcessStreamChatParams): Promis
           investigationSummary: (result as {
             investigationSummary?: import("../../shared/schema.js").InvestigationSummary;
           }).investigationSummary,
+          // A1 · carry this turn's key figures into the prior-investigation
+          // digest so the next turn builds on the actual numbers.
+          keyMagnitudes: (
+            transformedResponse.answerEnvelope as
+              | { magnitudes?: Array<{ label?: string; value?: string }> }
+              | undefined
+          )?.magnitudes,
         });
         // W31 · emit the updated priorInvestigations array via SSE so the
         // client's W26 PriorInvestigationsBanner refreshes in place

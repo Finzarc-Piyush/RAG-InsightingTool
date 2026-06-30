@@ -109,6 +109,91 @@ function extractQuestion(m: Message): string {
   return (m.content ?? "").slice(0, 200);
 }
 
+// ---------------------------------------------------------------------------
+// A2 · multi-turn structured recall
+// ---------------------------------------------------------------------------
+// `formatPriorTurnHandleForPrompt` (above) only ever saw the SINGLE latest
+// finalised turn — and was never even wired into the live prompt. That left a
+// real "we're not building up on results" leak: a 3rd-turn follow-up could not
+// reference what turn 1 found. This block walks the last N finalised assistant
+// turns and renders each turn's DETAILED findings (id + significance + claim +
+// touched columns). It is deliberately COMPLEMENTARY to the SAC
+// `PRIOR_INVESTIGATIONS` block (which owns the rolling conclusions + key
+// numbers, A1) — here we expose the referenceable per-finding state SAC cannot
+// hold, so the agent can chain off a SPECIFIC prior finding rather than a
+// headline.
+
+const MAX_PRIOR_TURNS = 3;
+const MAX_FINDINGS_PER_TURN = 4;
+const SIGNIFICANCE_RANK: Record<string, number> = {
+  anomalous: 0,
+  notable: 1,
+  routine: 2,
+};
+
+function clipText(s: string | undefined, max: number): string {
+  const t = (s ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
+}
+
+/** The user question that prompted the assistant message at `assistantIdx`. */
+function questionForAssistant(
+  chatHistory: ReadonlyArray<Message>,
+  assistantIdx: number
+): string {
+  for (let j = assistantIdx - 1; j >= 0; j--) {
+    const m = chatHistory[j];
+    if (m?.role === "user") return clipText(m.content, 200);
+  }
+  return "";
+}
+
+/**
+ * Render the last `maxTurns` finalised assistant turns as a typed
+ * `PRIOR_TURN_STATE` block. Returns "" when there's nothing finalised to show,
+ * so callers can concatenate unconditionally. Bounded (turns × findings) so it
+ * stays prompt-cheap and prefix-cache friendly.
+ */
+export function formatPriorTurnsForPrompt(
+  chatHistory: ReadonlyArray<Message> | undefined,
+  maxTurns: number = MAX_PRIOR_TURNS
+): string {
+  if (!chatHistory?.length) return "";
+  const blocks: string[] = [];
+  let collected = 0;
+  for (let i = chatHistory.length - 1; i >= 0 && collected < maxTurns; i--) {
+    const m = chatHistory[i];
+    if (m?.role !== "assistant" || m.isIntermediate) continue;
+    const findings = m.agentInternals?.blackboardSnapshot?.findings ?? [];
+    if (findings.length === 0) continue;
+    collected += 1;
+    const q = questionForAssistant(chatHistory, i);
+    const lines: string[] = [`[T-${collected}]${q ? ` Q: ${q}` : ""}`];
+    const ranked = [...findings].sort(
+      (a, b) =>
+        (SIGNIFICANCE_RANK[a.significance] ?? 3) -
+        (SIGNIFICANCE_RANK[b.significance] ?? 3)
+    );
+    for (const f of ranked.slice(0, MAX_FINDINGS_PER_TURN)) {
+      const claim = clipText(f.detail || f.label, 220);
+      if (!claim) continue;
+      const cols = f.relatedColumns?.length
+        ? ` (cols: ${f.relatedColumns.slice(0, 4).join(", ")})`
+        : "";
+      lines.push(`   ${f.id ?? "F"} [${f.significance}] ${claim}${cols}`);
+    }
+    if (lines.length > 1) blocks.push(lines.join("\n"));
+  }
+  if (blocks.length === 0) return "";
+  return (
+    "### PRIOR_TURN_STATE (detailed findings from the last finalised turns — " +
+    "build on these SPECIFIC findings by id; figures still come from this " +
+    "turn's tool output):\n" +
+    blocks.join("\n")
+  );
+}
+
 /**
  * Render the priorTurnState as a labelled prompt block for the planner /
  * reflector / narrator. Empty string when no handle / no findings.

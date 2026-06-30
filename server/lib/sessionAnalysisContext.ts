@@ -556,6 +556,13 @@ export async function persistMergeAssistantSessionContext(params: {
    */
   question?: string;
   investigationSummary?: import("../shared/schema.js").InvestigationSummary;
+  /**
+   * A1 · the turn's answer-envelope magnitudes (label+value). Threaded into
+   * the prior-investigation digest as `keyNumbers` so the next turn can build
+   * on the actual figures, not just the headline label. Optional — call sites
+   * without an envelope (lookups) simply omit it.
+   */
+  keyMagnitudes?: ReadonlyArray<{ label?: string; value?: string }>;
 }): Promise<import("../shared/schema.js").SessionAnalysisContext | undefined> {
   // W31 · returns the new SessionAnalysisContext (or undefined when the chat
   // doc is missing) so the streaming caller can emit it via SSE for real-time
@@ -604,7 +611,9 @@ export async function persistMergeAssistantSessionContext(params: {
         await import("./agents/runtime/priorInvestigations.js");
       const digest = buildPriorInvestigationDigest(
         params.question,
-        params.investigationSummary
+        params.investigationSummary,
+        undefined,
+        params.keyMagnitudes
       );
       if (digest) next = appendPriorInvestigation(next, digest);
     }

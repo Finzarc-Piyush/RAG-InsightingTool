@@ -878,6 +878,22 @@ export const priorInvestigationItemSchema = z.object({
   hypothesesRefuted: z.array(z.string().max(200)).max(5),
   hypothesesOpen: z.array(z.string().max(200)).max(5),
   headlineFinding: z.string().max(280).optional(),
+  /**
+   * A1 · the turn's key quantified results (top magnitudes from the answer
+   * envelope), carried forward so a LATER turn can build on the actual
+   * numbers — not just the headline label. The single biggest "we're not
+   * building up on results" leak was that prior digests dropped every number.
+   * Additive + optional → legacy persisted contexts parse unchanged.
+   */
+  keyNumbers: z
+    .array(
+      z.object({
+        label: z.string().max(200),
+        value: z.string().max(120),
+      })
+    )
+    .max(3)
+    .optional(),
 });
 
 export type PriorInvestigationItem = z.infer<typeof priorInvestigationItemSchema>;

@@ -110,6 +110,7 @@ CONFIDENCE RUBRIC:
 NEVER:
 - Invent metric names, brand names, channels, regions, or facts not in the envelope or domain context.
 - Repeat what's already in \`recommendations[]\`. (If the envelope already says "drill into Q3 segments", do not emit "drill into Q3 segments" as an action.)
+- Repeat an action from the PRIOR BUSINESS ACTIONS block (proposed in an earlier turn). If a prior action is still the right move, ADVANCE it — escalate it, specify the next concrete step, or state the decision gate that has now been met — never restate it verbatim.
 - Manufacture confidence — "low" is a legitimate, useful answer when evidence is thin.
 - Emit more than 5 items. The section is opinionated, not exhaustive.
 - Treat a dimension's rollup-row as a peer in any action. If the DIMENSION HIERARCHIES block lists a column with a rollupValue (e.g. "FEMALE SHOWER GEL" is the category total for "Products"), actions on that dimension MUST treat the rollup as the category whole — never as a competing item ("focus on FEMALE SHOWER GEL vs MARICO" is wrong; "lift MARICO's share within the FEMALE SHOWER GEL category" is right).
@@ -200,6 +201,39 @@ function formatPriorInvestigations(
     : text;
 }
 
+const PRIOR_BUSINESS_ACTIONS_CHAR_CAP = 900;
+
+/**
+ * A3 · the business actions THIS agent already proposed in earlier turns of the
+ * session (read off the persisted chat history). Without this, a follow-up turn
+ * re-derives the same generic moves — the user's "you don't build up on prior
+ * results" complaint applied to the action lane. Surfacing them lets the agent
+ * advance/escalate an open action instead of restating it. Most recent first;
+ * bounded so it can't crowd the prompt.
+ */
+export function formatPriorBusinessActions(
+  ctx: AgentExecutionContext
+): string | null {
+  const history = ctx.chatHistory ?? [];
+  const lines: string[] = [];
+  let turnsSeen = 0;
+  for (let i = history.length - 1; i >= 0 && turnsSeen < 3; i--) {
+    const m = history[i];
+    if (m?.role !== "assistant" || m.isIntermediate) continue;
+    const actions = m.businessActions ?? [];
+    if (actions.length === 0) continue;
+    turnsSeen += 1;
+    for (const a of actions) {
+      lines.push(`- [${a.horizon}] ${a.title} (${a.confidence} confidence)`);
+    }
+  }
+  if (lines.length === 0) return null;
+  const text = lines.join("\n");
+  return text.length > PRIOR_BUSINESS_ACTIONS_CHAR_CAP
+    ? text.slice(0, PRIOR_BUSINESS_ACTIONS_CHAR_CAP) + "\n[truncated]"
+    : text;
+}
+
 function formatHintsBlock(hints: string[]): string {
   if (!hints.length) {
     return "INTENT HINTS (surface-form regex; empty does NOT mean the question lacks strategy intent):\n(none — decide from the question semantics)";
@@ -259,6 +293,17 @@ function buildUserMessage(
   const prior = formatPriorInvestigations(ctx);
   if (prior) {
     sections.push("PRIOR INVESTIGATIONS (most recent first; for cross-turn continuity):\n" + prior);
+  }
+  // A3 · what we already told the user to do in earlier turns. The agent must
+  // ADVANCE these (escalate, sequence the next move, mark done) rather than
+  // re-propose them — repeating a prior action is the "common sense, not a real
+  // suggestion" failure the user flagged.
+  const priorActions = formatPriorBusinessActions(ctx);
+  if (priorActions) {
+    sections.push(
+      "PRIOR BUSINESS ACTIONS (already proposed earlier this session — do NOT repeat; advance, escalate, or sequence the next move instead):\n" +
+        priorActions
+    );
   }
   // Dimension hierarchies — if any column has a user-declared rollup row
   // (e.g. "FEMALE SHOWER GEL" is a category total in the Marico-VN dataset),

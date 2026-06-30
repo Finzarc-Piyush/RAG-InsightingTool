@@ -92,6 +92,39 @@ describe("W21 · buildPriorInvestigationDigest", () => {
     });
     assert.equal(d?.headlineFinding, "Routine fact only");
   });
+
+  it("A1 · carries the top 3 envelope magnitudes as keyNumbers (label+value)", () => {
+    const d = buildPriorInvestigationDigest("Q", richSummary, "t0", [
+      { label: "GT volume", value: "412 MT" },
+      { label: "Q-com volume", value: "38 MT" },
+      { label: "MT share", value: "21%" },
+      { label: "dropped-because-over-cap", value: "x" },
+    ]);
+    assert.ok(d);
+    assert.equal(d.keyNumbers?.length, 3);
+    assert.deepEqual(d.keyNumbers?.[0], { label: "GT volume", value: "412 MT" });
+    assert.equal(d.keyNumbers?.[2].label, "MT share");
+  });
+
+  it("A1 · drops magnitudes missing a label or value, and omits keyNumbers when none survive", () => {
+    const d = buildPriorInvestigationDigest("Q", richSummary, "t0", [
+      { label: "", value: "99" },
+      { label: "no value" },
+    ]);
+    assert.ok(d);
+    assert.equal(d.keyNumbers, undefined);
+  });
+
+  it("A1 · keyNumbers alone (no hypotheses/headline) is still worth keeping", () => {
+    const d = buildPriorInvestigationDigest(
+      "Q",
+      { hypotheses: [], findings: [] },
+      "t0",
+      [{ label: "Total revenue", value: "₹4.2 Cr" }]
+    );
+    assert.ok(d);
+    assert.equal(d.keyNumbers?.length, 1);
+  });
 });
 
 describe("W21 · appendPriorInvestigation (FIFO cap)", () => {
@@ -106,17 +139,17 @@ describe("W21 · appendPriorInvestigation (FIFO cap)", () => {
     assert.equal(next.sessionKnowledge.priorInvestigations![0].question, "Q1");
   });
 
-  it("evicts the oldest when over the 5-entry cap", () => {
+  it("evicts the oldest when over the 8-entry cap (A1: 5 → 8)", () => {
     let ctx = baseContext();
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 10; i++) {
       const d = buildPriorInvestigationDigest(`Q${i}`, richSummary, `t${i}`)!;
       ctx = appendPriorInvestigation(ctx, d);
     }
     const arr = ctx.sessionKnowledge.priorInvestigations!;
-    assert.equal(arr.length, 5);
-    // Earliest two (Q0, Q1) evicted; Q2..Q6 retained in order.
+    assert.equal(arr.length, 8);
+    // Earliest two (Q0, Q1) evicted; Q2..Q9 retained in order.
     assert.equal(arr[0].question, "Q2");
-    assert.equal(arr[4].question, "Q6");
+    assert.equal(arr[7].question, "Q9");
   });
 
   it("output validates against sessionAnalysisContextSchema", () => {
@@ -167,5 +200,18 @@ describe("W21 · formatPriorInvestigationsForPlanner", () => {
     const a = formatPriorInvestigationsForPlanner(ctx);
     const b = formatPriorInvestigationsForPlanner(ctx);
     assert.equal(a, b);
+  });
+
+  it("A1 · renders a 'Numbers:' line so the planner sees prior figures", () => {
+    let ctx = baseContext();
+    ctx = appendPriorInvestigation(
+      ctx,
+      buildPriorInvestigationDigest("How big is GT vs Q-com?", richSummary, "t0", [
+        { label: "GT volume", value: "412 MT" },
+        { label: "Q-com volume", value: "38 MT" },
+      ])!
+    );
+    const block = formatPriorInvestigationsForPlanner(ctx);
+    assert.match(block, /Numbers: GT volume = 412 MT; Q-com volume = 38 MT/);
   });
 });
