@@ -818,6 +818,18 @@ export function ChatInterface({
     [updateMentionState]
   );
 
+  // C1 · per-chart "Investigate further" — submit the deep-dive question
+  // immediately (a full analysis turn), unlike suggestion chips which only
+  // pre-fill the composer. Guarded on isLoading so it can't stack turns.
+  const handleInvestigateChart = useCallback(
+    (question: string) => {
+      const trimmed = question.trim();
+      if (!trimmed || isLoading) return;
+      onSendMessage(trimmed);
+    },
+    [isLoading, onSendMessage]
+  );
+
   useEffect(() => {
     const draft = externalComposerDraft;
     if (!draft) return;
@@ -1232,6 +1244,7 @@ export function ChatInterface({
                   thinkingPanelWorkbench={showThinkingPanel ? panelWorkbench : undefined}
                   thinkingPanelStreaming={false}
                   onSuggestedQuestionClick={applySuggestionToComposer}
+                  onInvestigateChart={handleInvestigateChart}
                   showDatasetEnrichmentLoader={
                     isEnrichmentMessage &&
                     isDatasetEnriching

@@ -8,7 +8,8 @@ import {
   type TemporalFacetColumnMeta,
 } from '@/shared/schema';
 import { isRenderableChart } from '@/shared/chartValidity';
-import { User, Bot, Edit2, Check, X as XIcon, Info } from 'lucide-react';
+import { User, Bot, Edit2, Check, X as XIcon, Info, Telescope } from 'lucide-react';
+import { buildChartInvestigationPrompt } from '@/lib/charts/investigateQuestion';
 import { Card } from '@/components/ui/card';
 import { InsightCard } from './InsightCard';
 import { DashboardDraftCard } from './DashboardDraftCard';
@@ -209,6 +210,10 @@ interface MessageBubbleProps {
   thinkingPanelStreaming?: boolean;
   sessionId?: string | null; // Session ID for downloading modified datasets
   onSuggestedQuestionClick?: (question: string) => void;
+  /** C1 · submit a per-chart deep-dive question immediately (runs a full
+   *  analysis turn). Distinct from onSuggestedQuestionClick, which only
+   *  pre-fills the composer. Falls back to the latter when not provided. */
+  onInvestigateChart?: (question: string) => void;
   showDatasetEnrichmentLoader?: boolean;
   enrichmentPhase?: DatasetEnrichmentPollSnapshot['enrichmentPhase'];
   enrichmentStep?: DatasetEnrichmentPollSnapshot['enrichmentStep'];
@@ -300,6 +305,7 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
   thinkingPanelStreaming,
   sessionId,
   onSuggestedQuestionClick,
+  onInvestigateChart,
   showDatasetEnrichmentLoader = false,
   enrichmentPhase,
   enrichmentStep,
@@ -870,6 +876,28 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                       {/* W8 · Perplexity-style provenance pill (rows / cols / tools).
                           Renders nothing when the agent didn't emit _agentProvenance. */}
                       <SourcePillRow chart={chart} />
+                      {/* C1 · per-chart deep-dive. Posts a diagnostic+strategic
+                          question (buildChartInvestigationPrompt) so the server
+                          runs a FULL decision-grade analysis of this chart's
+                          subject — drivers, why, and prioritised actions — not a
+                          restated observation. Reuses the existing question-post
+                          callback; shown only when chat can accept a follow-up. */}
+                      {(onInvestigateChart || onSuggestedQuestionClick) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const q = buildChartInvestigationPrompt(chart);
+                            if (onInvestigateChart) onInvestigateChart(q);
+                            else onSuggestedQuestionClick?.(q);
+                          }}
+                          className="inline-flex items-center gap-1 self-start rounded-md border border-border/80 bg-card px-2 py-0.5 text-[11px] font-medium text-foreground/85 transition-colors hover:bg-muted/40"
+                          aria-label="Investigate this chart further with a deeper analysis"
+                          title="Run a deeper analysis of this chart — drivers, why, and actions"
+                        >
+                          <Telescope className="h-3 w-3" />
+                          Investigate further
+                        </button>
+                      )}
                     </div>
                   );
                 })}
