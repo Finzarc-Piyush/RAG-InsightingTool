@@ -73,3 +73,42 @@ describe("updateChartInsightOrRecommendationController · validation (Wave S6)",
     assert.match(JSON.stringify(res.body), /Invalid limit payload/);
   });
 });
+
+describe("updateChartInsightOrRecommendationController · W6 parity-toolbar validation", () => {
+  it("rejects with 400 when an unknown chart type is provided", async () => {
+    const res = makeRes();
+    await updateChartInsightOrRecommendationController(
+      makeReq({ type: "not-a-chart-type" }),
+      res,
+    );
+    assert.equal(res.statusCode, 400);
+    assert.match(JSON.stringify(res.body), /Invalid type payload/);
+  });
+
+  it("rejects with 400 when barLayout is neither stacked nor grouped", async () => {
+    const res = makeRes();
+    await updateChartInsightOrRecommendationController(
+      makeReq({ barLayout: "diagonal" }),
+      res,
+    );
+    assert.equal(res.statusCode, 400);
+    assert.match(JSON.stringify(res.body), /Invalid barLayout payload/);
+  });
+
+  it("rejects with 400 when dataLabels is not a boolean", async () => {
+    const res = makeRes();
+    await updateChartInsightOrRecommendationController(
+      makeReq({ dataLabels: "yes" }),
+      res,
+    );
+    assert.equal(res.statusCode, 400);
+    assert.match(JSON.stringify(res.body), /Invalid dataLabels payload/);
+  });
+
+  it("the all-absent rejection message now lists the W6 fields", async () => {
+    const res = makeRes();
+    await updateChartInsightOrRecommendationController(makeReq({}), res);
+    assert.equal(res.statusCode, 400);
+    assert.match(JSON.stringify(res.body), /type, barLayout, or dataLabels/);
+  });
+});

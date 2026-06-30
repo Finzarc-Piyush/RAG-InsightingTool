@@ -13,14 +13,38 @@
  * the mark/layout dropdowns hide until v2 mutation helpers exist, but the
  * pivot-view toggle still works (chart.data is shape-compatible across v1/v2).
  */
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { BarChart3, Table2 } from "lucide-react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+import { BarChart3, Maximize2, Table2 } from "lucide-react";
 import { isChartSpecV2, type ChartSpec, type ChartSpecV2 } from "@/shared/schema";
 import { cn } from "@/lib/utils";
 import { ChartShim } from "./ChartShim";
+
+// Lazy so the recharts-heavy modal only loads when the user clicks Maximize —
+// the same rich modal ChartRenderer opens on header-click; this just adds the
+// discoverable icon-button trigger the dashboard tile already has (parity).
+const ChartModal = lazy(() =>
+  import("@/pages/Home/Components/ChartModal").then((m) => ({
+    default: m.ChartModal,
+  })),
+);
 import { ChartTilePivotView } from "./ChartTilePivotView";
 import { chartSpecToPivotConfig } from "./chartSpecToPivotConfig";
+import { ChartParityToolbar } from "./ChartParityToolbar";
+import {
+  coerceMarkType,
+  isSwitchableMark,
+  type SwitchableMark,
+  type ChartSpecPatch,
+} from "@/lib/charts/chartSpecMutations";
 import { ChartSortControl } from "./ChartSortControl";
+import { ChartLimitControl, type ChartLimit } from "./ChartLimitControl";
 import {
   useChartSort,
   chartSupportsSort,
@@ -30,27 +54,6 @@ import {
 // Stable fallback so the useChartSort hook can be called unconditionally even
 // when there is no v1 spec to sort (v2 marks). Module-level → stable identity.
 const EMPTY_SORT_SPEC: ChartSpec = { type: "bar", title: "", x: "", y: "", data: [] };
-
-type SwitchableMark = "bar" | "line" | "area";
-const SWITCHABLE_MARKS: readonly SwitchableMark[] = ["bar", "line", "area"];
-
-function isSwitchableMark(t: string): t is SwitchableMark {
-  return (SWITCHABLE_MARKS as readonly string[]).includes(t);
-}
-
-function coerceMarkType(spec: ChartSpec, next: SwitchableMark): ChartSpec {
-  if (spec.type === next) return spec;
-  const out: ChartSpec = { ...spec, type: next };
-  if (next !== "bar") {
-    delete out.barLayout;
-    // The "Sort by" control is bar/column-only; carrying a value-sort onto a
-    // line/area would draw its points out of natural (e.g. chronological)
-    // order, and the user can't see/undo it (control hidden for lines). Strip
-    // it on leaving bar, mirroring barLayout.
-    delete out.sort;
-  }
-  return out;
-}
 
 /**
  * Structural identity for a chart spec — used to decide when to reset local
@@ -114,6 +117,8 @@ export interface InteractiveChartCardProps {
     dataLabels?: boolean;
     /** Wave S5 · "Sort by" dropdown. Defaults visible for bar/column charts. */
     sort?: boolean;
+    /** W10 · explicit Maximize (fullscreen) button. Defaults visible. */
+    expand?: boolean;
   };
   /** Caller-supplied legacy renderer; receives the locally-mutated spec. */
   renderLegacy: (spec: ChartSpec) => ReactNode;
@@ -124,6 +129,13 @@ export interface InteractiveChartCardProps {
    * sessionsApi.updateMessageChartSort). Omitted = ephemeral (no persistence).
    */
   onSortPersist?: (sort: ChartSortSpec) => void;
+  /**
+   * W7 · invoked when the parity toolbar mutates the spec (mark switch /
+   * stacked-grouped / show-labels) or the inline Top-N limit changes (W8). The
+   * mutation is already applied to the local spec; the caller persists it (chat
+   * → sessionsApi.updateMessageChartSpec). Omitted = ephemeral.
+   */
+  onSpecPersist?: (patch: ChartSpecPatch) => void;
 }
 
 export function InteractiveChartCard({
@@ -133,23 +145,23 @@ export function InteractiveChartCard({
   renderLegacy,
   className,
   onSortPersist,
+  onSpecPersist,
 }: InteractiveChartCardProps) {
   const showChartType = controls?.chartType !== false;
   const showBarLayout = controls?.barLayout !== false;
   const showPivotToggle = controls?.pivotToggle !== false;
   const showDataLabelsToggle = controls?.dataLabels !== false;
 
-  // useId guarantees label/select pairing stays correct when a chat message
-  // renders multiple charts side-by-side (Bug F).
-  const reactId = useId();
-  const chartTypeId = `ic-chart-type-${reactId}`;
-  const barLayoutId = `ic-bar-layout-${reactId}`;
-  const dataLabelsId = `ic-data-labels-${reactId}`;
-
   const [localV1, setLocalV1] = useState<ChartSpec | null>(() =>
     isChartSpecV2(chart) ? null : (chart as ChartSpec)
   );
   const [view, setView] = useState<"chart" | "pivot">("chart");
+  const [isExpandOpen, setIsExpandOpen] = useState(false);
+  // W8 · durable Top-N / Bottom-N selection — parity with the dashboard tile.
+  // Seeded from the chart's persisted `limit`; persisted via onSpecPersist.
+  const [limit, setLimit] = useState<ChartLimit>(
+    isChartSpecV2(chart) ? null : (chart as ChartSpec).limit ?? null,
+  );
 
   // Reset only when the chart's STRUCTURAL identity changes — not on every
   // parent re-render that hands back a new object reference for the same
@@ -158,8 +170,10 @@ export function InteractiveChartCard({
   useEffect(() => {
     if (isChartSpecV2(chart)) {
       setLocalV1(null);
+      setLimit(null);
     } else {
       setLocalV1(chart as ChartSpec);
+      setLimit((chart as ChartSpec).limit ?? null);
     }
     setView("chart");
     // chart intentionally excluded — `identity` is the structural-content key.
@@ -191,11 +205,18 @@ export function InteractiveChartCard({
   }, [chart, showPivotToggle]);
   const effectiveView: "chart" | "pivot" = canPivot ? view : "chart";
 
+  // W10 · explicit Maximize button → the rich ChartModal (same modal
+  // ChartRenderer opens on header-click; this adds the discoverable trigger the
+  // dashboard tile has). v1 only — ChartModal renders a v1 ChartSpec; the v2
+  // path keeps ChartRenderer's header-click (no regression).
+  const showExpand = controls?.expand !== false && !!localV1;
+
   const toolbarVisible = useMemo(() => {
     if (canPivot) return true;
     // v2 (or v1) sortable bar → keep the toolbar so the sort control shows even
     // when no v1-only toolbar (mark / layout / labels) applies.
     if (showSortControl) return true;
+    if (showExpand) return true;
     if (!localV1) return false;
     const hasMarkSwitch = showChartType && isSwitchableMark(localV1.type);
     // A bar is "stackable" if it has any series concept — explicit seriesKeys OR
@@ -212,6 +233,7 @@ export function InteractiveChartCard({
     canPivot,
     localV1,
     showSortControl,
+    showExpand,
     showChartType,
     showBarLayout,
     showDataLabelsToggle,
@@ -219,12 +241,16 @@ export function InteractiveChartCard({
 
   const handleMarkChange = (next: SwitchableMark) => {
     setLocalV1((prev) => (prev ? coerceMarkType(prev, next) : prev));
+    // W7 · persist so the choice survives a reload (server normalises the
+    // bar-only strip identically to coerceMarkType).
+    onSpecPersist?.({ type: next });
   };
 
   const handleBarLayoutChange = (next: "stacked" | "grouped") => {
     setLocalV1((prev) =>
       prev && prev.type === "bar" ? { ...prev, barLayout: next } : prev
     );
+    onSpecPersist?.({ barLayout: next });
   };
 
   // W-GMK9 · per-chart "Show value labels" toggle. Mutates the v1 spec's
@@ -232,8 +258,8 @@ export function InteractiveChartCard({
   // the visx renderers' collision-thinning kicks in (or doesn't).
   const handleDataLabelsChange = (next: boolean) => {
     setLocalV1((prev) => (prev ? { ...prev, dataLabels: next } : prev));
+    onSpecPersist?.({ dataLabels: next });
   };
-  const currentDataLabels = localV1?.dataLabels !== false; // default true
 
   // Wave S5 · interactive "Sort by" for bar/column charts. The hook re-orders
   // the spec's rows instantly client-side; `onSortPersist` (if given) durably
@@ -250,10 +276,40 @@ export function InteractiveChartCard({
     onSortPersist?.(next);
   };
 
+  // W8 · distinct category count for the active bar breakdown — drives the
+  // inline Top/Bottom-N control (> 10) and the "View all N" CTA (> 12), exactly
+  // like the dashboard tile. Derived from the (locally-mutated) v1 spec's data.
+  const categoryCount = useMemo(() => {
+    if (!localV1 || localV1.type !== "bar" || !localV1.x) return 0;
+    const xCol = localV1.x;
+    const rows = Array.isArray(localV1.data) ? localV1.data : [];
+    const seen = new Set<string>();
+    for (const r of rows) {
+      const v = (r as Record<string, unknown>)[xCol];
+      if (v != null && v !== "") seen.add(String(v));
+    }
+    return seen.size;
+  }, [localV1]);
+  const showLimitControl = showSortControl && categoryCount > 10;
+  const handleLimitChange = (next: ChartLimit) => {
+    setLimit(next);
+    onSpecPersist?.({ limit: next });
+  };
+
+  // Inject the live limit into the spec the CHART renders (so the bars narrow to
+  // the selection); the pivot / "View all N" path keeps the limit-free sorted
+  // spec so every record stays reachable — same contract as the dashboard tile.
+  const renderedSpec = useMemo<ChartSpec | ChartSpecV2>(() => {
+    if (!localV1) return sortedSpec;
+    return { ...(sortedSpec as ChartSpec), limit: limit ?? undefined };
+  }, [sortedSpec, localV1, limit]);
+
   // When the toggle is in pivot view, the chart-type and bar-layout dropdowns
   // are irrelevant (they only mutate chart-rendering choices). Hide them so
   // the toolbar doesn't lie about what's editable.
   const chartControlsVisible = effectiveView === "chart";
+  const showViewAllCta =
+    canPivot && effectiveView === "chart" && categoryCount > 12;
 
   const pivotChart = localV1 ?? (chart as ChartSpec);
 
@@ -261,70 +317,27 @@ export function InteractiveChartCard({
     <div className={className}>
       {toolbarVisible ? (
         <div className="mb-2 flex flex-wrap items-center gap-2">
-          {chartControlsVisible && localV1 && showChartType && isSwitchableMark(localV1.type) ? (
-            <div className="flex items-center gap-1.5">
-              <label
-                htmlFor={chartTypeId}
-                className="text-[11px] uppercase tracking-wide text-muted-foreground"
-              >
-                Type
-              </label>
-              <select
-                id={chartTypeId}
-                className="rounded border border-border/60 bg-background px-2 py-1 text-xs"
-                value={localV1.type}
-                onChange={(e) => handleMarkChange(e.target.value as SwitchableMark)}
-              >
-                <option value="bar">Bar</option>
-                <option value="line">Line</option>
-                <option value="area">Area</option>
-              </select>
-            </div>
-          ) : null}
-          {chartControlsVisible &&
-          localV1 &&
-          showBarLayout &&
-          localV1.type === "bar" &&
-          (!!localV1.seriesColumn || (localV1.seriesKeys?.length ?? 0) > 1) ? (
-            <div className="flex items-center gap-1.5">
-              <label
-                htmlFor={barLayoutId}
-                className="text-[11px] uppercase tracking-wide text-muted-foreground"
-              >
-                Layout
-              </label>
-              <select
-                id={barLayoutId}
-                className="rounded border border-border/60 bg-background px-2 py-1 text-xs"
-                value={localV1.barLayout ?? "stacked"}
-                onChange={(e) =>
-                  handleBarLayoutChange(e.target.value as "stacked" | "grouped")
-                }
-              >
-                <option value="stacked">Stacked</option>
-                <option value="grouped">Grouped</option>
-              </select>
-            </div>
-          ) : null}
-          {chartControlsVisible &&
-          localV1 &&
-          showDataLabelsToggle &&
-          ["bar", "line", "area", "scatter", "point"].includes(localV1.type) ? (
-            <div className="flex items-center gap-1.5">
-              <input
-                id={dataLabelsId}
-                type="checkbox"
-                checked={currentDataLabels}
-                onChange={(e) => handleDataLabelsChange(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-border/60 bg-background"
-              />
-              <label
-                htmlFor={dataLabelsId}
-                className="text-[11px] uppercase tracking-wide text-muted-foreground"
-              >
-                Show labels
-              </label>
-            </div>
+          {/* W3 · the mark-switch / layout / show-labels cluster now lives in the
+              shared <ChartParityToolbar> so the dashboard tile can mount the same
+              controls (W4). State stays here (localV1 + coerceMarkType); the
+              toolbar is presentation-only and self-gates each control. */}
+          {chartControlsVisible && localV1 ? (
+            <ChartParityToolbar
+              type={localV1.type}
+              barLayout={localV1.barLayout}
+              dataLabels={localV1.dataLabels}
+              hasSeries={
+                !!localV1.seriesColumn || (localV1.seriesKeys?.length ?? 0) > 1
+              }
+              show={{
+                chartType: showChartType,
+                barLayout: showBarLayout,
+                dataLabels: showDataLabelsToggle,
+              }}
+              onTypeChange={handleMarkChange}
+              onBarLayoutChange={handleBarLayoutChange}
+              onDataLabelsChange={handleDataLabelsChange}
+            />
           ) : null}
           {chartControlsVisible && showSortControl ? (
             <ChartSortControl
@@ -333,9 +346,18 @@ export function InteractiveChartCard({
               axisLabel={sortAxisLabel}
             />
           ) : null}
+          {chartControlsVisible && showLimitControl ? (
+            <ChartLimitControl
+              value={limit}
+              onChange={handleLimitChange}
+              total={categoryCount}
+            />
+          ) : null}
+          {canPivot || showExpand ? (
+            <div className="ml-auto flex items-center gap-2">
           {canPivot ? (
             <div
-              className="ml-auto inline-flex rounded-md border border-border overflow-hidden"
+              className="inline-flex rounded-md border border-border overflow-hidden"
               role="group"
               aria-label="Chart or pivot view"
               data-testid="chart-pivot-toggle"
@@ -372,6 +394,20 @@ export function InteractiveChartCard({
               </button>
             </div>
           ) : null}
+          {showExpand ? (
+            <button
+              type="button"
+              onClick={() => setIsExpandOpen(true)}
+              title="Expand chart"
+              aria-label="Expand chart"
+              data-testid="chart-expand-button"
+              className="rounded-md border border-border p-1 text-muted-foreground transition-colors hover:text-foreground hover:bg-muted/40"
+            >
+              <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {/* W-GMK9 · axisReason subtitle — surfaces the period-resolver's
@@ -392,11 +428,41 @@ export function InteractiveChartCard({
         </div>
       ) : (
         <ChartShim
-          spec={sortedSpec}
+          spec={renderedSpec}
           keyInsightSessionId={keyInsightSessionId}
-          legacy={() => renderLegacy(localV1 ? (sortedSpec as ChartSpec) : (chart as ChartSpec))}
+          legacy={() => renderLegacy(localV1 ? (renderedSpec as ChartSpec) : (chart as ChartSpec))}
         />
       )}
+      {/* W8 · honest "Top/Bottom N of M" caption when a limit is hiding rows. */}
+      {effectiveView === "chart" && limit && categoryCount > limit.n ? (
+        <div className="mt-1 text-xs text-muted-foreground">
+          {limit.mode === "top" ? "Top" : "Bottom"} {limit.n} of {categoryCount}
+        </div>
+      ) : null}
+      {/* W8 · "View all N" escape hatch into the full sortable pivot table —
+          parity with the dashboard tile. Sort ascending for worst performers. */}
+      {showViewAllCta ? (
+        <button
+          type="button"
+          onClick={() => setView("pivot")}
+          className="mt-1 self-start text-xs text-primary hover:underline"
+          title="Open the full sortable table — sort ascending to see the worst performers"
+        >
+          View all {categoryCount} {localV1?.x} as a sortable table →
+        </button>
+      ) : null}
+      {/* W10 · explicit Maximize → rich ChartModal (lazy). v1 only; renders the
+          locally-mutated spec so the modal opens in sync with the inline card. */}
+      {isExpandOpen && localV1 ? (
+        <Suspense fallback={null}>
+          <ChartModal
+            isOpen={isExpandOpen}
+            onClose={() => setIsExpandOpen(false)}
+            chart={renderedSpec as ChartSpec}
+            keyInsightSessionId={keyInsightSessionId}
+          />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

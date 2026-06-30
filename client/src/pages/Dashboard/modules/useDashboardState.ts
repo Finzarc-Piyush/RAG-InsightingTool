@@ -448,7 +448,7 @@ export const useDashboardState = () => {
   );
 
   const updateChartInsightOrRecommendationMutation = useMutation({
-    mutationFn: async ({ dashboardId, chartIndex, updates, sheetId }: { dashboardId: string; chartIndex: number; updates: { keyInsight?: string; sort?: { by: "value" | "category"; direction: "asc" | "desc" }; limit?: { mode: "top" | "bottom"; n: number } | null }; sheetId?: string }) => {
+    mutationFn: async ({ dashboardId, chartIndex, updates, sheetId }: { dashboardId: string; chartIndex: number; updates: { keyInsight?: string; sort?: { by: "value" | "category"; direction: "asc" | "desc" }; limit?: { mode: "top" | "bottom"; n: number } | null; type?: string; barLayout?: "grouped" | "stacked"; dataLabels?: boolean }; sheetId?: string }) => {
       const updated = await dashboardsApi.updateChartInsightOrRecommendation(dashboardId, chartIndex, updates, sheetId);
       return normalizeDashboard(updated);
     },

@@ -898,6 +898,7 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
           <ChartTileBody
             tile={tile}
             dashboardId={dashboardId}
+            sessionId={sessionId}
             canEdit={canEdit}
             isEditing={isEditing}
             inapplicableColumns={inapplicable}
@@ -942,6 +943,22 @@ export const DashboardTiles: React.FC<DashboardTilesProps> = ({
                         // Best-effort persistence; the Top/Bottom-N selection
                         // already applied locally in ChartTileBody.
                       });
+                  }
+                : undefined
+            }
+            onSpecChange={
+              canEdit
+                ? (patch) => {
+                    // W7 · persist the parity toolbar's mark switch / layout /
+                    // labels. Best-effort; the mutation already applied locally.
+                    void updateChartInsightOrRecommendation(
+                      dashboardId,
+                      tile.index,
+                      patch,
+                      sheetId,
+                    )
+                      .then(() => onUpdate?.())
+                      .catch(() => {});
                   }
                 : undefined
             }

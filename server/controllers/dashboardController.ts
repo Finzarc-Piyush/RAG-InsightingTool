@@ -15,6 +15,8 @@ import {
   type BarSortSpec,
   chartLimitSpecSchema,
   type ChartLimitSpec,
+  chartTypeSchema,
+  type ChartSpec,
 } from "../shared/schema.js";
 import {
   addTableToDashboardRequestSchema,
@@ -438,21 +440,38 @@ export const updateChartInsightOrRecommendationController = async (req: Request,
   try {
     const username = requireUsername(req);
     const { dashboardId, chartIndex: chartIndexParam } = req.params as { dashboardId: string; chartIndex: string };
-    const { sheetId, keyInsight, sort, limit } = req.body;
+    const { sheetId, keyInsight, sort, limit, type, barLayout, dataLabels } = req.body;
     const chartIndex = parseInt(chartIndexParam, 10);
 
     if (isNaN(chartIndex) || chartIndex < 0) {
       return res.status(400).json({ error: 'Valid chartIndex is required' });
     }
 
-    // This endpoint persists a chart's keyInsight, its "Sort by" choice, AND its
-    // Top-N / Bottom-N selection — accept any of the three (reject only when all
+    // This endpoint persists a chart's keyInsight, its "Sort by" choice, its
+    // Top-N / Bottom-N selection, AND (W6) the parity toolbar's mark switch /
+    // stacked-grouped / show-labels — accept any field (reject only when ALL
     // are absent).
-    if (keyInsight === undefined && sort === undefined && limit === undefined) {
-      return res.status(400).json({ error: 'keyInsight, sort, or limit must be provided' });
+    if (
+      keyInsight === undefined &&
+      sort === undefined &&
+      limit === undefined &&
+      type === undefined &&
+      barLayout === undefined &&
+      dataLabels === undefined
+    ) {
+      return res
+        .status(400)
+        .json({ error: 'keyInsight, sort, limit, type, barLayout, or dataLabels must be provided' });
     }
 
-    const updates: { keyInsight?: string; sort?: BarSortSpec; limit?: ChartLimitSpec | null } = {};
+    const updates: {
+      keyInsight?: string;
+      sort?: BarSortSpec;
+      limit?: ChartLimitSpec | null;
+      type?: ChartSpec['type'];
+      barLayout?: 'grouped' | 'stacked';
+      dataLabels?: boolean;
+    } = {};
     if (keyInsight !== undefined) {
       updates.keyInsight = typeof keyInsight === 'string' ? keyInsight : undefined;
     }
@@ -474,6 +493,26 @@ export const updateChartInsightOrRecommendationController = async (req: Request,
         }
         updates.limit = parsed.data;
       }
+    }
+    // W6 · parity-toolbar mutations.
+    if (type !== undefined) {
+      const parsed = chartTypeSchema.safeParse(type);
+      if (!parsed.success) {
+        return res.status(400).json({ error: 'Invalid type payload', details: parsed.error.flatten() });
+      }
+      updates.type = parsed.data;
+    }
+    if (barLayout !== undefined) {
+      if (barLayout !== 'grouped' && barLayout !== 'stacked') {
+        return res.status(400).json({ error: 'Invalid barLayout payload' });
+      }
+      updates.barLayout = barLayout;
+    }
+    if (dataLabels !== undefined) {
+      if (typeof dataLabels !== 'boolean') {
+        return res.status(400).json({ error: 'Invalid dataLabels payload' });
+      }
+      updates.dataLabels = dataLabels;
     }
 
     const updated = await updateChartInsightOrRecommendation(

@@ -50,6 +50,10 @@ export const dashboardsApi = {
       sort?: { by: "value" | "category"; direction: "asc" | "desc" };
       /** Persist the chart's Top-N / Bottom-N selection; `null` clears it. */
       limit?: { mode: "top" | "bottom"; n: number } | null;
+      /** W6/W7 · persist the parity toolbar's mark switch / layout / labels. */
+      type?: string;
+      barLayout?: "grouped" | "stacked";
+      dataLabels?: boolean;
     },
     sheetId?: string
   ) =>

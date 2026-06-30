@@ -162,6 +162,153 @@ describe("WI2-wire-bind · DashboardTiles forwards the cache without modificatio
   });
 });
 
+describe("W4 · shared parity toolbar on the dashboard tile", () => {
+  it("imports ChartParityToolbar + the shared coerceMarkType mutation", () => {
+    assert.match(
+      bodySrc,
+      /import \{ ChartParityToolbar \} from "@\/components\/charts\/ChartParityToolbar"/,
+    );
+    assert.match(
+      bodySrc,
+      /import \{[\s\S]*?coerceMarkType,[\s\S]*?type SwitchableMark,[\s\S]*?\} from "@\/lib\/charts\/chartSpecMutations"/,
+    );
+  });
+
+  it("keeps a local spec copy seeded from tile.chart, reset on structural identity", () => {
+    assert.match(
+      bodySrc,
+      /const \[localSpec, setLocalSpec\] = useState<ChartSpec>\(tile\.chart\)/,
+    );
+    // The reset effect keys on tile.id + a structural identity (NOT the raw
+    // tile.chart reference) so a re-render that hands back a new object for the
+    // same chart doesn't wipe the user's mark/layout choice.
+    assert.match(
+      bodySrc,
+      /useEffect\(\(\) => \{\s*setLocalSpec\(tile\.chart\);[\s\S]*?\}, \[tile\.id, chartIdentity\]\);/,
+    );
+  });
+
+  it("switches the mark through the shared coerceMarkType (strips bar-only fields)", () => {
+    assert.match(
+      bodySrc,
+      /const handleTypeChange = useCallback\(\s*\(next: SwitchableMark\) => \{\s*setLocalSpec\(\(prev\) => coerceMarkType\(prev, next\)\);/,
+    );
+  });
+
+  it("drives sort + category count off the locally-mutated spec (not the raw tile.chart)", () => {
+    assert.match(bodySrc, /useChartSort\(localSpec\)/);
+    assert.match(bodySrc, /chartSupportsSort\(localSpec\)/);
+    assert.match(bodySrc, /if \(localSpec\.type !== "bar" \|\| !localSpec\.x\) return 0;/);
+  });
+
+  it("mounts ChartParityToolbar wired to localSpec + the three change handlers", () => {
+    assert.match(
+      bodySrc,
+      /<ChartParityToolbar[\s\S]*?type=\{localSpec\.type\}[\s\S]*?onTypeChange=\{handleTypeChange\}[\s\S]*?onBarLayoutChange=\{handleBarLayoutChange\}[\s\S]*?onDataLabelsChange=\{handleDataLabelsChange\}[\s\S]*?\/>/,
+    );
+  });
+});
+
+describe("W13 · 'Investigate further' on the dashboard tile", () => {
+  it("imports the shared prompt builder + wouter navigation", () => {
+    assert.match(
+      bodySrc,
+      /import \{ buildChartInvestigationPrompt \} from "@\/lib\/charts\/investigateQuestion"/,
+    );
+    assert.match(bodySrc, /import \{ useLocation \} from "wouter"/);
+  });
+
+  it("navigates to the source chat with the deep-dive question pre-filled via ?compose=", () => {
+    assert.match(bodySrc, /const q = buildChartInvestigationPrompt\(localSpec\);/);
+    assert.match(
+      bodySrc,
+      /setLocation\(\s*`\/analysis\/\$\{encodeURIComponent\(sessionId\)\}\?compose=\$\{encodeURIComponent\(q\)\}`/,
+    );
+  });
+
+  it("renders the Telescope button only when a source session exists", () => {
+    assert.match(
+      bodySrc,
+      /\{sessionId \? \([\s\S]*?data-testid="tile-investigate-button"[\s\S]*?onClick=\{handleInvestigate\}/,
+    );
+  });
+});
+
+describe("W12 · provenance pill on the dashboard tile", () => {
+  it("imports SourcePillRow from the chat surface (shared component)", () => {
+    assert.match(
+      bodySrc,
+      /import \{ SourcePillRow \} from "@\/pages\/Home\/Components\/SourcePillRow"/,
+    );
+  });
+
+  it("mounts SourcePillRow with the tile's chart (it self-hides when no provenance)", () => {
+    assert.match(bodySrc, /<SourcePillRow chart=\{tile\.chart\} \/>/);
+  });
+});
+
+describe("W11 · forward the source session to the fullscreen modal", () => {
+  it("declares the optional sessionId prop and destructures it", () => {
+    assert.match(bodySrc, /sessionId\?: string \| null;/);
+    assert.match(bodySrc, /^\s*sessionId,\s*$/m);
+  });
+
+  it("passes keyInsightSessionId to ChartOnlyModal", () => {
+    assert.match(
+      bodySrc,
+      /<ChartOnlyModal[\s\S]*?keyInsightSessionId=\{sessionId \?\? null\}/,
+    );
+  });
+
+  it("DashboardTiles forwards its sessionId to ChartTileBody", () => {
+    assert.match(tilesSrc, /<ChartTileBody[\s\S]*?sessionId=\{sessionId\}/);
+  });
+});
+
+describe("W7 · durable parity-toolbar persistence (dashboard)", () => {
+  it("declares the optional onSpecChange prop and destructures it", () => {
+    assert.match(bodySrc, /onSpecChange\?: \(patch: ChartSpecPatch\) => void;/);
+    assert.match(bodySrc, /^\s*onSpecChange,\s*$/m);
+  });
+
+  it("imports the shared ChartSpecPatch type", () => {
+    assert.match(
+      bodySrc,
+      /import \{[\s\S]*?type ChartSpecPatch,[\s\S]*?\} from "@\/lib\/charts\/chartSpecMutations"/,
+    );
+  });
+
+  it("each toolbar handler persists its field via onSpecChange", () => {
+    assert.match(bodySrc, /coerceMarkType\(prev, next\)\);\s*onSpecChange\?\.\(\{ type: next \}\);/);
+    assert.match(bodySrc, /onSpecChange\?\.\(\{ barLayout: next \}\);/);
+    assert.match(bodySrc, /onSpecChange\?\.\(\{ dataLabels: next \}\);/);
+  });
+
+  it("DashboardTiles forwards onSpecChange that PATCHes the patch through updateChartInsightOrRecommendation", () => {
+    assert.match(
+      tilesSrc,
+      /onSpecChange=\{[\s\S]*?updateChartInsightOrRecommendation\(\s*dashboardId,\s*tile\.index,\s*patch,\s*sheetId,\s*\)/,
+    );
+  });
+});
+
+describe("W1 · axisReason subtitle parity (ChartTileBody)", () => {
+  it("renders tile.chart.axisReason above the chart body, matching the chat card", () => {
+    // Parity with InteractiveChartCard's axisReason subtitle — a dashboard
+    // viewer should see WHICH time grain was picked and why ("Showing
+    // Quarter · Period, filtered to …"). Read-only display of an existing
+    // schema field; absent for non-period charts.
+    assert.match(
+      bodySrc,
+      /\{tile\.chart\.axisReason \? \([\s\S]*?data-testid="chart-axis-reason"[\s\S]*?\{tile\.chart\.axisReason\}[\s\S]*?\) : null\}/,
+    );
+  });
+
+  it("guards the subtitle so non-period charts render nothing", () => {
+    assert.match(bodySrc, /tile\.chart\.axisReason \? \(/);
+  });
+});
+
 describe("bar-limit · inline Top/Bottom-N control wiring (ChartTileBody)", () => {
   it("imports ChartLimitControl + the ChartLimit type", () => {
     assert.match(

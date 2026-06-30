@@ -182,6 +182,29 @@ export const sessionsApi = {
     ),
 
   /**
+   * W5 · persist the parity toolbar's view-side chart-spec mutations on a chat
+   * message (mark switch / stacked-grouped / show-labels / Top-N limit) so they
+   * survive a reload — the chat counterpart of the dashboard charts PATCH.
+   * `limit: null` clears the Top/Bottom-N selection.
+   */
+  updateMessageChartSpec: (
+    sessionId: string,
+    messageTimestamp: number,
+    chartIndex: number,
+    spec: {
+      type?: string;
+      barLayout?: "grouped" | "stacked";
+      dataLabels?: boolean;
+      sort?: { by: "value" | "category"; direction: "asc" | "desc" };
+      limit?: { mode: "top" | "bottom"; n: number } | null;
+    }
+  ) =>
+    api.patch(
+      `/api/sessions/${sessionId}/messages/${messageTimestamp}/charts/${chartIndex}/spec`,
+      { spec }
+    ),
+
+  /**
    * Wave-FA3 · Per-session non-destructive filter overlay. Clearing returns the
    * canonical row count; setting returns the filtered count + 50-row preview.
    */

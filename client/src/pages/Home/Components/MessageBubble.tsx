@@ -859,6 +859,23 @@ const MessageBubbleComponent = forwardRef<HTMLDivElement, MessageBubbleProps>(({
                                 }
                               : undefined
                           }
+                          onSpecPersist={
+                            sessionId && typeof message.timestamp === "number"
+                              ? (patch) => {
+                                  // W7 · durable chat-side parity controls (mark
+                                  // switch / layout / labels / Top-N). Best-effort;
+                                  // the mutation already applied locally.
+                                  void sessionsApi
+                                    .updateMessageChartSpec(
+                                      sessionId,
+                                      message.timestamp as number,
+                                      idx,
+                                      patch,
+                                    )
+                                    .catch(() => {});
+                                }
+                              : undefined
+                          }
                           renderLegacy={(localSpec) => (
                             <ChartRenderer
                               chart={localSpec}

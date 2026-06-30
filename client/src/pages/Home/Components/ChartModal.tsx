@@ -26,13 +26,13 @@ import { DEFAULT_Y_TICKS } from '@/lib/charts/yAxisTickCount';
 import { maxXAxisLabels } from '@/lib/charts/xAxisLabelCap';
 import { useContainerWidth } from '@/hooks/useContainerWidth';
 import { capScatterPoints } from '@/lib/charts/scatterDecimation';
+import { makeAxisTickFormatter } from '@/lib/charts/format';
 import {
   formatDateForDisplay as formatDateForDisplayLocal,
   determineSliderStep as determineSliderStepLocal,
   parseNumericValue,
   getNumericValues,
   getDynamicDomain,
-  formatAxisLabelFieldBlind as formatAxisLabel,
 } from '@/lib/charts/chartFilterHelpers';
 import { ChartInsightBody } from '@/components/charts/ChartInsightBody';
 import { ChartSortControl } from '@/components/charts/ChartSortControl';
@@ -172,6 +172,14 @@ export function ChartModal({
     barLayout,
   } = chart;
   const chartColor = CHART_SERIES_COLORS[(index ?? 0) % CHART_SERIES_COLORS.length];
+
+  // W2 · field-aware axis tick formatters (parity with ChartOnlyModal's Wave-F3
+  // upgrade) so the chat zoom view formats rate columns as "%", currency with
+  // symbols, and large counts as K/M/B — instead of the field-blind raw number
+  // (0.742 / 1200000) the chat modal showed before.
+  const yTickFormatter = useMemo(() => makeAxisTickFormatter(y), [y]);
+  const y2TickFormatter = useMemo(() => makeAxisTickFormatter(chart.y2), [chart.y2]);
+  const xTickFormatter = useMemo(() => makeAxisTickFormatter(x), [x]);
 
   // Wave B3 · the chat/analysis zoom view exposes the same "Sort by" control as
   // the inline card for bar/column charts. Ephemeral (the card owns persistence).
@@ -433,7 +441,7 @@ export function ChartModal({
                 <YAxis
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 14, fontFamily: 'var(--font-mono)', fontWeight: 500 }}
                   stroke="hsl(var(--muted-foreground))"
-                  tickFormatter={formatAxisLabel}
+                  tickFormatter={yTickFormatter}
                   width={90}
                   label={{
                     value: yLabel || y,
@@ -520,7 +528,7 @@ export function ChartModal({
                   <YAxis
                     tick={{ fill: leftAxisColor, fontSize: 14, fontFamily: 'var(--font-mono)', fontWeight: 500 }}
                     stroke={leftAxisColor}
-                    tickFormatter={formatAxisLabel}
+                    tickFormatter={yTickFormatter}
                     width={90}
                     label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: leftAxisColor, fontSize: 16, fontWeight: 600 } }}
                     yAxisId="left"
@@ -532,7 +540,7 @@ export function ChartModal({
                     yAxisId="right"
                     tick={{ fill: rightAxisColor, fontSize: 14, fontFamily: 'var(--font-mono)', fontWeight: 500 }}
                     stroke={rightAxisColor}
-                    tickFormatter={formatAxisLabel}
+                    tickFormatter={y2TickFormatter}
                     width={90}
                     label={{ value: chart.y2Label || chart.y2, angle: 90, position: 'right', style: { textAnchor: 'middle', fill: rightAxisColor, fontSize: 16, fontWeight: 600 } }}
                     domain={rightDomain}
@@ -543,7 +551,7 @@ export function ChartModal({
                 <YAxis
                   tick={{ fill: leftAxisColor, fontSize: 14, fontFamily: 'var(--font-mono)', fontWeight: 500 }}
                   stroke={leftAxisColor}
-                  tickFormatter={formatAxisLabel}
+                  tickFormatter={yTickFormatter}
                   width={90}
                   label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: leftAxisColor, fontSize: 16, fontWeight: 600 } }}
                   domain={leftDomain}
@@ -643,7 +651,7 @@ export function ChartModal({
               <YAxis
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 14, fontFamily: 'var(--font-mono)' }}
                 stroke="hsl(var(--muted-foreground))"
-                tickFormatter={formatAxisLabel}
+                tickFormatter={yTickFormatter}
                 width={90}
                 label={{
                   value: multiKeys.length ? yLabel || y : yLabel || y,
@@ -798,7 +806,7 @@ export function ChartModal({
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12, fontFamily: 'var(--font-mono)' }}
                 stroke="hsl(var(--muted-foreground))"
                 domain={xDomain || ['auto', 'auto']}
-                tickFormatter={formatAxisLabel}
+                tickFormatter={xTickFormatter}
                 tickCount={getTickCount(xDomain)}
                 height={60}
                 label={{ value: xLabel || x, position: 'insideBottom', offset: -5, style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
@@ -809,7 +817,7 @@ export function ChartModal({
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12, fontFamily: 'var(--font-mono)' }}
                 stroke="hsl(var(--muted-foreground))"
                 domain={yDomain || ['auto', 'auto']}
-                tickFormatter={formatAxisLabel}
+                tickFormatter={yTickFormatter}
                 tickCount={getTickCount(yDomain)}
                 width={90}
                 label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
@@ -941,7 +949,7 @@ export function ChartModal({
                 <YAxis
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 14, fontFamily: 'var(--font-mono)' }}
                   stroke="hsl(var(--muted-foreground))"
-                  tickFormatter={formatAxisLabel}
+                  tickFormatter={yTickFormatter}
                   width={90}
                   label={{
                     value: yLabel || y,
@@ -1020,7 +1028,7 @@ export function ChartModal({
               <YAxis
                 tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 14, fontFamily: 'var(--font-mono)' }}
                 stroke="hsl(var(--muted-foreground))"
-                tickFormatter={formatAxisLabel}
+                tickFormatter={yTickFormatter}
                 width={90}
                 label={{ value: yLabel || y, angle: -90, position: 'left', style: { textAnchor: 'middle', fill: 'hsl(var(--foreground))', fontSize: 16, fontWeight: 600 } }}
                 tickCount={DEFAULT_Y_TICKS}

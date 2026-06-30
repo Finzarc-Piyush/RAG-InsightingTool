@@ -10,6 +10,7 @@ import {
   updateSessionContextEndpoint,
   updateMessagePivotStateEndpoint,
   updateMessageChartSortEndpoint,
+  updateMessageChartSpecEndpoint,
   deleteSessionEndpoint,
   getDataSummaryEndpoint,
   getSessionAnalysisContextEndpoint,
@@ -112,6 +113,15 @@ router.patch(
 router.patch(
   '/sessions/:sessionId/messages/:messageTimestamp/charts/:chartIndex/sort',
   updateMessageChartSortEndpoint
+);
+
+// W5 · persist the chart parity toolbar's view-side spec mutations (mark switch /
+// stacked-grouped / show-labels / Top-N limit). Body: `{ spec: { type?, barLayout?,
+// dataLabels?, sort?, limit? } }` — `limit: null` clears the selection. Generalises
+// the sort write above; routes through `mutateChatDocument` (invariant #9).
+router.patch(
+  '/sessions/:sessionId/messages/:messageTimestamp/charts/:chartIndex/spec',
+  updateMessageChartSpecEndpoint
 );
 
 // Wave W-UD9 · per-dataset user directives. List + revoke. The directives

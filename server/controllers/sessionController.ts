@@ -27,6 +27,8 @@ import { buildRichDataSummary } from "../lib/richColumnProfile.js";
 import {
   chartSpecSchema,
   barSortSpecSchema,
+  chartTypeSchema,
+  chartLimitSpecSchema,
   dateTimeColumnPairSchema,
   dimensionHierarchySchema,
   pivotStateSchema,
@@ -999,6 +1001,137 @@ export const updateMessageChartSortEndpoint = async (req: Request, res: Response
     logger.error("Update message chart sort error:", err);
     return res.status(500).json({
       error: err instanceof Error ? err.message : "Failed to update chart sort",
+    });
+  }
+};
+
+// W5 · the per-message chart-spec PATCH. Generalises the Wave-S5 sort write so
+// the chat parity toolbar's view-side mutations (mark switch / stacked-grouped /
+// show-labels / Top-N limit) are durable too — matching how the dashboard
+// persists the same fields. Body: `{ spec: { type?, barLayout?, dataLabels?,
+// sort?, limit? } }`. `limit: null` clears the Top/Bottom-N selection.
+const messageChartSpecPatchSchema = z
+  .object({
+    type: chartTypeSchema.optional(),
+    barLayout: z.enum(["grouped", "stacked"]).optional(),
+    dataLabels: z.boolean().optional(),
+    sort: barSortSpecSchema.optional(),
+    // nullable so the client can clear a Top/Bottom-N selection (show all).
+    limit: chartLimitSpecSchema.nullable().optional(),
+  })
+  .strict();
+
+export const updateMessageChartSpecEndpoint = async (req: Request, res: Response) => {
+  try {
+    const sessionId = req.params.sessionId;
+    const ts = Number(req.params.messageTimestamp);
+    const chartIndex = Number(req.params.chartIndex);
+
+    if (!sessionId) {
+      return res.status(400).json({ error: "Session ID is required" });
+    }
+    if (!Number.isFinite(ts)) {
+      return res.status(400).json({ error: "messageTimestamp must be numeric" });
+    }
+    if (!Number.isInteger(chartIndex) || chartIndex < 0) {
+      return res.status(400).json({ error: "chartIndex must be a non-negative integer" });
+    }
+
+    const username = requireUsername(req);
+
+    const parsed = messageChartSpecPatchSchema.safeParse(req.body?.spec);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid chart spec payload",
+        details: parsed.error.flatten(),
+      });
+    }
+    const patch = parsed.data;
+    if (Object.keys(patch).length === 0) {
+      return res
+        .status(400)
+        .json({ error: "At least one chart spec field is required" });
+    }
+
+    // Ownership gate + 404 resolution from the owned snapshot (mirrors the sort
+    // endpoint); the mutate below re-reads FRESH inside the write lock.
+    const owned = await getChatBySessionIdForUser(sessionId, username);
+    if (!owned) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    const ownedMessages = Array.isArray(owned.messages) ? owned.messages : [];
+    const ownedIdx = ownedMessages.findIndex(
+      (m) => m && m.role === "assistant" && m.timestamp === ts
+    );
+    if (ownedIdx < 0) {
+      return res.status(404).json({ error: "Assistant message not found for given timestamp" });
+    }
+    const ownedCharts = Array.isArray(ownedMessages[ownedIdx]!.charts)
+      ? ownedMessages[ownedIdx]!.charts!
+      : [];
+    if (chartIndex >= ownedCharts.length || !ownedCharts[chartIndex]) {
+      return res.status(404).json({ error: "Chart index out of range" });
+    }
+
+    const updated = await mutateChatDocument(sessionId, (doc) => {
+      const messages = Array.isArray(doc.messages) ? doc.messages : [];
+      const idx = messages.findIndex(
+        (m) => m && m.role === "assistant" && m.timestamp === ts
+      );
+      if (idx < 0) return false;
+      const charts = Array.isArray(messages[idx]!.charts) ? messages[idx]!.charts! : [];
+      if (chartIndex >= charts.length || !charts[chartIndex]) return false;
+      const nextCharts = charts.slice();
+      const nextChart: ChartSpec = { ...nextCharts[chartIndex]! };
+
+      // Apply the mark switch FIRST and normalise like the client's
+      // coerceMarkType — leaving bar strips the bar-only layout + value sort so
+      // the stored spec stays consistent regardless of what the client sent.
+      if (patch.type !== undefined) {
+        nextChart.type = patch.type;
+        if (patch.type !== "bar") {
+          delete nextChart.barLayout;
+          delete nextChart.sort;
+        }
+      }
+      // Layout only applies to a bar (post-switch); ignore otherwise.
+      if (patch.barLayout !== undefined && nextChart.type === "bar") {
+        nextChart.barLayout = patch.barLayout;
+      }
+      if (patch.dataLabels !== undefined) {
+        nextChart.dataLabels = patch.dataLabels;
+      }
+      if (patch.sort !== undefined && nextChart.type === "bar") {
+        nextChart.sort = patch.sort;
+      }
+      if (patch.limit !== undefined) {
+        if (patch.limit === null) delete nextChart.limit;
+        else nextChart.limit = patch.limit;
+      }
+
+      nextCharts[chartIndex] = nextChart;
+      messages[idx] = { ...messages[idx]!, charts: nextCharts };
+      doc.messages = messages;
+      return true;
+    });
+
+    if (!updated) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+    return res.json({ ok: true, spec: patch });
+  } catch (err: unknown) {
+    if (err instanceof AuthenticationError) {
+      return res.status(401).json({ error: err.message });
+    }
+    if (getErrorStatus(err) === 404) {
+      return res.status(404).json({ error: errorMessage(err) });
+    }
+    if (getErrorStatus(err) === 403 || /unauthorized/i.test(errorMessage(err))) {
+      return res.status(403).json({ error: errorMessage(err) });
+    }
+    logger.error("Update message chart spec error:", err);
+    return res.status(500).json({
+      error: err instanceof Error ? err.message : "Failed to update chart spec",
     });
   }
 };

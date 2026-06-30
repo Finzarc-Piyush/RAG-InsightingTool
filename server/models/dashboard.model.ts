@@ -839,7 +839,14 @@ export const updateChartInsightOrRecommendation = async (
   username: string,
   chartIndex: number,
   sheetId: string | undefined,
-  updates: { keyInsight?: string; sort?: BarSortSpec; limit?: ChartLimitSpec | null }
+  updates: {
+    keyInsight?: string;
+    sort?: BarSortSpec;
+    limit?: ChartLimitSpec | null;
+    type?: ChartSpec["type"];
+    barLayout?: "grouped" | "stacked";
+    dataLabels?: boolean;
+  }
 ): Promise<Dashboard> => {
   const normalizedUsername = username.toLowerCase();
   
@@ -898,37 +905,54 @@ export const updateChartInsightOrRecommendation = async (
 
   const chart = targetSheet.charts[chartIndex]!;
 
-  // Update the chart's keyInsight
-  if (updates.keyInsight !== undefined) {
-    // If empty string, set to undefined to remove it
-    chart.keyInsight = updates.keyInsight === '' ? undefined : updates.keyInsight;
-  }
-  // Wave S6 · persist the chart's "Sort by" choice so the dashboard reopens in
-  // the curator's chosen order. Display order itself is applied client-side.
-  if (updates.sort !== undefined) {
-    chart.sort = updates.sort;
-  }
-  // Persist the Top-N / Bottom-N selection (null clears it → show all).
-  if (updates.limit !== undefined) {
-    chart.limit = updates.limit ?? undefined;
-  }
+  // Capture the chart's identity BEFORE mutating it — the legacy-charts lookup
+  // below matches on title + type, so a W6 mark switch would otherwise fail to
+  // find (and dual-write) the matching legacy chart.
+  const originalTitle = chart.title;
+  const originalType = chart.type;
 
-  // Also update in the legacy charts array for backward compatibility
-  // Find the matching chart in the main charts array
-  const mainChartIndex = dashboard.charts.findIndex(c =>
-    c.title === chart.title && c.type === chart.type
-  );
-  if (mainChartIndex >= 0) {
+  // A small, shared spec mutator so the sheet chart and the legacy mirror stay
+  // identical (and consistent with the client's coerceMarkType — leaving bar
+  // strips the bar-only layout + value sort).
+  const applyChartUpdates = (target: ChartSpec) => {
     if (updates.keyInsight !== undefined) {
       // If empty string, set to undefined to remove it
-      dashboard.charts[mainChartIndex]!.keyInsight = updates.keyInsight === '' ? undefined : updates.keyInsight;
+      target.keyInsight = updates.keyInsight === '' ? undefined : updates.keyInsight;
     }
-    if (updates.sort !== undefined) {
-      dashboard.charts[mainChartIndex]!.sort = updates.sort;
+    // W6 · mark switch FIRST so the bar-only strip runs before barLayout/sort.
+    if (updates.type !== undefined) {
+      target.type = updates.type;
+      if (updates.type !== 'bar') {
+        target.barLayout = undefined;
+        target.sort = undefined;
+      }
     }
+    // Wave S6 · persist the "Sort by" choice (bar only, post-switch).
+    if (updates.sort !== undefined && target.type === 'bar') {
+      target.sort = updates.sort;
+    }
+    // Persist the Top-N / Bottom-N selection (null clears it → show all).
     if (updates.limit !== undefined) {
-      dashboard.charts[mainChartIndex]!.limit = updates.limit ?? undefined;
+      target.limit = updates.limit ?? undefined;
     }
+    // W6 · stacked/grouped (bar only, post-switch) + show-labels toggle.
+    if (updates.barLayout !== undefined && target.type === 'bar') {
+      target.barLayout = updates.barLayout;
+    }
+    if (updates.dataLabels !== undefined) {
+      target.dataLabels = updates.dataLabels;
+    }
+  };
+
+  applyChartUpdates(chart);
+
+  // Also update the legacy charts array for backward compatibility — match on
+  // the ORIGINAL identity (pre-mutation) so a type switch still finds it.
+  const mainChartIndex = dashboard.charts.findIndex(c =>
+    c.title === originalTitle && c.type === originalType
+  );
+  if (mainChartIndex >= 0) {
+    applyChartUpdates(dashboard.charts[mainChartIndex]!);
   }
 
   return updateDashboard(dashboard);

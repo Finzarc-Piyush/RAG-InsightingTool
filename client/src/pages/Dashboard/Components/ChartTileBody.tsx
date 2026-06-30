@@ -1,6 +1,8 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BarChart3, Maximize2, Table2, Trash2 } from "lucide-react";
+import { useLocation } from "wouter";
+import { AlertTriangle, BarChart3, Maximize2, Table2, Telescope, Trash2 } from "lucide-react";
 import type { ChartSpec } from "@/shared/schema";
+import { buildChartInvestigationPrompt } from "@/lib/charts/investigateQuestion";
 import { applyChartFilters, type ActiveChartFilters } from "@/lib/chartFilters";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +14,13 @@ import { TileHeader } from "./TileHeader";
 import { TileInsightFooter } from "./TileInsightFooter";
 import { ChartTilePivotView } from "@/components/charts/ChartTilePivotView";
 import { chartSpecToPivotConfig } from "@/components/charts/chartSpecToPivotConfig";
+import { SourcePillRow } from "@/pages/Home/Components/SourcePillRow";
+import { ChartParityToolbar } from "@/components/charts/ChartParityToolbar";
+import {
+  coerceMarkType,
+  type SwitchableMark,
+  type ChartSpecPatch,
+} from "@/lib/charts/chartSpecMutations";
 import { ChartSortControl } from "@/components/charts/ChartSortControl";
 import { ChartLimitControl, type ChartLimit } from "@/components/charts/ChartLimitControl";
 import {
@@ -79,6 +88,12 @@ const ChartOnlyModal = lazy(() =>
 interface ChartTileBodyProps {
   tile: { kind: "chart"; id: string; title: string; chart: ChartSpec; index: number };
   dashboardId: string;
+  /**
+   * W11 · the dashboard's source session (if any) — forwarded to the fullscreen
+   * ChartOnlyModal so a bare chart can fetch an insight on open. Null/omitted
+   * for sessionless dashboards → the modal stays display-only.
+   */
+  sessionId?: string | null;
   canEdit: boolean;
   isEditing: boolean;
   inapplicableColumns: string[];
@@ -100,6 +115,13 @@ interface ChartTileBodyProps {
    */
   onLimitChange?: (limit: ChartLimit) => void;
   /**
+   * W7 · persist the parity toolbar's mark switch / stacked-grouped / show-labels
+   * (parent owns sheetId + the dashboards PATCH + refetch). Omitted → the change
+   * is an ephemeral view change (still instant), e.g. for viewers without edit
+   * permission. Server normalises the bar-only strip like the client.
+   */
+  onSpecChange?: (patch: ChartSpecPatch) => void;
+  /**
    * Wave WI2-wire-bind · shared LRU+TTL insight regen cache passed
    * down from `DashboardView`. When omitted the `useInsightRegen`
    * hook falls back to a per-tile cache, which is fine but loses
@@ -118,6 +140,7 @@ interface ChartTileBodyProps {
 export function ChartTileBody({
   tile,
   dashboardId,
+  sessionId,
   canEdit,
   isEditing,
   inapplicableColumns,
@@ -127,14 +150,69 @@ export function ChartTileBody({
   onEditInsight,
   onSortChange,
   onLimitChange,
+  onSpecChange,
   insightRegenCache,
   insightHistoryStore,
 }: ChartTileBodyProps) {
   const { mode, toggle } = useChartTileViewMode(dashboardId, tile.id);
-  // Wave S6 · interactive sort. Re-orders tile.chart.data instantly client-side;
-  // `onSortChange` (parent) persists the choice to the dashboard.
-  const { sortedSpec, sort, setSort } = useChartSort(tile.chart);
-  const showSortControl = chartSupportsSort(tile.chart);
+  // W4 · local spec copy so the shared parity toolbar (mark-switch / layout /
+  // show-labels) can mutate the tile's chart view-side — parity with the chat
+  // card. Ephemeral for now; W7 persists it via the dashboards charts PATCH.
+  // Reset when the tile shows a structurally different chart (same pattern as
+  // the `limit` state below). `coerceMarkType` strips bar-only fields + value
+  // sort when leaving bar (shared with chat → no drift).
+  const chartIdentity = `${tile.chart.type}|${tile.chart.x}|${tile.chart.y}|${
+    tile.chart.seriesColumn ?? ""
+  }|${(tile.chart.seriesKeys ?? []).join(",")}`;
+  const [localSpec, setLocalSpec] = useState<ChartSpec>(tile.chart);
+  useEffect(() => {
+    setLocalSpec(tile.chart);
+    // chartIdentity is the structural-content key — an upstream re-render handing
+    // back a new object reference for the same chart must NOT wipe the user's
+    // mark/layout choice. tile.chart intentionally excluded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tile.id, chartIdentity]);
+  const handleTypeChange = useCallback(
+    (next: SwitchableMark) => {
+      setLocalSpec((prev) => coerceMarkType(prev, next));
+      onSpecChange?.({ type: next });
+    },
+    [onSpecChange],
+  );
+  const handleBarLayoutChange = useCallback(
+    (next: "stacked" | "grouped") => {
+      setLocalSpec((prev) =>
+        prev.type === "bar" ? { ...prev, barLayout: next } : prev,
+      );
+      onSpecChange?.({ barLayout: next });
+    },
+    [onSpecChange],
+  );
+  const handleDataLabelsChange = useCallback(
+    (next: boolean) => {
+      setLocalSpec((prev) => ({ ...prev, dataLabels: next }));
+      onSpecChange?.({ dataLabels: next });
+    },
+    [onSpecChange],
+  );
+
+  // W13 · "Investigate further" → open the dashboard's source chat with a
+  // diagnostic+strategic deep-dive question pre-filled (editable, NOT auto-sent),
+  // reusing the `?compose=` param Home consumes — parity with the chat tile's
+  // Telescope button. Hidden when the dashboard has no source session.
+  const [, setLocation] = useLocation();
+  const handleInvestigate = useCallback(() => {
+    if (!sessionId) return;
+    const q = buildChartInvestigationPrompt(localSpec);
+    setLocation(
+      `/analysis/${encodeURIComponent(sessionId)}?compose=${encodeURIComponent(q)}`,
+    );
+  }, [sessionId, localSpec, setLocation]);
+
+  // Wave S6 · interactive sort. Re-orders the (locally-mutated) spec's data
+  // instantly client-side; `onSortChange` (parent) persists the choice.
+  const { sortedSpec, sort, setSort } = useChartSort(localSpec);
+  const showSortControl = chartSupportsSort(localSpec);
   const handleSortChange = useCallback(
     (next: ChartSortSpec) => {
       setSort(next);
@@ -237,15 +315,15 @@ export function ChartTileBody({
   // we surface a "View all N records" CTA into the full sortable table (which
   // also enables bottom-N via ascending sort). Trends ('line'/'area') excluded.
   const categoryCount = useMemo(() => {
-    if (tile.chart.type !== "bar" || !tile.chart.x) return 0;
-    const xCol = tile.chart.x;
+    if (localSpec.type !== "bar" || !localSpec.x) return 0;
+    const xCol = localSpec.x;
     const seen = new Set<string>();
     for (const r of filteredRows) {
       const v = r[xCol];
       if (v != null && v !== "") seen.add(String(v));
     }
     return seen.size;
-  }, [filteredRows, tile.chart.type, tile.chart.x]);
+  }, [filteredRows, localSpec.type, localSpec.x]);
   const showViewAllCta =
     canPivot && effectiveMode === "chart" && categoryCount > 12;
   // Surface the durable Top/Bottom-N control on the tile when a bar chart carries
@@ -348,11 +426,25 @@ export function ChartTileBody({
 
   const headerActions = (
     <div className="flex items-center gap-1">
+      {/* W4 · shared mark-switch / layout / show-labels cluster — parity with
+          the chat card. Mutates the tile's local spec copy; self-gates per
+          mark (only bar/line/area show the type dropdown, etc.). */}
+      <ChartParityToolbar
+        type={localSpec.type}
+        barLayout={localSpec.barLayout}
+        dataLabels={localSpec.dataLabels}
+        hasSeries={
+          !!localSpec.seriesColumn || (localSpec.seriesKeys?.length ?? 0) > 1
+        }
+        onTypeChange={handleTypeChange}
+        onBarLayoutChange={handleBarLayoutChange}
+        onDataLabelsChange={handleDataLabelsChange}
+      />
       {showSortControl ? (
         <ChartSortControl
-          value={sort ?? tile.chart.sort}
+          value={sort ?? localSpec.sort}
           onChange={handleSortChange}
-          axisLabel={tile.chart.xLabel || tile.chart.x}
+          axisLabel={localSpec.xLabel || localSpec.x}
         />
       ) : null}
       {showLimitControl ? (
@@ -400,6 +492,19 @@ export function ChartTileBody({
           </button>
         </div>
       ) : null}
+      {sessionId ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          aria-label="Investigate this chart further with a deeper analysis"
+          title="Run a deeper analysis of this chart — drivers, why, and actions"
+          data-testid="tile-investigate-button"
+          onClick={handleInvestigate}
+        >
+          <Telescope className="h-4 w-4" />
+        </Button>
+      ) : null}
       {canEdit ? (
         <Button
           variant="ghost"
@@ -436,6 +541,19 @@ export function ChartTileBody({
         persistentActions={expandAction}
       />
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-0 px-4 pb-4">
+        {/* W1 · axisReason subtitle — parity with the chat card
+            (InteractiveChartCard). Surfaces the period-resolver's decision
+            ("Showing Quarter · Period, filtered to …") so a dashboard viewer
+            knows which time grain was picked and why. Read-only; absent for
+            non-period charts. */}
+        {tile.chart.axisReason ? (
+          <div
+            className="text-[11px] leading-snug text-muted-foreground"
+            data-testid="chart-axis-reason"
+          >
+            {tile.chart.axisReason}
+          </div>
+        ) : null}
         <div
           className={cn(
             "flex-1 min-h-[120px] min-w-0",
@@ -499,6 +617,10 @@ export function ChartTileBody({
           )}
           </DashboardTileProvider>
         </div>
+        {/* W12 · provenance pill (rows / cols / tools) — parity with the chat
+            card's SourcePillRow. Self-hides when the chart carries no
+            _agentProvenance (e.g. manually-added tiles). */}
+        <SourcePillRow chart={tile.chart} />
         {limit && categoryCount > limit.n ? (
           <div className="self-start text-xs text-muted-foreground">
             {limit.mode === "top" ? "Top" : "Bottom"} {limit.n} of {categoryCount}
@@ -551,6 +673,7 @@ export function ChartTileBody({
           <ChartOnlyModal
             isOpen={isExpandOpen}
             onClose={() => setIsExpandOpen(false)}
+            keyInsightSessionId={sessionId ?? null}
             {...buildExpandModalProps(
               sortedSpec,
               filters,

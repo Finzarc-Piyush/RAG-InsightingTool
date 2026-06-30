@@ -8,10 +8,14 @@ import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Slider } from '@/components/ui/slider';
-import { Filter, X, Settings2 } from 'lucide-react';
+import { BarChart3, Filter, Table2, X, Settings2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ChartSpec } from '@/shared/schema';
 import { ChartInsightBody } from '@/components/charts/ChartInsightBody';
+import { ChartTilePivotView } from '@/components/charts/ChartTilePivotView';
+import { chartSpecToPivotConfig } from '@/components/charts/chartSpecToPivotConfig';
+import { cn } from '@/lib/utils';
+import { api } from '@/lib/httpClient';
 import { ChartSortControl } from '@/components/charts/ChartSortControl';
 import { ChartLimitControl, type ChartLimit } from '@/components/charts/ChartLimitControl';
 import { useChartSort, chartSupportsSort } from '@/lib/charts/useChartSort';
@@ -80,6 +84,12 @@ interface ChartOnlyModalProps {
   handleResetFilters?: () => void;
   formatDateForDisplay?: (value?: string) => string | undefined;
   determineSliderStep?: (min: number, max: number) => number;
+  /**
+   * W11 · when set and the chart carries no inline keyInsight, fetch one on open
+   * (parity with the chat ChartModal). No-op for born-insighted charts or
+   * sessionless dashboards.
+   */
+  keyInsightSessionId?: string | null;
 }
 
 // Wave F3 · the field-blind `formatAxisLabel` was removed; axis ticks now use
@@ -104,12 +114,56 @@ export function ChartOnlyModal({
   handleResetFilters,
   formatDateForDisplay = formatDateForDisplayLocal,
   determineSliderStep = determineSliderStepLocal,
+  keyInsightSessionId = null,
 }: ChartOnlyModalProps) {
   const [showDots, setShowDots] = useState(false);
   const [hideOutliers, setHideOutliers] = useState(false); // Hide outliers for scatter plots
   const [pointSize, setPointSize] = useState<'small' | 'medium' | 'large'>('medium');
   const [pointOpacity, setPointOpacity] = useState<'low' | 'medium' | 'high'>('medium');
   const [pointDensity, setPointDensity] = useState<'low' | 'medium' | 'high' | 'all'>('medium');
+  // W9 · Chart ↔ pivot view toggle — parity with the chat ChartModal (the
+  // dashboard zoom view previously had no pivot view). Transient per-open:
+  // fresh opens default to the chart, mirroring the "Show dots" pattern.
+  const [view, setView] = useState<'chart' | 'pivot'>('chart');
+  useEffect(() => {
+    if (isOpen) setView('chart');
+  }, [isOpen]);
+  // W11 · on-demand Key-Insight fetch (parity with ChartModal). Only fires when
+  // the chart has no inline insight AND a source session is known.
+  const [fetchedKeyInsight, setFetchedKeyInsight] = useState<string | null>(null);
+  const [keyInsightLoading, setKeyInsightLoading] = useState(false);
+  useEffect(() => {
+    if (!isOpen) {
+      setFetchedKeyInsight(null);
+      setKeyInsightLoading(false);
+      return;
+    }
+    const existing =
+      typeof chart.keyInsight === 'string' && chart.keyInsight.trim().length > 0;
+    if (existing) return;
+    const sid = keyInsightSessionId?.trim();
+    if (!sid) return;
+    if (!Array.isArray(chart.data) || chart.data.length === 0) return;
+
+    let cancelled = false;
+    setKeyInsightLoading(true);
+    void (async () => {
+      try {
+        const res = await api.post<{ keyInsight: string }>(
+          `/api/sessions/${sid}/chart-key-insight`,
+          { chart },
+        );
+        if (!cancelled) setFetchedKeyInsight(res.keyInsight ?? null);
+      } catch {
+        // Best-effort: the modal still shows the chart without an insight.
+      } finally {
+        if (!cancelled) setKeyInsightLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, keyInsightSessionId, chart]);
   const {
     type,
     title,
@@ -125,6 +179,13 @@ export function ChartOnlyModal({
     barLayout,
   } = chart;
   const chartColor = CHART_SERIES_COLORS[0];
+
+  const canPivot = useMemo(() => {
+    if (chartSpecToPivotConfig(chart) === null) return false;
+    const filtered = enableFilters && Array.isArray(chartData) ? chartData : chart.data;
+    return Array.isArray(filtered) && filtered.length > 0;
+  }, [chart, chartData, enableFilters]);
+  const effectiveView: 'chart' | 'pivot' = canPivot ? view : 'chart';
 
   // Wave B3 · the fullscreen view exposes the same "Sort by" control as the
   // tile / chat card for bar/column charts (it never had one). Ephemeral: the
@@ -885,21 +946,60 @@ export function ChartOnlyModal({
             )}
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
-            {showSortControl && (
+            {canPivot && (
+              <div
+                className="inline-flex rounded-md border border-border overflow-hidden"
+                role="group"
+                aria-label="Chart or pivot view"
+                data-testid="chart-only-modal-pivot-toggle"
+              >
+                <button
+                  type="button"
+                  onClick={() => setView('chart')}
+                  aria-pressed={effectiveView === 'chart'}
+                  title="View as chart"
+                  className={cn(
+                    'px-1.5 py-1 text-xs transition-colors',
+                    effectiveView === 'chart'
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                  )}
+                >
+                  <BarChart3 className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="sr-only">View as chart</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setView('pivot')}
+                  aria-pressed={effectiveView === 'pivot'}
+                  title="View as pivot table"
+                  className={cn(
+                    'px-1.5 py-1 text-xs transition-colors border-l border-border',
+                    effectiveView === 'pivot'
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/40',
+                  )}
+                >
+                  <Table2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="sr-only">View as pivot table</span>
+                </button>
+              </div>
+            )}
+            {effectiveView === 'chart' && showSortControl && (
               <ChartSortControl
                 value={sort ?? chart.sort}
                 onChange={setSort}
                 axisLabel={xLabel || (typeof x === 'string' ? x : '')}
               />
             )}
-            {showSortControl && showLimitControl && (
+            {effectiveView === 'chart' && showSortControl && showLimitControl && (
               <ChartLimitControl
                 value={limit}
                 onChange={setLimit}
                 total={barCategoryCount}
               />
             )}
-            {type === 'line' && (
+            {effectiveView === 'chart' && type === 'line' && (
               <div className="flex items-center gap-2 px-2">
                 <Checkbox
                   id="show-dots-chart-only-modal"
@@ -914,7 +1014,7 @@ export function ChartOnlyModal({
                 </Label>
               </div>
             )}
-            {type === 'scatter' && (
+            {effectiveView === 'chart' && type === 'scatter' && (
               <>
                 <div className="flex items-center gap-2 px-2">
                   <Checkbox
@@ -1271,24 +1371,48 @@ export function ChartOnlyModal({
         <div className="flex flex-1 min-h-0 w-full flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
             <div ref={chartWidthRef} className="min-h-[500px] w-full pb-6">
-              {renderChart()}
+              {effectiveView === 'pivot' ? (
+                <div className="h-[500px] w-full" data-testid="chart-only-modal-pivot-body">
+                  <ChartTilePivotView
+                    chart={chart}
+                    filters={enableFilters ? effectiveFilters : undefined}
+                  />
+                </div>
+              ) : (
+                renderChart()
+              )}
             </div>
           </div>
-          {/* CI7 · the dashboard zoom view now shows the chart's auto-generated
-              insight (same shared <ChartInsightBody> as the tile footer + chat),
-              where it previously showed none. Display-only: the chart is
-              born-insighted server-side, so no on-demand fetch is wired here. */}
-          {chart.keyInsight && (
-            <div className="flex-shrink-0 border-t border-border/40 bg-muted/30 px-4 py-3 max-h-[30vh] overflow-y-auto">
-              <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
-                <span aria-hidden="true">✦</span>
-                Insight
-              </div>
-              <div className="mt-1 text-sm leading-relaxed text-foreground/90">
-                <ChartInsightBody keyInsight={chart.keyInsight} />
-              </div>
-            </div>
-          )}
+          {/* CI7 · the dashboard zoom view shows the chart's auto-generated
+              insight (same shared <ChartInsightBody> as the tile footer + chat).
+              W11 · if the chart is bare AND a source session is known, fetch one
+              on open (parity with the chat ChartModal). */}
+          {(() => {
+            const displayKeyInsight =
+              (typeof chart.keyInsight === 'string' && chart.keyInsight.trim()) ||
+              fetchedKeyInsight;
+            if (displayKeyInsight) {
+              return (
+                <div className="flex-shrink-0 border-t border-border/40 bg-muted/30 px-4 py-3 max-h-[30vh] overflow-y-auto">
+                  <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                    <span aria-hidden="true">✦</span>
+                    Insight
+                  </div>
+                  <div className="mt-1 text-sm leading-relaxed text-foreground/90">
+                    <ChartInsightBody keyInsight={displayKeyInsight} />
+                  </div>
+                </div>
+              );
+            }
+            if (keyInsightLoading) {
+              return (
+                <div className="flex-shrink-0 border-t border-border/40 bg-muted/30 px-4 py-3 text-xs text-muted-foreground">
+                  Generating insight…
+                </div>
+              );
+            }
+            return null;
+          })()}
         </div>
       </DialogContent>
     </Dialog>
