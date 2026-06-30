@@ -205,6 +205,20 @@ W8 · Decision-grade extensions — emit only those grounded in the findings:
   empty array when no credible "why" exists — never pad. This is what lets the
   answer explain itself ("more women survived, consistent with women-and-children-
   first") WITHOUT contaminating the measured findings.
+- "observation vs insight" (the bar this answer must clear): a result that reports a
+  NOTABLE pattern — a material gap, a drop or spike, a ranked disparity, an outlier —
+  and then STOPS is an OBSERVATION, not an insight. For each such result you MUST do
+  ONE of: (a) offer a grounded \`likelyDriver\` naming the plausible MECHANISM (under
+  the rails above), or (b) if no credible mechanism is available, say so — name in
+  \`unexplained\` (or a caveat) WHAT was not determined and WHICH cut of the data would
+  reveal it. Silence on "why" after a material movement is the failure mode to avoid.
+  Where a driver IS offered, the matching \`recommendation\` must act on THAT driver —
+  treat the cause, not the symptom ("Q-com trails because metro assortment is thin →
+  widen the metro SKU range", NOT "grow Q-com"). When a PERFORMANCE_STANDING block is
+  present, the leader/laggard ORDER is the established floor the reader already knows:
+  state it once, never as a discovery, and spend the analysis on the mechanism and the
+  move — that gap between "what the numbers are" and "why, and what to do" is exactly
+  the difference between an observation and an insight.
 
 Phase-1 rich envelope — REQUIRED whenever the user message declares a non-empty questionShape:
 - "magnitudes": entries that back your main claim. Each: {label, value, confidence?}. MUST come from findings — never invent. Emit zero when the answer carries no numeric backbone. When a magnitude comes from a ranked / per-entity finding, the \`label\` MUST name the entity and its metric in the form "EntityName · metric" (e.g. "Arindam Mazumdar · GCPC"), taking the name verbatim from the finding — NEVER a generic ordinal like "Top performer" / "Second-ranked". \`value\` carries the number (e.g. "257").

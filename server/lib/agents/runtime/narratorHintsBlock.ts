@@ -47,6 +47,10 @@ import {
   parseTemporalFacetDisplayKey,
   isTemporalFacetColumnKey,
 } from "../../temporalFacetColumns.js";
+import {
+  computePerformanceStanding,
+  type StandingUnit,
+} from "./performanceStanding.js";
 
 /**
  * Regex-extract `FindingEvidence` from a finding's detail string. The agent
@@ -231,6 +235,45 @@ export function buildNarratorCalendarBlock(ctx: AgentExecutionContext): string {
     (n) => formatCompactNumber(n)
   );
   return pattern ? pattern.block : "";
+}
+
+/**
+ * B1 · deterministic PERFORMANCE_STANDING block. When the turn's main table is
+ * a clean categorical breakdown (one dimension × one measure), rank it and tell
+ * the narrator to state the leader/laggard order as the established FLOOR — the
+ * manager already knows GT beats Q-com — then spend its words on the non-obvious
+ * (why the gaps exist, who's moving). Empty string on any ambiguous/trend shape,
+ * so it self-gates and never pads a simple answer.
+ */
+export function buildPerformanceStandingBlock(ctx: AgentExecutionContext): string {
+  const standing = computePerformanceStanding(ctx.lastAnalyticalTable, {
+    dateColumns: ctx.summary?.dateColumns,
+  });
+  if (!standing) return "";
+
+  const fmt = (n: number): string => formatCompactNumber(n);
+  const pct = (n: number): string => `${n >= 0 ? "" : ""}${Math.round(n)}%`;
+  const signedPct = (n: number): string => `${n >= 0 ? "+" : ""}${Math.round(n)}%`;
+  const describe = (u: StandingUnit): string =>
+    `${u.unit} — ${fmt(u.value)} (${pct(u.sharePct)} of total, ${signedPct(u.vsMeanPct)} vs mean)`;
+
+  const order = standing.units
+    .slice(0, 8)
+    .map((u) => `${u.rank}. ${u.unit} ${fmt(u.value)} (${pct(u.sharePct)})`)
+    .join(" · ");
+
+  const goal = standing.lowerIsBetter
+    ? "lower is better for this metric, so the leader is the LOWEST"
+    : "higher is better";
+
+  return (
+    `### PERFORMANCE_STANDING (deterministic ranking of this answer's "${standing.metric}" across "${standing.dimension}"; ${goal}. ` +
+    `The reader is an operator who very likely ALREADY knows who leads and who trails — state this order in ONE line as the established FLOOR, never as a discovery and never padded; then spend the analysis on what is NOT obvious: why the gaps are the size they are, which mid-pack units are moving, and what to do about the laggard):\n` +
+    `Leader: ${describe(standing.leader)}\n` +
+    `Laggard: ${describe(standing.laggard)}\n` +
+    `Concentration: leader holds ${pct(standing.leaderSharePct)} of the total; top 3 hold ${pct(standing.top3SharePct)}.\n` +
+    `Full order: ${order}`
+  );
 }
 
 /** Compact diagnostic summary — used for agentLog telemetry. */

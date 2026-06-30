@@ -54,6 +54,7 @@ import { completeJson, completeJsonStreaming, isStreamingNarratorEnabled } from 
 import { LLM_PURPOSE } from "./llmCallPurpose.js";
 import { ANALYST_PREAMBLE, ANSWER_ENVELOPE_CONTRACT } from "./sharedPrompts.js";
 import { stripOrQuestions } from "../../suggestedQuestionGuard.js";
+import { filterGenericRecommendations } from "../../recommendationQualityGuard.js";
 import { UNTRUSTED_CONTENT_RULE } from "./untrustedContent.js";
 import { agentLog } from "./agentLogger.js";
 import {
@@ -63,6 +64,7 @@ import {
 import {
   buildNarratorConfidenceBlock,
   buildNarratorCalendarBlock,
+  buildPerformanceStandingBlock,
   summarizeNarratorConfidence,
 } from "./narratorHintsBlock.js";
 import {
@@ -187,12 +189,17 @@ function stripFindingRefs(out: NarratorOutput): NarratorOutput {
       statement: stripRef(i.statement),
       soWhat: stripRef(i.soWhat),
     })),
-    recommendations: out.recommendations?.map((r) => ({
-      ...r,
-      action: stripRef(r.action),
-      rationale: stripRef(r.rationale),
-      expectedImpact: stripRef(r.expectedImpact),
-    })),
+    // B3 · drop common-sense filler ("monitor performance", "consider improving
+    // sales") that names no lever and carries no number — strip refs first, then
+    // filter. Pure subtraction, so it can never pad (invariant #12 safe).
+    recommendations: filterGenericRecommendations(
+      out.recommendations?.map((r) => ({
+        ...r,
+        action: stripRef(r.action),
+        rationale: stripRef(r.rationale),
+        expectedImpact: stripRef(r.expectedImpact),
+      }))
+    ),
     magnitudes: out.magnitudes?.map((m) => ({ ...m, label: stripRef(m.label) })),
     // CTAs are follow-up questions — drop any disjunctive ("... A or B ...") ask.
     ctas: out.ctas ? stripOrQuestions(out.ctas.map(stripRef)) : undefined,
@@ -365,6 +372,11 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
   // the per-chart Key-Insight grounding (insightGenerator.ts).
   const calendarBlock = buildNarratorCalendarBlock(ctx);
   const calendarSection = calendarBlock ? `\n\n${calendarBlock}` : "";
+  // B1 · deterministic leader/laggard standing for the main breakdown, so the
+  // narrator states the obvious ranking as the floor (not a discovery) and
+  // spends its analysis on the non-obvious. Empty for trend/ambiguous shapes.
+  const standingBlock = buildPerformanceStandingBlock(ctx);
+  const standingSection = standingBlock ? `\n\n${standingBlock}` : "";
   // W-CP1 · thread the analysis brief's epistemic notes (e.g. "avoid claiming
   // causation from observational data alone") into the USER message so the
   // narrator calibrates its likelyDrivers hedging. Kept in the user block (not
@@ -381,7 +393,7 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
         .map((n) => `- ${n}`)
         .join("\n")}`
     : "";
-  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${confidenceSection}${calendarSection}${bundleSection}${hierarchySection}${epistemicSection}${repairBlock}`;
+  const user = `${phase1Line}Question: ${ctx.question}\n\n${blackboardBlock}${confidenceSection}${calendarSection}${standingSection}${bundleSection}${hierarchySection}${epistemicSection}${repairBlock}`;
 
   // Use the streaming variant when (1) the env flag is on, (2) the caller
   // supplied a streaming hook, AND (3) this is the initial call (not a repair).

@@ -31,3 +31,13 @@ Channel is the single most important secondary dimension in Indian FMCG analytic
 - Quick-commerce growth is the most likely explanation for rapid recent shifts in metro mix.
 - A drop in MT performance with stable Q-com growth typically means the retailer is reallocating shelf, not that the brand is weakening.
 - "Channel skew" is a meaningful question to ask before drawing conclusions about brand strength.
+
+## Performance framing — how to read a channel comparison (qualitative; the data supplies every number)
+
+These are maturity priors a category manager already carries. Use them to judge what is GOOD vs BAD and to avoid stating the obvious as if it were a discovery. They never supply a figure — the dataset and tools own all magnitudes.
+
+- **GT leading on absolute value is the expected baseline, not a finding.** General Trade is the largest, most mature channel; that it out-sells Quick Commerce or D2C in absolute terms is something the reader already knows. State it once as the floor, then move on — the insight is *why a gap is the size it is* and *what is changing*, not the ranking itself.
+- **Judge each channel on its own yardstick.** A mature, high-volume channel (GT, often MT) is judged on stability and share defence — *deceleration* there is a real signal because it is not supposed to move much. A young, structurally small channel (Q-com, D2C) is judged on *growth and metro share-shift*, not absolute size — being small is its normal shape, so "Q-com is small" is not a problem and "Q-com is not growing" is.
+- **A laggard is only a problem in context.** Trailing within a mature high-volume channel (e.g. a weak GT region against its peers) warrants attention; trailing simply because a channel is structurally emerging (Q-com, D2C) usually does not.
+- **Prefer within-channel and share-of-channel reads over raw cross-channel totals.** Comparing a brand's GT trend to its own prior, or its share within Q-com, is more decision-useful than comparing GT's absolute size to Q-com's — the latter mostly restates channel maturity.
+- **The high-signal exceptions worth surfacing:** a mature channel decelerating, a fast channel (Q-com) stalling or shrinking, MT ceding shelf to Q-com in metros, or a single region/brand breaking its channel's usual pattern.

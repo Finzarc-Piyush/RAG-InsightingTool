@@ -48,6 +48,7 @@ import { LLM_PURPOSE } from "../llmCallPurpose.js";
 import { renderFallbackAnswer } from "../synthesisFallback.js";
 import { formatAnswerFromEnvelope } from "../agentLoopFormatters.js";
 import { callLlm } from "../callLlm.js";
+import { filterGenericRecommendations } from "../../../recommendationQualityGuard.js";
 
 /** PR 1.G — rich envelope for Phase-1 shapes. All new fields optional. */
 export const magnitudeSchema = z.object({
@@ -231,9 +232,9 @@ ${ANSWER_ENVELOPE_CONTRACT}`;
       : undefined;
   const cleanedRecommendations =
     Array.isArray(recommendations) && recommendations.length > 0
-      ? recommendations
-          .filter((r) => r && r.action?.trim() && r.rationale?.trim())
-          .slice(0, 4)
+      ? filterGenericRecommendations(
+          recommendations.filter((r) => r && r.action?.trim() && r.rationale?.trim())
+        )?.slice(0, 4)
       : undefined;
   // W-CP1 · pass the hedged causal lane through (non-empty only); the agent loop
   // applies the deterministic sanitize uniformly across narrator + synth paths.
