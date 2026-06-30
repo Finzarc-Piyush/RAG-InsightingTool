@@ -484,6 +484,16 @@ INSIGHT FORMAT (association, not action):
     ? `\n\nUSER NOTES:\n${synthesisContext.permanentContext.trim()}`
     : '';
 
+  // W12 finally wired: ground the per-chart DO/WHY in authored FMCG/Marico domain
+  // knowledge (e.g. that GT/MT/CSD/e-com/q-com are structurally different channels
+  // whose playbooks don't transfer) so the model stops emitting domain-impossible
+  // advice. Orientation ONLY — never numeric evidence; capped to keep the per-chart
+  // call cheap. Already passed in via generateInsightForCharts but was unused.
+  const DOMAIN_BLOCK_CHAR_CAP = 2000;
+  const domainBlock = synthesisContext?.domainContext?.trim()
+    ? `\n\nDOMAIN KNOWLEDGE (FMCG / Marico — orientation only, NEVER a source of numbers):\n${synthesisContext.domainContext.trim().slice(0, DOMAIN_BLOCK_CHAR_CAP)}`
+    : '';
+
   // Build chat insights context if available
   const chatInsightsContext = chatInsights && chatInsights.length > 0
     ? `\n\nRELEVANT CHAT-LEVEL INSIGHTS (optional cross-check; prefer DATA FACTS + user question):
@@ -530,7 +540,7 @@ ${isDualAxis ? `- Top ${y2Label} performer(s): ${topPerformerStrY2}\n- Bottom ${
 TASK: Brief a busy manager (NOT a statistician) on THIS chart in AT MOST 3 short lines. Use the real numbers from DATA FACTS / PIVOT PATTERNS / blocks below, but translate them into everyday language—never invent metrics. PIVOT PATTERNS are internal analysis signals: read them to find the story, but NEVER echo their labels (no "quartile", "concentration", "HHI", "CV", "P75", "mass", "trough"). Emit these lanes, each on its OWN line, omitting any optional lane that does not genuinely apply:
   Line 1 — HEADLINE (REQUIRED): the single most important comparison in plain words WITH the actual number(s), naming each group by its EXACT label from DATA FACTS (e.g. "Female passengers survived at 74% versus 19% for male passengers — nearly 4× higher"). One sentence. No hedge here; no "WHY:"/"DO:" prefix.
   Line 2 — start the line literally with "WHY: " then ONE clearly-hedged hypothesis for why the pattern might exist, drawn from the question and general real-world / business knowledge (OPTIONAL). It MUST open with a hedge ("likely", "may reflect", "consistent with", "one plausible reason") so it never reads as a measured fact, and MUST NOT contain any number (numbers belong in the headline). Omit the whole line if there is no credible reason. EXCEPTION — if a TEMPORAL CALENDAR block appears below, the WHY MUST use it: state the weekly rhythm plainly (e.g. "WHY: the regular dips are Sundays — a non-working day, so the weekly rise-and-fall is expected") and do NOT present that off-day pattern as a surprise, a demand swing, or a data gap. A calendar fact is observed, so a light hedge is fine but never contradict it.
-  Line 3 — start the line literally with "DO: " then THE single most useful next move a manager could make on this — their strategic next step. Name a concrete lever (price, distribution, mix, segment, channel, cadence, season) or a specific drill-down, and tie it to the named leader/laggard (e.g. "DO: Copy SAFF GOLD's metro distribution playbook to NIHAR NHO, where the same reach should lift sell-through"). Give a DO line for essentially every chart; OMIT it ONLY when the pattern is a fixed historical or structural fact nobody could ever act on. Never pad with a vague or generic step.
+  Line 3 — start the line literally with "DO: " then THE single most useful next move a manager could make on this — their strategic next step. Name a concrete lever (price, distribution, mix, segment, channel, cadence, season) or a specific drill-down, and tie it to the named leader/laggard (e.g. "DO: NIHAR NHO trails SAFF GOLD in metro — audit where NIHAR NHO loses shelf presence and close those specific gaps"). Do NOT tell one group to copy/replicate another's playbook when the two are structurally different CHANNELS or SEGMENTS (see anti-patterns). Give a DO line for essentially every chart; OMIT it ONLY when the pattern is a fixed historical or structural fact nobody could ever act on. Never pad with a vague or generic step.
 
 Keep it tight — a manager should absorb all of it in a few seconds. Drop a lane rather than padding it.
 
@@ -547,7 +557,7 @@ ${seriesKeys ? `- Series: ${chartSpec.seriesColumn?.trim() || 'series'} (${serie
 - Y stats: ${formatY(minY)}–${formatY(maxY)} (avg ${formatY(avgY)}, 75th percentile: ${formatY(yP75)})${isDualAxis ? ` | Y2: ${formatY2(minY2)}–${formatY2(maxY2)} (avg ${formatY2(avgY2)})` : ''}
 
 ${dataFactsContext}${pivotPatternsSection}${weekdayPatternSection}
-${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}${chatInsightsContext}
+${scatterBlock}${correlationContext}${userQuestionBlock}${sacBlock}${permBlock}${domainBlock}${chatInsightsContext}
 
 OUTPUT JSON (exact keys only):
 {
@@ -574,6 +584,7 @@ WRITE FOR A NON-MATH READER — translate the analysis, never parrot jargon:
 ANTI-PATTERNS — do NOT write any of these:
 - "Increase {y} where {y} is low" / "improve underperformers" / "lift weaker segments" — generic, not a mechanism.
 - "Focus on {top}" / "prioritize {leader}" without naming a *mechanism* (price, distribution, mix, segment, channel, cadence, season).
+- Cloning one group's playbook onto another that is a structurally DIFFERENT channel or segment ("copy GT's distribution / channel-mix / playbook into MT, CSD, e-commerce or quick commerce"). Sales channels — General Trade (GT), Modern Trade (MT), CSD, E-Commerce, Quick Commerce, D2C — and structurally different segments have fundamentally different economics: margins, listing/platform fees, reach, and fulfilment all differ, so the leader's levers do NOT transfer. When the compared groups differ structurally, the DO must INVESTIGATE the specific gap or RE-ALLOCATE investment — NEVER "replicate the leader's playbook onto the laggard." (Within the SAME channel, sharing a tactic between two brands/SKUs is fine.)
 - Sentences that only restate which value is highest or lowest with no interpretation.
 - Vague next-actions ("monitor", "investigate further", "look deeper"). If you give a next step, make it specific and clearly worth doing.
 - Meta-tool advice ("build / create / set up a dashboard, scorecard, tracker, monitoring view, or report to track this") — that is NOT a managerial action, it is just describing the surface the reader is already looking at. Recommend the underlying business decision (with a mechanism — price, distribution, mix, segment, channel, cadence, season), or OMIT the DO line.
@@ -583,7 +594,7 @@ The "WHY: " line is a plausible cause drawn from the question and general world 
 
 NEVER META-HEDGE: do not describe your OWN reasoning or the evidence as uncertain/undefined/incomplete (banned: "HHI is undefined", "CV not informative", "cannot be stated from the supplied evidence", "the data may be mis-coded or not populated", "from this slice alone"). When a series is ALL ZERO (or every value is the same), do not analyze its (non-existent) spread — state the plain, likely DOMAIN reason for the flatness in one sentence (e.g. "Adherence is 0% for every planned type here because it is only recorded on Market-Working days — the other types are not measurement opportunities, not low performers."), then stop. A flat-zero metric is an expected structural fact, not a data-quality problem to speculate about.
 
-Never use percentile shorthand like P75 or P90 — use numeric values. Always abbreviate magnitudes ≥1000 with K / M / B (e.g. 108547 → 109K, 15240 → 15.2K, 1500000 → 1.5M); never emit raw digit strings for thousands or millions. Never print more than two decimal places for any number. EMPHASIS: wrap every token taken from the data — exact category / series / metric labels AND the numeric figures — in markdown bold (**…**), e.g. "**PCNO(R)** leads at **75.9** versus **NIHAR NHO** at **24.5**". Bold only data-derived tokens, never ordinary prose, and no markdown headers.`,
+Never use percentile shorthand like P75 or P90 — use numeric values. All figures are INR: abbreviate magnitudes in the Indian numbering system with a SPACE before the suffix — ≥1 crore → 'Cr' (e.g. 311587406 → ₹31.2 Cr), ≥1 lakh → 'Lac' (e.g. 481000 → ₹4.81 Lac), ≥1 thousand → 'K' (e.g. 15240 → ₹15.2 K). Prefix currency figures with ₹; NEVER use $, M, or B; never emit raw digit strings for thousands or larger. Never print more than two decimal places for any number. EMPHASIS: wrap every token taken from the data — exact category / series / metric labels AND the numeric figures — in markdown bold (**…**), e.g. "**PCNO(R)** leads at **75.9** versus **NIHAR NHO** at **24.5**". Bold only data-derived tokens, never ordinary prose, and no markdown headers.`,
           },
           { role: 'user', content: prompt },
         ],
