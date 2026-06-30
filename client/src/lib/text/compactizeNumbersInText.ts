@@ -33,7 +33,8 @@ export function compactizeNumbersInText(text: string): string {
       if (Math.abs(parsed) < THRESHOLD) return match;
 
       if (symbol) {
-        return formatCurrency(parsed, symbol, 1);
+        // Data is INR-only: never let a "$" leak through prose — render ₹.
+        return formatCurrency(parsed, symbol === "$" ? "₹" : symbol, 1);
       }
 
       if (

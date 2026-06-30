@@ -1,27 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { compactizeNumbersInText } from "./compactizeNumbersInText";
 
-describe("compactizeNumbersInText · currency", () => {
-  it("compacts USD with thousands separators and decimals", () => {
-    expect(compactizeNumbersInText("$446,299.18")).toBe("$446.3K");
-    expect(compactizeNumbersInText("$306,361.15")).toBe("$306.4K");
-    expect(compactizeNumbersInText("$168,572.53")).toBe("$168.6K");
+describe("compactizeNumbersInText · currency (Indian: ₹ + Cr/Lac/K)", () => {
+  it("maps $ → ₹ (data is INR-only) and compacts in lakhs", () => {
+    expect(compactizeNumbersInText("$446,299.18")).toBe("₹4.46 Lac");
+    expect(compactizeNumbersInText("$306,361.15")).toBe("₹3.06 Lac");
+    expect(compactizeNumbersInText("$168,572.53")).toBe("₹1.69 Lac");
   });
 
-  it("compacts at million and billion tiers", () => {
-    expect(compactizeNumbersInText("$1,234,567")).toBe("$1.2M");
-    expect(compactizeNumbersInText("$2,000,000,000")).toBe("$2B");
+  it("compacts at lakh and crore tiers", () => {
+    expect(compactizeNumbersInText("$1,234,567")).toBe("₹12.3 Lac");
+    expect(compactizeNumbersInText("$2,000,000,000")).toBe("₹200 Cr");
   });
 
-  it("supports ₹, £, €, ¥", () => {
-    expect(compactizeNumbersInText("₹1,500,000")).toBe("₹1.5M");
-    expect(compactizeNumbersInText("£999,000")).toBe("£999K");
-    expect(compactizeNumbersInText("€1,234")).toBe("€1.2K");
-    expect(compactizeNumbersInText("¥2,500,000")).toBe("¥2.5M");
+  it("keeps explicit ₹, £, €, ¥ symbols (only $ is remapped)", () => {
+    expect(compactizeNumbersInText("₹1,500,000")).toBe("₹15 Lac");
+    expect(compactizeNumbersInText("£999,000")).toBe("£9.99 Lac");
+    expect(compactizeNumbersInText("€1,234")).toBe("€1.23 K");
+    expect(compactizeNumbersInText("¥2,500,000")).toBe("¥25 Lac");
   });
 
   it("preserves negative sign on currency", () => {
-    expect(compactizeNumbersInText("-$1,234,567")).toBe("-$1.2M");
+    expect(compactizeNumbersInText("-$1,234,567")).toBe("-₹12.3 Lac");
   });
 
   it("rewrites currency in flowing prose", () => {
@@ -29,25 +29,25 @@ describe("compactizeNumbersInText · currency", () => {
       compactizeNumbersInText(
         "California sales of $446,299.18, New York $306,361.15, Texas $168,572.53.",
       ),
-    ).toBe("California sales of $446.3K, New York $306.4K, Texas $168.6K.");
+    ).toBe("California sales of ₹4.46 Lac, New York ₹3.06 Lac, Texas ₹1.69 Lac.");
   });
 });
 
 describe("compactizeNumbersInText · plain numbers", () => {
   it("compacts plain numbers with thousands separators", () => {
-    expect(compactizeNumbersInText("1,234,567")).toBe("1.2M");
-    expect(compactizeNumbersInText("50,000")).toBe("50K");
+    expect(compactizeNumbersInText("1,234,567")).toBe("12.3 Lac");
+    expect(compactizeNumbersInText("50,000")).toBe("50 K");
   });
 
   it("compacts plain numbers without separators", () => {
-    expect(compactizeNumbersInText("50000 units")).toBe("50K units");
+    expect(compactizeNumbersInText("50000 units")).toBe("50 K units");
     expect(compactizeNumbersInText("we shipped 1234567 boxes")).toBe(
-      "we shipped 1.2M boxes",
+      "we shipped 12.3 Lac boxes",
     );
   });
 
   it("preserves negative sign on plain numbers", () => {
-    expect(compactizeNumbersInText("-1,234,567")).toBe("-1.2M");
+    expect(compactizeNumbersInText("-1,234,567")).toBe("-12.3 Lac");
   });
 });
 
@@ -80,9 +80,11 @@ describe("compactizeNumbersInText · skips", () => {
     );
   });
 
-  it("does not double-format numbers already shorthand", () => {
-    expect(compactizeNumbersInText("$1.95M")).toBe("$1.95M");
-    expect(compactizeNumbersInText("710K and 2.3B")).toBe("710K and 2.3B");
+  it("is idempotent on already-Indian shorthand", () => {
+    // The mantissa is < 1000, so a value already rendered "₹1.95 Cr" / "104.9 Cr"
+    // is left untouched on a second pass.
+    expect(compactizeNumbersInText("₹1.95 Cr")).toBe("₹1.95 Cr");
+    expect(compactizeNumbersInText("710 K and 2.3 Cr")).toBe("710 K and 2.3 Cr");
   });
 
   it("does not touch identifiers that contain digits", () => {
@@ -100,7 +102,7 @@ describe("compactizeNumbersInText · skips", () => {
 
 describe("compactizeNumbersInText · markdown safety", () => {
   it("compacts numbers inside bold markers", () => {
-    expect(compactizeNumbersInText("**$446,299.18**")).toBe("**$446.3K**");
+    expect(compactizeNumbersInText("**$446,299.18**")).toBe("**₹4.46 Lac**");
   });
 
   it("is a no-op on text with no numbers", () => {
@@ -115,15 +117,16 @@ describe("compactizeNumbersInText · markdown safety", () => {
 });
 
 describe("compactizeNumbersInText · screenshot reproduction", () => {
-  it("reformats the prose from the bug report", () => {
+  it("reformats the Key-Insights full-precision numbers into Cr (bare numbers get no ₹)", () => {
+    // The narrator emits these as bare numbers, so compaction renders magnitude
+    // words only — the ₹ prefix comes from the narrator's own output (prompt) or
+    // from field-typed chart axes, not from a context-free bare number.
     const input =
-      "California generates the highest sales revenue among U.S. states, with total sales of $446,299.18. New York follows with $306,361.15, and Texas ranks third at $168,572.53.";
+      "GT holds the largest retailer-margin pool at 1,049,389,992.94, ahead of MT at 311,587,406.72.";
     const output = compactizeNumbersInText(input);
-    expect(output).toContain("$446.3K");
-    expect(output).toContain("$306.4K");
-    expect(output).toContain("$168.6K");
-    expect(output).not.toContain("299.18");
-    expect(output).not.toContain("361.15");
-    expect(output).not.toContain("572.53");
+    expect(output).toContain("104.9 Cr");
+    expect(output).toContain("31.2 Cr");
+    expect(output).not.toContain("1,049,389,992");
+    expect(output).not.toContain("311,587,406");
   });
 });

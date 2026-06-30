@@ -61,7 +61,7 @@ test("highlights include a row-count records-in-scope bullet", () => {
   const facts = buildDeterministicScopeFacts(superstoreSummary);
   const records = facts.highlights.find((h) => /records in scope/.test(h));
   assert.ok(records, `expected a row-count bullet in ${JSON.stringify(facts.highlights)}`);
-  assert.match(records!, /9\.8K/);
+  assert.match(records!, /9\.8 K/);
 });
 
 test("analyzeThemes picks the primary metric heuristically (Sales)", () => {

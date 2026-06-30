@@ -230,12 +230,18 @@ function pickAnalyzableDimensions(summary: DataSummary, max: number): string[] {
 }
 
 // ── row-count formatter ──────────────────────────────────────────────────────
-// INTENTIONALLY distinct from the narrative magnitude authority
-// (formatCompactNumber): a COUNT of records reads better integer-leaning
-// ("15K records", "1.2M records") than with a forced decimal ("15.2K records").
-// This is a deliberate non-consolidation, not drift — counts ≠ magnitudes.
+// Indian magnitude words (Cr / Lac / K) for consistency with the rest of the
+// app, but NO ₹ symbol (a record count is not money) and integer-leaning (a
+// COUNT reads better as "15 Lac records" than "15.2 Lac records"). Kept separate
+// from formatCompactNumber because of the integer-leaning + no-symbol rules.
 function formatRowCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}K`;
-  return n.toLocaleString();
+  const tier = (factor: number, suffix: string): string => {
+    const v = n / factor;
+    const s = v >= 10 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/, "");
+    return `${s} ${suffix}`;
+  };
+  if (n >= 1e7) return tier(1e7, "Cr");
+  if (n >= 1e5) return tier(1e5, "Lac");
+  if (n >= 1e3) return tier(1e3, "K");
+  return n.toLocaleString("en-IN");
 }

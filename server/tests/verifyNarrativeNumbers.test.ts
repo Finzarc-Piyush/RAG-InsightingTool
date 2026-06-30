@@ -44,6 +44,24 @@ describe("extractNumbersFromNarrative", () => {
     assert.ok(values.some((v) => Math.abs(v - 10_000_000) < 1));
   });
 
+  it("expands the emitted Indian abbreviations (Cr / Lac / K) — round-trips our formatters", () => {
+    const cr = extractNumbersFromNarrative("GT holds the largest pool at ₹104.9 Cr.");
+    assert.ok(cr.some((g) => Math.abs(g.value - 1_049_000_000) < 1_000_000));
+    const crNoSym = extractNumbersFromNarrative("MT trails at 31.2 Cr overall.");
+    assert.ok(crNoSym.some((g) => Math.abs(g.value - 312_000_000) < 1_000_000));
+    const lac = extractNumbersFromNarrative("DTC sits at just ₹4.81 Lac.");
+    assert.ok(lac.some((g) => Math.abs(g.value - 481_000) < 1_000));
+    const k = extractNumbersFromNarrative("Only 50 K units shipped.");
+    assert.ok(k.some((g) => Math.abs(g.value - 50_000) < 1));
+  });
+
+  it("does NOT misread an ordinal like '5th' as 5 thousand (no 'Th' suffix)", () => {
+    const got = extractNumbersFromNarrative("The 5th wave shipped 12,500 units.");
+    const values = got.map((g) => g.value);
+    assert.ok(!values.includes(5_000));
+    assert.ok(values.some((v) => Math.abs(v - 12_500) < 1));
+  });
+
   it("extracts large bare numbers with thousands separators", () => {
     const got = extractNumbersFromNarrative("9,800 rows were ingested.");
     assert.ok(got.some((g) => g.value === 9800));
@@ -144,6 +162,18 @@ describe("verifyNarrativeAgainstCharts", () => {
     assert.strictEqual(r.supported.length, 1);
     assert.strictEqual(r.unsupported.length, 1);
     assert.strictEqual(r.unsupported[0].value, 50_000);
+  });
+
+  it("supports an Indian-formatted claim that matches a raw chart value", () => {
+    // "₹104.9 Cr" in the narrative must reconcile with the raw 1,049,389,992
+    // chart row — the suffix expansion is what closes the audit loop.
+    const r = verifyNarrativeAgainstCharts(
+      "GT holds the largest retailer-margin pool at ₹104.9 Cr.",
+      [numericChart([{ channel: "GT", margin: 1_049_389_992 }])],
+      tolerance
+    );
+    assert.strictEqual(r.unsupported.length, 0);
+    assert.strictEqual(r.supported.length, 1);
   });
 
   it("returns an empty result when narrative has no claims", () => {

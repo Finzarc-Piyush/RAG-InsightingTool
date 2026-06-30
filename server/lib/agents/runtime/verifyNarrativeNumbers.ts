@@ -76,8 +76,12 @@ export function extractNumbersFromNarrative(text: string): ExtractedNumber[] {
     out.push({ value, raw, index });
   };
 
-  // Currency with magnitude suffix (M, B, K, lakh, crore)
-  const currencyRe = /([\$€£₹])\s*(-?[\d,]+(?:\.\d+)?)\s*(M|B|K|lakh|crore|million|billion|thousand)?/gi;
+  // Currency with magnitude suffix. Indian suffixes (Cr / Lac) listed
+  // longest-first so "₹31.2 Cr" / "₹4.81 Lac" parse correctly; the emitted
+  // suffixes (Cr/Lac/K) must round-trip here or the hallucination guard
+  // mis-audits Indian-formatted narration.
+  const currencyRe =
+    /([\$€£₹])\s*(-?[\d,]+(?:\.\d+)?)\s*(Crores|Crore|Cr|Lakhs|Lakh|Lacs|Lac|million|billion|thousand|M|B|K)?/gi;
   for (const m of text.matchAll(currencyRe)) {
     if (m.index == null) continue;
     const numeric = Number(m[2]!.replace(/,/g, ""));
@@ -93,8 +97,9 @@ export function extractNumbersFromNarrative(text: string): ExtractedNumber[] {
     push(m[0], v, m.index);
   }
 
-  // Magnitude-suffixed bare numbers ("12.3M sales", "4.2 lakh")
-  const magRe = /(-?[\d,]+(?:\.\d+)?)\s*(M|B|K|lakh|crore|million|billion|thousand)\b/gi;
+  // Magnitude-suffixed bare numbers ("104.9 Cr", "4.81 Lac", "12.3M", "4.2 lakh")
+  const magRe =
+    /(-?[\d,]+(?:\.\d+)?)\s*(Crores|Crore|Cr|Lakhs|Lakh|Lacs|Lac|million|billion|thousand|M|B|K)\b/gi;
   for (const m of text.matchAll(magRe)) {
     if (m.index == null) continue;
     const v = Number(m[1]!.replace(/,/g, "")) * unitMultiplier(m[2]);
@@ -121,8 +126,8 @@ function unitMultiplier(unit?: string | null): number {
   if (u === "k" || u === "thousand") return 1_000;
   if (u === "m" || u === "million") return 1_000_000;
   if (u === "b" || u === "billion") return 1_000_000_000;
-  if (u === "lakh") return 100_000;
-  if (u === "crore") return 10_000_000;
+  if (u === "lac" || u === "lacs" || u === "lakh" || u === "lakhs") return 100_000;
+  if (u === "cr" || u === "crore" || u === "crores") return 10_000_000;
   return 1;
 }
 

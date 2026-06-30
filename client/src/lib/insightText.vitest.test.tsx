@@ -34,6 +34,17 @@ describe('renderInsightText', () => {
     const nodes = renderInsightText('done.*');
     expect(nodes.join('')).toBe('done.');
   });
+
+  test('compacts a full-precision Key-Insights number into Indian Cr (no raw digits)', () => {
+    const nodes = renderInsightText(
+      'GT holds the largest pool at **1,049,389,992.94**',
+    );
+    const joined = nodes
+      .map((n) => (typeof n === 'string' ? n : (n as any).props?.children ?? ''))
+      .join('');
+    expect(joined).toContain('104.9 Cr');
+    expect(joined).not.toContain('1,049,389,992');
+  });
 });
 
 describe('plainInsightText', () => {

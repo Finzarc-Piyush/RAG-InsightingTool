@@ -1,5 +1,6 @@
 import React from 'react';
 import { clampInsightDecimals } from '@/lib/cleanEvidenceNumbers';
+import { compactizeNumbersInText } from '@/lib/text/compactizeNumbersInText';
 
 /**
  * W-BOLD1 · Shared inline rich-text renderer for analytical INSIGHT surfaces:
@@ -8,8 +9,10 @@ import { clampInsightDecimals } from '@/lib/cleanEvidenceNumbers';
  *
  * Returns inline React nodes — NO block wrapper — so it drops into <p>, flex
  * rows, and pills without disturbing layout. Two responsibilities, in order:
- *   1. clamp machine-precision decimals to ≤2 places (W-DEC1);
- *   2. render the markdown **bold** the LLM emits around every data-derived
+ *   1. compact bare/full-precision numbers into the Indian system (₹ + Cr/Lac/K)
+ *      so a raw "1,049,389,992.94" the narrator emits renders as "₹104.9 Cr";
+ *   2. clamp machine-precision decimals to ≤2 places (W-DEC1);
+ *   3. render the markdown **bold** the LLM emits around every data-derived
  *      name + value as <strong>, after stripping orphaned asterisks.
  *
  * The generator side (prompts) is what PRODUCES the `**…**`; this is the render
@@ -75,7 +78,9 @@ export function cleanOrphanedAsterisks(text: string): string {
  */
 export function plainInsightText(text: string | null | undefined): string {
   if (!text) return "";
-  return cleanOrphanedAsterisks(clampInsightDecimals(text)).replace(/\*\*/g, "");
+  return cleanOrphanedAsterisks(
+    clampInsightDecimals(compactizeNumbersInText(text)),
+  ).replace(/\*\*/g, "");
 }
 
 /**
@@ -87,7 +92,9 @@ export function renderInsightText(
   text: string | null | undefined,
 ): React.ReactNode[] {
   if (!text) return [];
-  const cleaned = cleanOrphanedAsterisks(clampInsightDecimals(text));
+  const cleaned = cleanOrphanedAsterisks(
+    clampInsightDecimals(compactizeNumbersInText(text)),
+  );
   const parts = cleaned.split(/(\*\*[^*]+\*\*)/g);
   return parts.map((part, index) => {
     if (part.startsWith('**') && part.endsWith('**')) {
