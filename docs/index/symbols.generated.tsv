@@ -429,6 +429,7 @@ buildBibliographyBlock	function	server/lib/agents/runtime/tools/webSearchTool.ts
 buildCachedResponsePayload	function	server/lib/cache/buildCachedResponsePayload.ts	64
 buildCacheKey	function	client/src/pages/Dashboard/lib/insightRegenCache.ts	168
 buildChartFromAnalyticalTable	function	server/lib/agents/runtime/chartFromTable.ts	83
+buildChartInvestigationPrompt	function	client/src/lib/charts/investigateQuestion.ts	39
 buildChatPivotNavEntries	function	client/src/pages/Home/lib/chatPivotNav.ts	80
 buildChunksForSession	function	server/lib/rag/chunking.ts	102
 buildChurn	function	server/scripts/lib/bootstrapSections.ts	120
@@ -717,6 +718,8 @@ chartSpecToPivotConfig	function	client/src/components/charts/chartSpecToPivotCon
 chartSpecToTableSpec	function	client/src/pages/Dashboard/lib/chartSpecToTableSpec.ts	18
 ChartSpecV2	type	server/shared/schema/charts.ts	838
 chartSpecV2Schema	const	server/shared/schema/charts.ts	825
+chartSubject	function	client/src/lib/charts/investigateQuestion.ts	25
+ChartSubjectLike	interface	client/src/lib/charts/investigateQuestion.ts	17
 ChartSuggestion	interface	server/lib/dataOps/pythonService.ts	224
 chartSupportsSort	function	client/src/lib/charts/useChartSort.ts	26
 ChartTheme	interface	client/src/lib/charts/echartsRenderers/EChartsBase.tsx	43
@@ -2314,7 +2317,7 @@ Message	type	server/shared/schema/charts.ts	2007
 MessageActionsBar	function	client/src/pages/Home/Components/MessageActionsBar.tsx	25
 MessageAnswerEnvelope	type	server/shared/schema/charts.ts	1741
 messageAnswerEnvelopeSchema	const	server/shared/schema/charts.ts	1680
-MessageBubble	const	client/src/pages/Home/Components/MessageBubble.tsx	1355
+MessageBubble	const	client/src/pages/Home/Components/MessageBubble.tsx	1383
 MessageForFeedback	type	client/src/pages/Home/Components/computeFeedbackTurnId.ts	15
 messageHasNavigablePivotTable	function	client/src/pages/Home/lib/chatPivotNav.ts	59
 messageSchema	const	server/shared/schema/charts.ts	1813
