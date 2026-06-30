@@ -42,12 +42,13 @@ describe("W14 · webSearchArgsSchema", () => {
 });
 
 describe("W14 · isWebSearchEnabled", () => {
-  // CFG-2: gate reads via the typed registry's canonical truthiness
-  // (`isFlagOn` → 1/true/yes/on, case-insensitive). Unset / 0/false/no/off = OFF.
-  it("is OFF when WEB_SEARCH_ENABLED is unset or a canonical-falsy value", () => {
+  // W-WEB: WEB_SEARCH_ENABLED is now a DEFAULT-ON flag — unset = ON (free
+  // providers, no key). It is OFF only for a canonical-falsy value
+  // (0/false/no/off, case-insensitive), via `envFlagEnabledByDefault`.
+  it("defaults ON when unset; OFF only for a canonical-falsy value", () => {
     const prev = process.env.WEB_SEARCH_ENABLED;
     delete process.env.WEB_SEARCH_ENABLED;
-    assert.equal(isWebSearchEnabled(), false);
+    assert.equal(isWebSearchEnabled(), true); // W-WEB · default ON
     for (const off of ["false", "0", "no", "off"]) {
       process.env.WEB_SEARCH_ENABLED = off;
       assert.equal(isWebSearchEnabled(), false, `expected OFF for ${off}`);
@@ -93,9 +94,11 @@ describe("W14 · web_search tool registration + gating", () => {
     assert.throws(() => registerWebSearchTool(registry));
   });
 
-  it("returns ok:false with a clear message when WEB_SEARCH_ENABLED is unset", async () => {
+  it("returns ok:false with a clear message when WEB_SEARCH_ENABLED is explicitly false", async () => {
     const prevEnabled = process.env.WEB_SEARCH_ENABLED;
-    delete process.env.WEB_SEARCH_ENABLED;
+    // W-WEB · the flag is default-ON now, so disabling requires an explicit
+    // falsy value (not just unset).
+    process.env.WEB_SEARCH_ENABLED = "false";
     const registry = new ToolRegistry();
     registerWebSearchTool(registry);
     const result = await registry.execute("web_search", { query: "anything" }, ctx as never);

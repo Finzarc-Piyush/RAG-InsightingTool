@@ -38,7 +38,8 @@ const ctx = {
 describe("Wave R3 · knowledge-floor guidance", () => {
   it("disabled web_search keeps the W14 substring AND adds knowledge-floor guidance", async () => {
     const prev = process.env.WEB_SEARCH_ENABLED;
-    delete process.env.WEB_SEARCH_ENABLED;
+    // W-WEB · default-ON now, so the disabled path needs an explicit falsy value.
+    process.env.WEB_SEARCH_ENABLED = "false";
     const registry = new ToolRegistry();
     registerWebSearchTool(registry);
     const result = await registry.execute("web_search", { query: "x" }, ctx as never);

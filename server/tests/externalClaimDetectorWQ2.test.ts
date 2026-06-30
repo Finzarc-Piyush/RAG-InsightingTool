@@ -231,3 +231,27 @@ describe("WQ2 · regex statefulness — repeated calls", () => {
     assert.equal(r1.claims.length, r2.claims.length);
   });
 });
+
+describe("W-WEB · channel/industry + compare-to-market markers", () => {
+  it("fires on a channel industry-trend ('quick commerce growth')", () => {
+    const r = detectExternalClaims("Is quick commerce growth an industry shift or just us?");
+    assert.equal(r.hasExternalClaim, true);
+    assert.ok(r.claims.some((c) => c.type === "market_size"));
+  });
+
+  it("fires on 'growth of e-commerce'", () => {
+    const r = detectExternalClaims("How much of this is the growth of e-commerce nationally?");
+    assert.equal(r.hasExternalClaim, true);
+  });
+
+  it("fires on 'compared to the market'", () => {
+    const r = detectExternalClaims("How are we doing compared to the market?");
+    assert.equal(r.hasExternalClaim, true);
+    assert.ok(r.claims.some((c) => c.type === "industry_benchmark"));
+  });
+
+  it("does NOT fire on a plain internal channel comparison ('GT vs Q-com volume')", () => {
+    const r = detectExternalClaims("Show me GT vs Q-com volume by region.");
+    assert.equal(r.hasExternalClaim, false);
+  });
+});

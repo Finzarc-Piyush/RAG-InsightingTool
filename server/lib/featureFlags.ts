@@ -205,8 +205,14 @@ export const FEATURE_FLAGS = {
     lifecycle: "experimental",
   },
   WEB_SEARCH_ENABLED: {
-    default: false,
-    purpose: "Enable the web-search tool for external context.",
+    // W-WEB · default ON. The default provider path is free (Wikipedia + GDELT,
+    // no API key) and degrades gracefully to the model's own knowledge floor on
+    // failure, so enabling it is zero-cost and low-risk — it delivers the
+    // "scour the internet for better responses" ask. Web hits land under
+    // source:"web", are clearly caveated, and are never used as numeric
+    // evidence. Set WEB_SEARCH_ENABLED=false to revert.
+    default: true,
+    purpose: "Enable the web-search tool for external context (free providers by default).",
     lifecycle: "experimental",
   },
 

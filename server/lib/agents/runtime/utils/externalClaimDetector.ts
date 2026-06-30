@@ -90,6 +90,18 @@ const PATTERNS: PatternRule[] = [
   { type: "industry_benchmark", pattern: /\bindustry\s+(?:average|standard|benchmark|norm)\b/gi, confidence: "high" },
   { type: "industry_benchmark", pattern: /\bbenchmark(?:ed|ing)?\b/gi, confidence: "medium" },
   { type: "industry_benchmark", pattern: /\bpeer\s+(?:average|comparison|group)\b/gi, confidence: "high" },
+  // W-WEB · explicit comparison to the outside world. "How do we compare to the
+  // market / industry / competition" genuinely needs external grounding — the
+  // dataset is one company's sales and cannot answer it alone.
+  { type: "industry_benchmark", pattern: /\b(?:compared?\s+(?:to|with)|versus|vs\.?|against)\s+(?:the\s+)?(?:market|industry|category|competition|sector|peers?)\b/gi, confidence: "medium" },
+
+  // W-WEB · channel / format industry dynamics. "quick-commerce growth",
+  // "modern-trade shift" reference CATEGORY-level channel trends, not just this
+  // brand's numbers — external context helps answer "is this an industry shift
+  // or brand-specific?". Kept tight (a channel noun PLUS a trend/growth verb) so
+  // a plain internal "GT vs Q-com volume" does NOT fire.
+  { type: "market_size", pattern: /\b(?:quick\s*commerce|q[-\s]?com|qcom|modern\s+trade|general\s+trade|e[-\s]?commerce|ecommerce|d2c|dark\s+stores?)\s+(?:growth|grow|grew|growing|trend|trends|surge|surging|boom|adoption|penetration|shift|shifting|disruption)\b/gi, confidence: "medium" },
+  { type: "market_size", pattern: /\b(?:growth|trend|surge|boom|adoption|penetration|rise)\s+(?:of|in)\s+(?:quick\s*commerce|q[-\s]?com|qcom|modern\s+trade|e[-\s]?commerce|ecommerce|d2c)\b/gi, confidence: "medium" },
 
   // External event — macroeconomic / cultural / weather.
   { type: "external_event", pattern: /\blockdown(?:s)?\b/gi, confidence: "high" },

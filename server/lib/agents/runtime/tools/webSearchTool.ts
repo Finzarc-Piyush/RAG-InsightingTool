@@ -349,7 +349,7 @@ export function registerWebSearchTool(registry: ToolRegistry): void {
         return {
           ok: false,
           summary:
-            "Web search is disabled. Set WEB_SEARCH_ENABLED=true and a provider key (TAVILY_API_KEY) to enable." +
+            "Web search is disabled (WEB_SEARCH_ENABLED=false). It is ON by default and the free providers (Wikipedia + GDELT) need no API key; TAVILY_API_KEY only upgrades result quality." +
             KNOWLEDGE_FLOOR_GUIDANCE,
         };
       }

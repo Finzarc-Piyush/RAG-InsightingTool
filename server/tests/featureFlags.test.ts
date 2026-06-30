@@ -102,6 +102,7 @@ describe("featureFlags · isFlagOn honours default + env", () => {
     assert.equal(FEATURE_FLAGS.AGENTIC_LOOP_ENABLED.default, false);
     assert.equal(FEATURE_FLAGS.BUSINESS_ACTIONS_ENABLED.default, true);
     assert.equal(FEATURE_FLAGS.QUICK_LOOKUP_ENABLED.default, true);
-    assert.equal(FEATURE_FLAGS.WEB_SEARCH_ENABLED.default, false);
+    // W-WEB · flipped to default-ON (free providers, no key, graceful fallback).
+    assert.equal(FEATURE_FLAGS.WEB_SEARCH_ENABLED.default, true);
   });
 });
