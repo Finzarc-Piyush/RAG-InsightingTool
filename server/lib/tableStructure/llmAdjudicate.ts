@@ -36,7 +36,7 @@ export const tableStructureLlmSchema = z.object({
 
 export type TableStructureLlmResult = z.infer<typeof tableStructureLlmSchema>;
 
-const SYSTEM_PROMPT = `You are a spreadsheet-structure analyst. You are given a COMPACT MAP of the
+export const SYSTEM_PROMPT = `You are a spreadsheet-structure analyst. You are given a COMPACT MAP of the
 top-left corner of one worksheet: each line lists a 0-based row index then its
 populated cells as "ADDRESS tag:value". A deterministic pre-pass has proposed
 candidate table regions.
@@ -51,7 +51,21 @@ Rules:
 - Return 0-based indices exactly as shown in the map. Use dataRowEnd:-1 to mean "to the last row".
 - Do NOT invent rows you cannot see. Prefer the pre-pass MAIN candidate unless the map clearly contradicts it.
 
-Return ONLY JSON matching the schema. Keep the rationale to one line.`;
+Return ONLY a JSON object with EXACTLY these fields (all six numeric fields are REQUIRED — never omit one; secondaryTablesIgnored is optional):
+{
+  "headerRowStart": <int ≥ 0>,
+  "headerRowEnd": <int ≥ 0>,
+  "dataRowStart": <int ≥ 0>,
+  "dataRowEnd": <int, or -1 for "to the last row">,
+  "colStart": <int ≥ 0>,
+  "colEnd": <int ≥ 0>,
+  "secondaryTablesIgnored": [ { "colStart": <int>, "colEnd": <int>, "reason": "<short>" } ],
+  "rationale": "<one line>"
+}
+Example — a title row 0, a 2-row header on rows 1-2, data from row 3 to the end, columns A-N:
+{ "headerRowStart": 1, "headerRowEnd": 2, "dataRowStart": 3, "dataRowEnd": -1, "colStart": 0, "colEnd": 13, "rationale": "2-row header under a title; body type-stable A-N." }
+
+Keep the rationale to one line.`;
 
 function clampInt(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, Math.round(v)));

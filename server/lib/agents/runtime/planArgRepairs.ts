@@ -1124,11 +1124,38 @@ export interface PerXIntent {
 const PER_X_REGEX =
   /\b(average|avg|mean|total|sum|max|maximum|highest|min|minimum|lowest)\b[^.?!]{0,40}?\bper\s+([A-Za-z][\w\s·\-]{0,40}?)(?:\s|[.,?!]|$)/i;
 
+/**
+ * F3 · A question asking for a COMPUTED relation between two measures — a
+ * gap/difference/spread/ratio/subtraction. These need a post-aggregation
+ * computed field (`plan.computedAggregations`), which the quick-lookup planner
+ * cannot emit — so on the fast path they always fail
+ * `normalizeAndValidateQueryPlanBody` ("Column not in schema: gap") and fall
+ * back AFTER a wasted Mini draft. "vs"/"versus" are deliberately excluded: a
+ * plain "X vs Y by channel" is a groupable comparison the fast path handles.
+ */
+const COMPUTED_RELATION_REGEX =
+  /\b(gaps?|differences?|diff|delta|spread|shortfalls?)\b[^.?!]{0,40}?\bbetween\b|\bratio\b\s+(?:of|between)\b|\b(minus|subtracted?)\b|\bnet\s+of\b/i;
+
 const ADVERBIAL_REGEX =
   /\b(daily|weekly|monthly|quarterly|yearly|annual|annually)\s+(average|avg|mean|total|sum|max|maximum|min|minimum)\b/i;
 
 const PER_HYPHEN_REGEX =
   /\bper-(day|week|month|quarter|year)\b/i;
+
+/**
+ * F3 · Structural capability guard for the quick-lookup fast path: true when the
+ * question requires a computed relation between two measures (see
+ * COMPUTED_RELATION_REGEX). Question-only + conservative — a false positive just
+ * routes to the full loop (normal latency), never strips analysis. NOT an intent
+ * classifier (invariant #12 is about the lookup/analytical vocabulary in
+ * queryIntentAuthority); this is a "the fast-path DSL can't express it" check,
+ * a sibling of detectPerXIntent / detectMultiPerIntent.
+ */
+export function detectComputedRelationIntent(question: string | undefined): boolean {
+  const q = (question ?? "").trim();
+  if (!q) return false;
+  return COMPUTED_RELATION_REGEX.test(q);
+}
 
 export function detectPerXIntent(
   question: string | undefined,

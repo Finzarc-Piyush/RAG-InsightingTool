@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { AnalysisBrief, DataSummary, DatasetProfile } from "../shared/schema.js";
 import {
   sessionAnalysisContextSchema,
+  sessionAnalysisFactSchema,
   type SessionAnalysisContext,
 } from "../shared/schema.js";
 import { completeJson } from "./agents/runtime/llmJson.js";
@@ -108,13 +109,111 @@ The "column" must match a real column name (use exact casing from PREVIOUS_JSON.
 ML1 · multi-level same-column hierarchies are supported. When the user declares NESTED rollups in the same column (e.g. "World totals everything; Asia totals India + China + Japan; India totals Mumbai + Delhi"), emit ONE hierarchy entry per rollup level (3 entries here, all with column="Geography"). Each entry's itemValues should list the IMMEDIATE children of that rollup (not the leaf values).
 
 Set lastUpdated.reason to "user_context" and lastUpdated.at to current ISO-8601.
+
+Required top-level shape (all fields mandatory, no extras at the top level):
+{
+  "version": 1,
+  "dataset": { "shortDescription": "...", "columnRoles": [], "caveats": [] },
+  "userIntent": { "interpretedConstraints": [] },
+  "sessionKnowledge": { "facts": [], "analysesDone": [] },
+  "suggestedFollowUps": ["...", "..."],
+  "lastUpdated": { "reason": "user_context", "at": "<ISO-8601 timestamp>" }
+}
 ${NESTED_FIELD_TYPES}`;
 
-const MERGE_ASSISTANT_SYSTEM = `You output only a JSON object matching the given schema (version 1).
-You receive PREVIOUS_JSON and ASSISTANT_MESSAGE (and optional TOOL_TRACE_SUMMARY). Update sessionKnowledge.facts and analysesDone with durable takeaways from the assistant reply. You may prune or merge duplicate/stale entries in sessionKnowledge and shorten suggestedFollowUps when the list is noisy; keep only high-value follow-ups.
-Copy dataset.* forward unless the message clearly corrects domain facts. Do NOT modify userIntent in any way (it is merged only from user messages).
-Set lastUpdated.reason to "assistant_turn" for full assistant replies, or "mid_turn" when ASSISTANT_MESSAGE starts with "[mid_turn]", and lastUpdated.at to current ISO-8601.
-${NESTED_FIELD_TYPES}`;
+/**
+ * W-FAIL1 · Delta-shaped assistant-turn merge. The old "re-emit the entire
+ * 7-field context object" contract made gpt-5.4-mini omit required top-level
+ * fields every turn → Zod rejected → 3 retries → silent stale-context fallback
+ * (durable memory never written). The model now emits ONLY what changes; code
+ * builds version/dataset/userIntent/lastUpdated deterministically. All fields
+ * are optional so an empty `{}` is valid — the call can no longer hard-fail on
+ * a "nothing durable this turn" reply.
+ */
+const MERGE_ASSISTANT_DELTA_SYSTEM = `You extract durable takeaways from ONE assistant reply in an analytical chat.
+Return ONLY a JSON object with these OPTIONAL fields (omit any you have nothing for):
+{
+  "newFacts": [ { "statement": "<durable finding, <=1000 chars>", "source": "assistant"|"data", "confidence": "high"|"medium"|"low" } ],
+  "newAnalysesDone": [ "<short description of an analysis performed this turn>" ],
+  "suggestedFollowUps": [ "<high-value next question>" ]
+}
+Rules:
+- newFacts: only NON-OBVIOUS, durable conclusions worth remembering next turn (key numbers, rankings, drivers). Do NOT restate the question. Skip transient chit-chat.
+- newAnalysesDone: describe what was COMPUTED (e.g. "brand-level gap between MRP Value and NR"), not the answer prose.
+- suggestedFollowUps: OMIT unless you want to REPLACE the current list with a better one. When present it fully replaces the prior list — keep only high-value follow-ups. Each MUST ask exactly ONE thing — NEVER use the word "or".
+- Return {} when the reply carries nothing durable.
+You receive PREVIOUS_JSON (for dedup context — do NOT echo it back), ASSISTANT_MESSAGE, and optional TOOL_TRACE_SUMMARY.
+Facts item shape: { "statement": "<string>", "source": "user"|"assistant"|"data", "confidence": "high"|"medium"|"low" }.`;
+
+/** Delta the assistant-merge LLM returns; merged onto `prev` deterministically. */
+const assistantTurnDeltaSchema = z.object({
+  newFacts: z.array(sessionAnalysisFactSchema).max(20).optional(),
+  newAnalysesDone: z.array(z.string().max(500)).max(20).optional(),
+  suggestedFollowUps: z.array(z.string().max(300)).max(12).optional(),
+});
+type AssistantTurnDelta = z.infer<typeof assistantTurnDeltaSchema>;
+
+/** Normalize a statement/description for dedup (case + whitespace-insensitive). */
+function normForDedup(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Deterministically apply a delta onto the previous context. Facts and
+ * analysesDone are appended with dedup (by normalized text) and FIFO-capped to
+ * the schema maxima (oldest dropped); suggestedFollowUps is REPLACED only when
+ * the delta supplies it. Everything else — version, dataset, userIntent,
+ * dimensionHierarchies, priorInvestigations, analysisBriefDigest — carries
+ * forward from `prev` untouched.
+ */
+export function applyAssistantTurnDelta(
+  prev: SessionAnalysisContext,
+  delta: AssistantTurnDelta,
+  isMidTurn: boolean,
+): SessionAnalysisContext {
+  const mergeCapped = <T>(
+    existing: readonly T[],
+    incoming: readonly T[],
+    key: (item: T) => string,
+    cap: number,
+  ): T[] => {
+    const seen = new Set(existing.map(key));
+    const merged = [...existing];
+    for (const item of incoming) {
+      const k = key(item);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      merged.push(item);
+    }
+    return merged.length > cap ? merged.slice(merged.length - cap) : merged;
+  };
+
+  const facts = mergeCapped(
+    prev.sessionKnowledge.facts,
+    delta.newFacts ?? [],
+    (f) => normForDedup(f.statement),
+    50,
+  );
+  const analysesDone = mergeCapped(
+    prev.sessionKnowledge.analysesDone,
+    delta.newAnalysesDone ?? [],
+    (a) => normForDedup(a),
+    30,
+  );
+  const suggestedFollowUps = delta.suggestedFollowUps
+    ? stripOrQuestions(delta.suggestedFollowUps).slice(0, 12)
+    : prev.suggestedFollowUps;
+
+  return {
+    ...prev,
+    sessionKnowledge: { ...prev.sessionKnowledge, facts, analysesDone },
+    suggestedFollowUps,
+    lastUpdated: {
+      reason: isMidTurn ? "mid_turn" : "assistant_turn",
+      at: ISO(),
+    },
+  };
+}
 
 function compactSummaryForPrompt(summary: DataSummary) {
   return {
@@ -427,14 +526,18 @@ export async function mergeSessionAnalysisContextAssistantLLM(params: {
   agentTraceSummary?: string;
 }): Promise<SessionAnalysisContext> {
   const prev = params.previous ?? emptySessionAnalysisContext();
+  const isMidTurn = params.assistantMessage.startsWith("[mid_turn]");
   const user = JSON.stringify({
     PREVIOUS_JSON: prev,
     ASSISTANT_MESSAGE: params.assistantMessage.slice(0, 12000),
     TOOL_TRACE_SUMMARY: params.agentTraceSummary?.slice(0, 6000) ?? null,
   });
-  const out = await completeJson(MERGE_ASSISTANT_SYSTEM, user, sessionAnalysisContextSchema, {
+  // W-FAIL1 · delta contract: the model returns only new durable takeaways;
+  // we merge them onto `prev` deterministically. The old whole-object contract
+  // made the mini model omit required top-level fields every turn.
+  const out = await completeJson(MERGE_ASSISTANT_DELTA_SYSTEM, user, assistantTurnDeltaSchema, {
     turnId: "session_ctx_assistant",
-    maxTokens: 4096,
+    maxTokens: 1024,
     temperature: 0.2,
     purpose: LLM_PURPOSE.SESSION_CONTEXT,
   });
@@ -442,7 +545,7 @@ export async function mergeSessionAnalysisContextAssistantLLM(params: {
     logger.warn("⚠️ mergeSessionAnalysisContextAssistantLLM failed:", out.error);
     return prev;
   }
-  const merged = out.data as SessionAnalysisContext;
+  const merged = applyAssistantTurnDelta(prev, out.data, isMidTurn);
   return withGuardedFollowUps(withImmutableUserIntentFromPrevious(prev, merged));
 }
 

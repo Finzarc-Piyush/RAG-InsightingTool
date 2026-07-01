@@ -196,6 +196,7 @@ import { formatWorkingMemoryBlock, groupSortedStepsForExecution } from "./workin
 import { runReflector } from "./reflector.js";
 import { filterSpawnedQuestions } from "./filterSpawnedQuestions.js";
 import { runVerifier, rewriteNarrative } from "./verifier.js";
+import { clampConfidenceToBlackboard } from "./clampNarratorConfidence.js";
 import { buildFinalEvidence } from "./verifierHelpers.js";
 import { VERIFIER_VERDICT } from "./schemas.js";
 import { agentLog } from "./agentLogger.js";
@@ -3730,6 +3731,45 @@ export async function runAgentTurn(
           reason: `Rewrite suppressed (single-flow policy); ${issuesText.slice(0, 400)}`.slice(0, 500),
           candidates: fv.issues.map((i) => i.code).slice(0, 8),
         });
+
+        // W-FAIL2 · The narrative rewrite is suppressed, but a CONFIDENCE_OVERCLAIM
+        // is a structured-data problem too: the shipped magnitude/implication
+        // `confidence` badges would still overstate certainty. Clamp them
+        // deterministically to what the blackboard supports — no prose touched,
+        // so this stays within single-flow (invariant #6). Without it the
+        // detected-but-suppressed overclaim ships an uncorrected "HIGH" badge.
+        if (fv.confidenceOverclaim?.shouldRevise) {
+          const clamp = clampConfidenceToBlackboard(
+            envelopeMagnitudes,
+            envelopeAnswerEnvelope?.implications,
+            fv.confidenceOverclaim,
+          );
+          if (clamp.changed) {
+            envelopeMagnitudes = clamp.magnitudes;
+            if (envelopeAnswerEnvelope && clamp.implications) {
+              envelopeAnswerEnvelope = {
+                ...envelopeAnswerEnvelope,
+                implications: clamp.implications,
+              };
+            }
+            // Re-emit corrected magnitudes so a live client updates the badge
+            // (the pre-critic `magnitudes` SSE fired earlier with the stale tier).
+            if (envelopeMagnitudes?.length) {
+              safeEmit("magnitudes", { items: envelopeMagnitudes });
+            }
+            safeEmit("flow_decision", {
+              layer: "confidence-clamp",
+              chosen: "clamped-labels",
+              reason: `Downgraded ${clamp.downgradedHigh} high-confidence label(s) to match the blackboard (${fv.confidenceOverclaim.actual.high} high supported)${clamp.forcedLow ? "; forced one low" : ""}.`.slice(0, 500),
+              candidates: ["CONFIDENCE_OVERCLAIM"],
+            });
+            agentLog("confidence_clamp_applied", {
+              turnId,
+              downgradedHigh: clamp.downgradedHigh,
+              forcedLow: clamp.forcedLow,
+            });
+          }
+        }
       }
       break;
     }

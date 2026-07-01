@@ -83,6 +83,7 @@ import {
   extractDistinctMetricValues,
   detectPerXIntent,
   detectMultiPerIntent,
+  detectComputedRelationIntent,
 } from "./planArgRepairs.js";
 
 const QUICK_LOOKUP_PREVIEW_CAP = 200;
@@ -125,6 +126,16 @@ export async function tryQuickAnswer(
   // Gate 4 — there has to BE row data. An unmounted / empty session can't
   // answer a lookup question.
   if (!ctx.summary?.columns?.length) return null;
+
+  // Gate 5 (F3) — computed-relation guard. A "gap/difference/ratio between two
+  // measures" question needs `computedAggregations`, which the quick-lookup
+  // planner cannot emit — it would draft a plan referencing a computed alias
+  // (e.g. "gap"), fail `normalizeAndValidateQueryPlanBody`, and fall back AFTER
+  // a wasted Mini draft. Route straight to the full loop (which supports it).
+  if (detectComputedRelationIntent(ctx.question)) {
+    agentLog("quick_lookup.skip_computed_relation", { turnId });
+    return null;
+  }
 
   agentLog("quick_lookup.candidate", {
     turnId,
