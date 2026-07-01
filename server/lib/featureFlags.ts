@@ -215,6 +215,18 @@ export const FEATURE_FLAGS = {
     purpose: "Enable the web-search tool for external context (free providers by default).",
     lifecycle: "experimental",
   },
+  WORKING_DAY_AVERAGES_ENABLED: {
+    // W-LEAVE · default OFF. When on, a per-day AVERAGE on a dataset with a
+    // detected structural leave-day (e.g. Sundays ≈0, see inferLeaveDayPattern)
+    // is computed over WORKING days only — but never silently: the engine
+    // DISCLOSES the finding and asks; it excludes only once the user consents
+    // (dataSummary.leaveDayPattern.decision === "exclude"). Default OFF so the
+    // headline number a user already trusts does not move until ops opts in.
+    default: false,
+    purpose:
+      "Compute per-day averages over working days (exclude detected leave-day weekdays) — discloses + asks before excluding; applies on user consent.",
+    lifecycle: "experimental",
+  },
 
   // ── Telemetry ──────────────────────────────────────────────────────────────
   LLM_USAGE_TELEMETRY_ENABLED: {

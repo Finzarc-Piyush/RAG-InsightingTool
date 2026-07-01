@@ -1153,6 +1153,28 @@ class UploadQueue {
           logger.warn("W6 · additivity stamp failed (non-fatal):", additivityErr);
         }
 
+        // W-LEAVE · detect the dataset's structural LEAVE / non-working day(s)
+        // (a weekday whose daily activity is ≈0 — e.g. Sundays). Stored inert on
+        // the summary; the engine reads it to DISCLOSE + ask before excluding
+        // those days from per-day AVERAGES (avg over working days, not calendar
+        // days). Data-driven (any weekday/region), best-effort, non-fatal.
+        try {
+          const { inferLeaveDayPattern, applyLeaveDayPatternToSummary } =
+            await import("../lib/inferLeaveDayPattern.js");
+          const pattern = inferLeaveDayPattern(
+            summary,
+            data as Record<string, unknown>[],
+          );
+          if (pattern) {
+            applyLeaveDayPatternToSummary(summary, pattern);
+            logger.log(
+              `📐 inferLeaveDayPattern: ${pattern.offWeekdays.join(", ")} off on "${pattern.dateColumn}" (${pattern.basis.offMean.toFixed(0)} vs ${pattern.basis.workingMean.toFixed(0)})`,
+            );
+          }
+        } catch (leaveErr) {
+          logger.warn("⚠️ inferLeaveDayPattern skipped:", leaveErr);
+        }
+
         await updateChatDocument({
           ...existingDoc,
           dataSummary: summary,

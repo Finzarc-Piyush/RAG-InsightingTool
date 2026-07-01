@@ -60,6 +60,8 @@ import {
   computeOffDayHint,
   filterRowsByExcludedWeekdays,
 } from "../lib/insightGenerator/weekdayPattern.js";
+import { isWorkingDayAveragesEnabled } from "../lib/agents/runtime/runtimeConfig.js";
+import { shouldBuilderExcludeLeaveDays } from "../lib/agents/runtime/leaveDayAverageRepair.js";
 import { parsePagination } from "../lib/pagination.js";
 import { logger } from "../lib/logger.js";
 import { errorMessage, getErrorStatus } from "../utils/errorMessage.js";
@@ -1341,6 +1343,34 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
       excludedWeekdays: body.excludedWeekdays,
     });
 
+    // W-LEAVE (Wave 3) · builder/engine CONSISTENCY. When the user has already
+    // consented to working-day averages for this dataset (engine-side
+    // `leaveDayPattern.decision === "exclude"`), apply the SAME leave-day
+    // exclusion to an AVERAGE in the chart builder so the two surfaces agree —
+    // unless the user set an explicit per-chart exclusion. Mean only: a SUM over
+    // all days is correct, so we never drop days from a total. Flag-gated;
+    // `filterRowsByExcludedWeekdays` is a no-op when x isn't date-shaped.
+    const leaveDayPattern = (
+      session.dataSummary as {
+        leaveDayPattern?: { offWeekdays?: string[]; decision?: string };
+      }
+    ).leaveDayPattern;
+    let autoExcludedFromLeaveDay = false;
+    if (
+      isWorkingDayAveragesEnabled() &&
+      shouldBuilderExcludeLeaveDays(
+        spec.aggregate,
+        !!spec.excludedWeekdays?.length,
+        leaveDayPattern
+      )
+    ) {
+      spec = chartSpecSchema.parse({
+        ...spec,
+        excludedWeekdays: leaveDayPattern!.offWeekdays,
+      });
+      autoExcludedFromLeaveDay = true;
+    }
+
     const dataVersion =
       session.currentDataBlob?.version ?? session.ragIndex?.dataVersion ?? 0;
 
@@ -1555,7 +1585,10 @@ export const postChartPreviewEndpoint = async (req: Request, res: Response) => {
     // insight generator, so a daily date axis with a recurring near-zero
     // weekday surfaces an offer to exclude it.
     const offDayHint = computeOffDayHint(processed, out, session.dataSummary.dateColumns);
-    return res.json({ chart: out, offDayHint });
+    // `autoExcludedFromLeaveDay` tells the client the leave-day exclusion was
+    // applied from the remembered engine-level consent (so it can show a
+    // reversible "excluding Sunday — include" note rather than a fresh offer).
+    return res.json({ chart: out, offDayHint, autoExcludedFromLeaveDay });
   } catch (error) {
     if (error instanceof AuthenticationError) {
       return res.status(401).json({ error: error.message });

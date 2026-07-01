@@ -215,6 +215,23 @@ export interface AgentExecutionContext {
    */
   deterministicCaveats?: string[];
   /**
+   * W-LEAVE · transient per-turn marker set in the plan-validation seam when a
+   * per-day AVERAGE over a detected leave-day date column is found, read by the
+   * narrator/caveat merge to DISCLOSE + ask. `applied` = the working-day
+   * exclusion was injected (user consented, decision "exclude"); `applied:false`
+   * = a qualifying average ran but was NOT excluded (decision "undecided") so we
+   * disclose it still counts all days and ask. Set once per turn (first detection
+   * wins). Only populated when WORKING_DAY_AVERAGES_ENABLED. Not persisted.
+   */
+  leaveDayAverage?: {
+    applied: boolean;
+    offWeekdays: string[];
+    offMean: number;
+    workingMean: number;
+    /** Set once the disclosure caveat has been pushed to deterministicCaveats. */
+    disclosed?: boolean;
+  };
+  /**
    * Post-hoc validation substrate for the chart-promotion layer. Lists
    * (column, values) pairs the user signalled they want OUT of the answer,
    * gathered from BOTH (a) negative inferred filters and (b) declared rollup

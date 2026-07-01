@@ -111,6 +111,12 @@ import {
 } from "./planArgRepairs.js";
 import { coalesceQueryPlanSteps } from "./coalescePlanSteps.js";
 import { repairBooleanIndicatorRatePlan } from "./booleanIndicatorRateRepair.js";
+import {
+  detectLeaveDayAveragePlan,
+  injectLeaveDayExclusion,
+  leaveDayPatternOf,
+} from "./leaveDayAverageRepair.js";
+import { isWorkingDayAveragesEnabled } from "./runtimeConfig.js";
 import type { QueryPlanBody } from "../../queryPlanExecutor.js";
 import {
   PLANNER_CONFIDENCE_DIRECTIVE,
@@ -1079,6 +1085,38 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
       if (rebind.repaired) {
         step.args.plan = rebind.plan;
         agentLog("plan.boolean_indicator_rate_repair", { turnId, stepId: step.id });
+      }
+      // W-LEAVE · working-day-aware averages. When the plan is a per-day average
+      // (`… / COUNT(DISTINCT <leaveDayCol>)`) on a dataset with a detected
+      // structural leave-day, exclude that weekday from BOTH halves of the ratio
+      // — but only on the user's stored consent, and ALWAYS disclosed. While
+      // undecided we leave the number unchanged and mark it for a disclose+ask
+      // caveat. Flag-gated (default OFF); inert until ops enables the feature.
+      if (isWorkingDayAveragesEnabled() && !ctx.leaveDayAverage) {
+        const lp = leaveDayPatternOf(ctx.summary);
+        if (lp && lp.decision !== "include") {
+          const hit = detectLeaveDayAveragePlan(
+            step.args.plan as QueryPlanBody,
+            ctx.summary
+          );
+          if (hit) {
+            const exclude = lp.decision === "exclude";
+            if (exclude) {
+              step.args.plan = injectLeaveDayExclusion(
+                step.args.plan as QueryPlanBody,
+                hit.dateColumn,
+                hit.offWeekdays
+              );
+              agentLog("plan.leave_day_average_exclude", { turnId, stepId: step.id });
+            }
+            ctx.leaveDayAverage = {
+              applied: exclude,
+              offWeekdays: hit.offWeekdays,
+              offMean: lp.basis.offMean,
+              workingMean: lp.basis.workingMean,
+            };
+          }
+        }
       }
     }
     const argKeys = Object.keys(step.args).join(",");

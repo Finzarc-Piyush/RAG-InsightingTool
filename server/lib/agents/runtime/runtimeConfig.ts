@@ -57,6 +57,16 @@ export function isAgenticLoopEnabled(): boolean {
 }
 
 /**
+ * W-LEAVE · when true, per-day AVERAGES on a dataset with a detected structural
+ * leave-day (dataSummary.leaveDayPattern) are computed over WORKING days only —
+ * after disclosing the finding and only once the user consents
+ * (decision === "exclude"). Default OFF (dark-launch a number-moving change).
+ */
+export function isWorkingDayAveragesEnabled(): boolean {
+  return isFlagOn("WORKING_DAY_AVERAGES_ENABLED");
+}
+
+/**
  * @deprecated When AGENTIC_LOOP_ENABLED=true, strict no-legacy behavior is always on; this only reflects env for tests/logging.
  */
 export function isAgenticStrictEnabled(): boolean {

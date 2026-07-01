@@ -143,7 +143,8 @@ import type {
   ToolCallRecord,
   WorkingMemoryEntry,
 } from "./types.js";
-import { isInterAgentPromptFeedbackEnabled } from "./runtimeConfig.js";
+import { isInterAgentPromptFeedbackEnabled, isWorkingDayAveragesEnabled } from "./runtimeConfig.js";
+import { buildLeaveDayCaveat, buildLeaveDayOfferCta } from "./leaveDayAverageRepair.js";
 import { ToolRegistry, type ToolResult } from "./toolRegistry.js";
 import { closeTurnColumnarStorage } from "./turnColumnarStorage.js";
 import { registerDefaultTools } from "./tools/registerTools.js";
@@ -233,6 +234,48 @@ import type { QueryPlanBody } from "../../queryPlanExecutor.js";
 import { classifyQueryIntent } from "./queryIntentAuthority.js";
 import { isBusinessActionsEnabled } from "../../envFlags.js";
 import { sanitizeIntermediatePreviewRows } from "../../agentIntermediatePreviewSanitize.js";
+
+/**
+ * W-LEAVE · persist the user's working-day-average consent onto the stored
+ * dataSummary so future turns honour it without re-asking. Routes through the
+ * `mutateChatDocument` RMW seam (invariant #9). Best-effort, fire-and-forget;
+ * a missing dataSummary or a lost write simply means the choice isn't remembered.
+ */
+async function persistLeaveDayDecision(
+  sessionId: string,
+  decision: "exclude" | "include"
+): Promise<void> {
+  try {
+    const { mutateChatDocument } = await import("../../../models/chat.model.js");
+    await mutateChatDocument(sessionId, (fresh) => {
+      const lp = (fresh.dataSummary as { leaveDayPattern?: { decision?: string; source?: string } } | undefined)
+        ?.leaveDayPattern;
+      if (!lp) return false; // nothing to update (no detected pattern persisted)
+      if (lp.decision === decision && lp.source === "user") return false; // no-op
+      lp.decision = decision;
+      lp.source = "user";
+    });
+  } catch {
+    /* best-effort — consent is re-derivable from the next matching question */
+  }
+}
+
+/**
+ * W-LEAVE · push the working-day-average DISCLOSURE caveat into
+ * `ctx.deterministicCaveats` exactly once. Both narrator paths (primary +
+ * repair/retry) merge deterministicCaveats into the envelope, so routing the
+ * caveat through that channel guarantees the number-move (or the still-included
+ * leave days + the ask) is ALWAYS disclosed regardless of which path narrates —
+ * a leave-day exclusion is never applied silently.
+ */
+function discloseLeaveDayAverageOnce(ctx: AgentExecutionContext): void {
+  const lda = ctx.leaveDayAverage;
+  if (!lda || lda.disclosed) return;
+  lda.disclosed = true;
+  (ctx.deterministicCaveats ??= []).push(
+    buildLeaveDayCaveat(lda.applied, lda.offWeekdays, lda.offMean, lda.workingMean)
+  );
+}
 
 const INTERMEDIATE_TABLE_TOOLS = new Set([
   "run_analytical_query",
@@ -601,6 +644,48 @@ export async function runAgentTurn(
       }
     } catch {
       /* best-effort — absence of scope simply falls back to unscoped rates */
+    }
+    // W-LEAVE · same self-heal for the structural leave-day pattern: sessions
+    // uploaded before this shipped lack `dataSummary.leaveDayPattern`. Cheap,
+    // idempotent, never overwrites a remembered user choice (source:"user").
+    // Absence stays safe (averages fall back to all-calendar-day behaviour).
+    try {
+      const lp = (ctx.summary as { leaveDayPattern?: { source?: string } }).leaveDayPattern;
+      if (!lp && Array.isArray(ctx.data) && ctx.data.length >= 200) {
+        const { inferLeaveDayPattern, applyLeaveDayPatternToSummary } =
+          await import("../../inferLeaveDayPattern.js");
+        applyLeaveDayPatternToSummary(
+          ctx.summary,
+          inferLeaveDayPattern(ctx.summary, ctx.data as Record<string, unknown>[])
+        );
+      }
+    } catch {
+      /* best-effort — absence simply falls back to all-calendar-day averages */
+    }
+    // W-LEAVE · CONSENT. If the user explicitly asks to average over working days
+    // (exclude the detected leave day), remember that choice so this turn AND
+    // future ones exclude it without re-asking. Runs before planning so the
+    // injection applies the same turn. Flag-gated; persisted best-effort.
+    try {
+      if (isWorkingDayAveragesEnabled()) {
+        const lp = (ctx.summary as { leaveDayPattern?: import("../../inferLeaveDayPattern.js").LeaveDayPattern }).leaveDayPattern;
+        if (lp && lp.offWeekdays?.length) {
+          const { questionRequestsLeaveDayExclusion, questionRequestsAllCalendarDays } =
+            await import("./leaveDayAverageRepair.js");
+          if (lp.decision !== "exclude" && questionRequestsLeaveDayExclusion(ctx.question, lp.offWeekdays)) {
+            lp.decision = "exclude";
+            lp.source = "user";
+            void persistLeaveDayDecision(ctx.sessionId, "exclude");
+          } else if (lp.decision !== "include" && questionRequestsAllCalendarDays(ctx.question, lp.offWeekdays)) {
+            // User opted back to all calendar days — undo + remember.
+            lp.decision = "include";
+            lp.source = "user";
+            void persistLeaveDayDecision(ctx.sessionId, "include");
+          }
+        }
+      }
+    } catch {
+      /* best-effort — consent simply isn't remembered if persistence fails */
     }
     // W39 · when MERGED_PRE_PLANNER=true, fold the analysisBrief and
     // hypothesisPlanner LLM calls into a single round-trip below.
@@ -2490,6 +2575,15 @@ export async function runAgentTurn(
             if (narResult.findings?.length) env.findings = narResult.findings;
             if (narResult.methodology) env.methodology = narResult.methodology;
             if (narResult.caveats?.length) env.caveats = narResult.caveats;
+            // W-LEAVE · DISCLOSE + ask BEFORE the deterministicCaveats merge so the
+            // working-day-average disclosure rides the same channel (covered on
+            // both narrator paths — never a silent number-move). The caveat always
+            // surfaces (survives nextStep suppression on minimal-depth asks); the
+            // offer CTA is appended to envCtas and surfaces via the gate below.
+            discloseLeaveDayAverageOnce(ctx);
+            if (ctx.leaveDayAverage && !ctx.leaveDayAverage.applied) {
+              envCtas = [...envCtas, buildLeaveDayOfferCta(ctx.leaveDayAverage.offWeekdays)];
+            }
             // PA1 · surface deterministic-guard caveats (e.g. period-additivity
             // pinned the SUM to the latest 12 months) so the chosen slice is visible.
             if (ctx.deterministicCaveats?.length)
@@ -2845,6 +2939,11 @@ export async function runAgentTurn(
         if (repaired.findings?.length) envFresh.findings = repaired.findings;
         if (repaired.methodology) envFresh.methodology = repaired.methodology;
         if (repaired.caveats?.length) envFresh.caveats = repaired.caveats;
+        // W-LEAVE · disclose on the repair path too, before the merge, so a
+        // working-day average is never silently changed on a retried turn. The
+        // caveat carries the ask ('reply "exclude Sunday"'); the clickable offer
+        // CTA is a primary-path nicety only.
+        discloseLeaveDayAverageOnce(ctx);
         if (ctx.deterministicCaveats?.length)
           envFresh.caveats = [...(envFresh.caveats ?? []), ...ctx.deterministicCaveats];
         const repairedCtas = (repaired.ctas ?? [])

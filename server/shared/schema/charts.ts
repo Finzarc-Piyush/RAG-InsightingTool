@@ -2271,6 +2271,42 @@ export const dataSummarySchema = z.object({
   /** SU-DT1 · Pairings between time-of-day and date columns so the agent
    * can compose a combined datetime via add_computed_columns (SU-DT2). */
   dateTimeColumnPairs: z.array(dateTimeColumnPairSchema).max(20).optional(),
+  /** W-LEAVE · structural LEAVE / NON-WORKING day pattern detected at upload
+   * by `inferLeaveDayPattern` (data-driven, no hardcoded "Sunday"). A weekday
+   * whose daily activity sits ≤15% of the other days is a non-working day;
+   * including it in a per-day AVERAGE deflates the number (avg over calendar
+   * days, not working days). Sibling concept to `indicator.applicabilityScope`
+   * (structural zeros for boolean RATES) — this one is for numeric AVERAGES.
+   * `decision` is the user's CONSENT state: the engine only excludes these days
+   * when `decision === "exclude"`; while "undecided" it computes over all days
+   * and DISCLOSES + asks. `source:"user"` marks a remembered user choice that
+   * auto re-detection must not overwrite. */
+  leaveDayPattern: z
+    .object({
+      offWeekdays: z
+        .array(
+          z.enum([
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
+          ])
+        )
+        .min(1)
+        .max(6),
+      dateColumn: z.string().max(200),
+      basis: z.object({
+        offMean: z.number(),
+        workingMean: z.number(),
+        ratio: z.number(),
+      }),
+      source: z.enum(["auto", "user"]).default("auto"),
+      decision: z.enum(["undecided", "exclude", "include"]).default("undecided"),
+    })
+    .optional(),
 });
 
 export type DataSummary = z.infer<typeof dataSummarySchema>;
