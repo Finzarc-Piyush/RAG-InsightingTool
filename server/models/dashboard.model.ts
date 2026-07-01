@@ -8,6 +8,7 @@ import {
   Dashboard,
   DashboardTableSpec,
   DashboardPivotSpec,
+  type DashboardScorecardSpec,
   type BarSortSpec,
   type ChartLimitSpec,
   type CreateReportDashboardRequest,
@@ -1023,6 +1024,59 @@ export const addTableToDashboard = async (
 };
 
 /**
+ * Wave W5 (data-bound cards) · add a KPI scorecard (definition + computed
+ * snapshot) to a sheet. Mirrors `addTableToDashboard`'s permission +
+ * sheet-resolution path so concurrency semantics are identical.
+ */
+export const addScorecardToDashboard = async (
+  id: string,
+  username: string,
+  scorecard: DashboardScorecardSpec,
+  sheetId?: string
+): Promise<Dashboard> => {
+  const normalizedUsername = username.toLowerCase();
+
+  const dashboard = await getDashboardById(id, username);
+  if (!dashboard) throw new Error("Dashboard not found");
+
+  const dashboardOwner = dashboard.username?.toLowerCase();
+  if (dashboardOwner !== normalizedUsername) {
+    const collaborator = dashboard.collaborators?.find(
+      (c) => c.userId.toLowerCase() === normalizedUsername
+    );
+    if (collaborator) {
+      if (collaborator.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    } else {
+      const { listSharedDashboardsForUser } = await import("./sharedDashboard.model.js");
+      const sharedInvites = await listSharedDashboardsForUser(normalizedUsername);
+      const acceptedInvite = sharedInvites.find(
+        (invite) => invite.sourceDashboardId === id && invite.status === "accepted"
+      );
+      if (!acceptedInvite || acceptedInvite.permission !== "edit") {
+        throw new Error("You do not have permission to edit this dashboard");
+      }
+    }
+  }
+
+  if (!dashboard.sheets || dashboard.sheets.length === 0) {
+    dashboard.sheets = [
+      { id: "default", name: "Overview", charts: [...dashboard.charts], tables: [], order: 0 },
+    ];
+  }
+
+  const targetSheetId = sheetId || dashboard.sheets[0]!.id;
+  const targetSheet = dashboard.sheets.find((s) => s.id === targetSheetId);
+  if (!targetSheet) throw new Error(`Sheet with id ${targetSheetId} not found`);
+
+  if (!targetSheet.scorecards) targetSheet.scorecards = [];
+  targetSheet.scorecards.push(scorecard);
+
+  return updateDashboard(dashboard);
+};
+
+/**
  * Remove table from dashboard
  */
 export const removeTableFromDashboard = async (
@@ -1377,6 +1431,11 @@ export const createDashboardFromSpec = async (
         ...(s.narrativeBlocks && s.narrativeBlocks.length > 0
           ? { narrativeBlocks: [...s.narrativeBlocks] }
           : {}),
+        // Wave W1 (data-bound cards) · carry per-sheet scorecards through the
+        // spec→persist reshape (the classic L-021 silent-strip site).
+        ...(s.scorecards && s.scorecards.length > 0
+          ? { scorecards: [...s.scorecards] }
+          : {}),
         ...(s.gridLayout ? { gridLayout: s.gridLayout } : {}),
         order: typeof s.order === "number" ? s.order : idx,
       }));
@@ -1429,6 +1488,11 @@ export const createDashboardFromSpec = async (
       // dashboard view can render the problem-areas callout on reload.
       if (spec.attentionAreas && spec.attentionAreas.length > 0) {
         dashboard.attentionAreas = spec.attentionAreas;
+      }
+      // Wave W1 (data-bound cards) · persist the Executive-Summary KPI scorecard
+      // band so the dashboard view can render real, data-bound KPIs on reload.
+      if (spec.scorecards && spec.scorecards.length > 0) {
+        dashboard.scorecards = spec.scorecards;
       }
       const persisted = await updateDashboard(dashboard);
       // W59 · record `dashboard_promoted` in the per-session Memory journal so
@@ -1566,6 +1630,11 @@ export const patchDashboard = async (
   // W-SBGRID · whole-field replace of the Executive-Summary free-form layout.
   if (patch.summaryGridLayout !== undefined) {
     dashboard.summaryGridLayout = patch.summaryGridLayout;
+  }
+  // Wave W1 (data-bound cards) · whole-array replace of the KPI scorecard band
+  // (edit / recompute). Already validated by the controller.
+  if (patch.scorecards !== undefined) {
+    dashboard.scorecards = patch.scorecards;
   }
 
   dashboard.sheets = sheets;

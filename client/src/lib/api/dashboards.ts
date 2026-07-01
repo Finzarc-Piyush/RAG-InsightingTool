@@ -8,10 +8,40 @@ import {
   DashboardNarrativeBlock,
   DashboardPatch,
   DashboardPivotSpec,
+  DashboardScorecardSpec,
   DashboardSpec,
   DashboardTableSpec,
+  DashboardCardDefinition,
 } from "@/shared/schema";
 import type { Layouts } from "react-grid-layout";
+
+/** Wave W9 · guided-card-builder picker metadata (measures + dimensions). */
+export interface BuilderMeasure {
+  ref: string;
+  kind: "metric" | "column";
+  label: string;
+  format: "number" | "percent" | "currency" | "ratio" | "duration";
+  currencyCode?: string;
+  allowedAggregations: Array<"sum" | "avg" | "count" | "min" | "max" | "median">;
+  defaultAggregation: "sum" | "avg" | "count" | "min" | "max" | "median";
+}
+export interface BuilderDimension {
+  column: string;
+  label: string;
+  kind: "categorical" | "temporal";
+  values?: Array<{ value: string | number; count: number }>;
+  hasTopValues: boolean;
+}
+export interface BuilderMetadata {
+  measures: BuilderMeasure[];
+  dimensions: BuilderDimension[];
+}
+
+/** Wave W12 · live-preview response from /tiles/preview. */
+export type TilePreviewResult =
+  | { ok: true; cardType: "scorecard"; scorecard: DashboardScorecardSpec }
+  | { ok: true; cardType: "chart"; chart: ChartSpec }
+  | { ok: true; cardType: "table"; table: DashboardTableSpec };
 
 export const dashboardsApi = {
   list: () => api.get<{ dashboards: Dashboard[] }>("/api/dashboards"),
@@ -86,6 +116,34 @@ export const dashboardsApi = {
   /** Phase 2.E — atomic follow-up edits to an existing dashboard. */
   patch: (dashboardId: string, patch: DashboardPatch) =>
     api.post<Dashboard>(`/api/dashboards/${dashboardId}/patch`, { patch }),
+  /** Wave W8 (data-bound cards) · re-run every Executive-Summary scorecard's
+   *  query against the current dataset and persist refreshed snapshots. */
+  recomputeScorecards: (dashboardId: string) =>
+    api.post<Dashboard>(`/api/dashboards/${dashboardId}/scorecards/recompute`, {}),
+  /** Wave W9 · guided card builder — measures + dimensions the picker offers. */
+  getBuilderMetadata: (dashboardId: string) =>
+    api.get<BuilderMetadata>(`/api/dashboards/${dashboardId}/builder-metadata`),
+  /** Wave W12 · live-preview a composed card (no persist). */
+  previewTile: (
+    dashboardId: string,
+    cardDefinition: DashboardCardDefinition,
+    title?: string
+  ) =>
+    api.post<TilePreviewResult>(`/api/dashboards/${dashboardId}/tiles/preview`, {
+      cardDefinition,
+      title,
+    }),
+  /** Wave W12 · compose + persist a data-bound card (returns the updated dashboard). */
+  composeTile: (
+    dashboardId: string,
+    cardDefinition: DashboardCardDefinition,
+    opts?: { sheetId?: string; title?: string }
+  ) =>
+    api.post<Dashboard>(`/api/dashboards/${dashboardId}/tiles/compose`, {
+      cardDefinition,
+      sheetId: opts?.sheetId,
+      title: opts?.title,
+    }),
   /** Wave DR5 · atomic sheet reorder. Body: full ordered id list. */
   reorderSheets: (dashboardId: string, orderedSheetIds: string[]) =>
     api.post<Dashboard>(

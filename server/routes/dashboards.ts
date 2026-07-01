@@ -24,6 +24,12 @@ import {
   updateTableCaptionController,
   updateChartInsightOrRecommendationController,
 } from "../controllers/index.js";
+import {
+  composeTileController,
+  previewTileController,
+  recomputeScorecardsController,
+  builderMetadataController,
+} from "../controllers/dashboardComposeController.js";
 
 const router = Router();
 
@@ -45,6 +51,13 @@ router.delete('/dashboards/:dashboardId', deleteDashboardController);
 router.post('/dashboards/:dashboardId/charts', addChartToDashboardController);
 router.delete('/dashboards/:dashboardId/charts', removeChartFromDashboardController);
 router.patch('/dashboards/:dashboardId/charts/:chartIndex', updateChartInsightOrRecommendationController);
+
+// Data-bound tiles (guided card builder / KPI scorecards) — Wave W.
+// Flag-gated inside the controllers by DASHBOARD_CARD_BUILDER_ENABLED.
+router.get('/dashboards/:dashboardId/builder-metadata', builderMetadataController);
+router.post('/dashboards/:dashboardId/tiles/preview', previewTileController);
+router.post('/dashboards/:dashboardId/tiles/compose', composeTileController);
+router.post('/dashboards/:dashboardId/scorecards/recompute', recomputeScorecardsController);
 
 // Tables in a dashboard
 router.post('/dashboards/:dashboardId/tables', addTableToDashboardController);

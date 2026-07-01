@@ -15,6 +15,83 @@ export const chartTypeSchema = z.enum([
   "heatmap",
 ]);
 
+/**
+ * Wave W1 (data-bound cards) · `dashboardCardDefinitionSchema` — the
+ * RECOMPUTABLE recipe behind a data-bound dashboard tile. Unlike a legacy
+ * frozen tile (which only carries embedded `data`), a card carries the
+ * measure × aggregation × filters that PRODUCED it, so the server can re-run
+ * the query against the dataset behind `dashboard.sessionId` on refresh.
+ *
+ * This is the SHARED SPINE consumed by BOTH the Executive-Summary KPI
+ * scorecards (auto-generated) and the guided card builder (user-composed).
+ * Selection-only by construction — a measure ref, a constrained aggregation,
+ * and dimension=value(s) filters — never free-typed numbers.
+ *
+ * Defined here (before `chartSpecSchema`) so chart/table specs can hang an
+ * optional `cardDefinition` off it without a temporal-dead-zone reference.
+ */
+// NOTE: fields default in the CONSUMING code (compose lib / render), NOT via
+// zod `.default()`. `.default()` makes a field input-optional but output-
+// required, and this schema is used as a CONSTRUCTION type (the LLM/build path
+// assigns spec objects typed as the schema input) — the divergence trips a
+// structural assignability error. Optional-without-default keeps input===output.
+export const dashboardCardDefinitionSchema = z
+  .object({
+    version: z.literal(1).optional(), // reserved for future migrations
+    cardType: z.enum(["scorecard", "chart", "table"]),
+    // One measure, friendly-labeled. `kind` picks the resolution path:
+    //   "metric" → a curated SemanticModel metric (aggregation fixed by its
+    //              expression); "column" → a raw numeric column.
+    measure: z.object({
+      kind: z.enum(["metric", "column"]),
+      ref: z.string().min(1).max(200),
+      label: z.string().min(1).max(200),
+    }),
+    aggregation: z.enum(["sum", "avg", "count", "min", "max", "median"]),
+    // Dimensions to break down by (chart/table). Absent/empty = a single value.
+    groupBy: z.array(z.string().min(1).max(200)).max(2).optional(),
+    // Selection-only dimension filters (Channel is one-of [GT], …). Mirrors a
+    // subset of `dimensionFilterSchema` (queryPlanExecutor) — the compose lib
+    // maps these onto the executor's filter shape. `op` absent → "in".
+    filters: z
+      .array(
+        z.object({
+          column: z.string().min(1).max(200),
+          op: z.enum(["in", "not_in", "eq", "neq", "between"]).optional(),
+          values: z
+            .array(z.union([z.string(), z.number()]))
+            .min(1)
+            .max(200),
+        })
+      )
+      .max(8)
+      .optional(),
+    // Scorecards only: how to show change. `mode` absent → period_over_period;
+    // a user may set an optional per-card target for vs-target.
+    comparison: z
+      .object({
+        mode: z
+          .enum(["period_over_period", "vs_target", "none"])
+          .optional(),
+        target: z.number().optional(),
+        periodColumn: z.string().max(200).optional(),
+      })
+      .optional(),
+    viz: z
+      .object({
+        chartType: chartTypeSchema.optional(), // omit → auto from shape
+        barLayout: z.enum(["grouped", "stacked"]).optional(),
+      })
+      .optional(),
+    // Provenance; falls back to `dashboard.sessionId` when absent.
+    sessionId: z.string().max(200).optional(),
+  })
+  .strict();
+
+export type DashboardCardDefinition = z.infer<
+  typeof dashboardCardDefinitionSchema
+>;
+
 // Chart Specifications
 /**
  * Wave WI1 · InsightSpec — richer, dynamic-aware sibling of the legacy
@@ -325,6 +402,11 @@ export const chartSpecSchema = z.object({
         .optional(),
     })
     .optional(),
+  // Wave W1 (data-bound cards) · optional recompute recipe. A chart built via
+  // the guided card builder carries the measure×agg×filter that produced it,
+  // so it can be re-queried on data refresh. The frozen `data` above still
+  // renders instantly; a tile with NO `cardDefinition` is a legacy frozen tile.
+  cardDefinition: dashboardCardDefinitionSchema.optional(),
 });
 
 export type ChartSpec = z.infer<typeof chartSpecSchema>;
@@ -2796,9 +2878,77 @@ export const dashboardTableSpecSchema = z.object({
   columns: z.array(z.string()).min(1),
   // A row is an array of cell values aligned to `columns`.
   rows: z.array(z.array(z.union([z.string(), z.number(), z.null()]))),
+  // Wave W1 (data-bound cards) · optional recompute recipe (see chartSpec).
+  cardDefinition: dashboardCardDefinitionSchema.optional(),
 });
 
 export type DashboardTableSpec = z.infer<typeof dashboardTableSpecSchema>;
+
+/**
+ * Wave W1 (data-bound cards) · `dashboardScorecardSpecSchema` — a KPI tile =
+ * a `cardDefinition` (the recompute recipe) + the LAST COMPUTED `snapshot`
+ * (so it renders instantly, offline-safe, and recomputes on data refresh).
+ *
+ * Lives in TWO places, same schema: `dashboard.scorecards[]` (the auto-
+ * generated Executive-Summary band) and `sheet.scorecards[]` (scorecards a
+ * user builds onto any sheet). The client renders both via one component.
+ *
+ * `metricPolarity` decides direction-aware color (GC%↑ good, returns%↑ bad);
+ * it is resolved from `financeMetricAuthority` at generate/compose time and
+ * SNAPSHOTTED here so recompute/edit stays stable.
+ */
+export const dashboardScorecardSpecSchema = z
+  .object({
+    id: z.string().max(120),
+    title: z.string().min(1).max(160),
+    cardDefinition: dashboardCardDefinitionSchema,
+    // Absent → "number" / "neutral" in the render layer (no zod `.default()` —
+    // see the note on dashboardCardDefinitionSchema).
+    format: z
+      .enum(["number", "percent", "currency", "ratio", "duration"])
+      .optional(),
+    currencyCode: z
+      .string()
+      .regex(/^[A-Z]{3}$/)
+      .optional(),
+    decimals: z.number().int().min(0).max(6).optional(),
+    metricPolarity: z
+      .enum(["higher_better", "lower_better", "neutral"])
+      .optional(),
+    snapshot: z
+      .object({
+        value: z.number().nullable(),
+        priorValue: z.number().nullable().optional(),
+        deltaAbs: z.number().nullable().optional(),
+        deltaPct: z.number().nullable().optional(),
+        // Populated when comparison.mode = "vs_target".
+        targetValue: z.number().nullable().optional(),
+        tone: z
+          .enum(["good", "warn", "bad", "neutral"])
+          .optional(),
+        sparkline: z
+          .array(
+            z.object({
+              label: z.string().max(40),
+              value: z.number().nullable(),
+            })
+          )
+          .max(60)
+          .optional(),
+        // e.g. "Q3 FY26 vs Q2 FY26"; empty when there's no comparison.
+        periodLabel: z.string().max(80).optional(),
+        computedAt: z.number(),
+        // Staleness vs INCREMENTAL_REFRESH — the data version this was
+        // computed against.
+        dataVersion: z.number().optional(),
+      })
+      .optional(),
+  })
+  .strict();
+
+export type DashboardScorecardSpec = z.infer<
+  typeof dashboardScorecardSpecSchema
+>;
 
 export const dashboardGridItemSchema = z.object({
   i: z.string().max(120),
@@ -2860,6 +3010,8 @@ export const dashboardSheetSchema = z.object({
   pivots: z.array(dashboardPivotSpecSchema).max(12).optional(),
   tables: z.array(dashboardTableSpecSchema).optional(),
   narrativeBlocks: z.array(dashboardNarrativeBlockSchema).max(40).optional(),
+  // Wave W1 (data-bound cards) · KPI scorecards a user built onto this sheet.
+  scorecards: z.array(dashboardScorecardSpecSchema).max(24).optional(),
   /** react-grid-layout `layouts` keyed by breakpoint (lg, md, sm, xs, xxs). */
   gridLayout: dashboardGridLayoutsSchema.optional(),
   order: z.number().optional(),
@@ -3070,6 +3222,14 @@ export const dashboardSchema = z.object({
    */
   summaryGridLayout: dashboardGridLayoutsSchema.optional(),
   /**
+   * Wave W1 (data-bound cards) · the Executive-Summary KPI scorecard band.
+   * Dashboard-level (like `attentionAreas`/`summaryGridLayout`) because the
+   * exec band is dashboard-level, not per-sheet. Auto-generated at dashboard
+   * creation from real dataset queries; optional + back-compat (legacy docs
+   * without it fall back to the free-typed `answerEnvelope.magnitudes`).
+   */
+  scorecards: z.array(dashboardScorecardSpecSchema).max(8).optional(),
+  /**
    * Wave DR15 · Session this dashboard was created from. Optional —
    * existing Cosmos documents (and dashboards created via the bare
    * `POST /api/dashboards` "+ New" flow) parse cleanly without it.
@@ -3210,6 +3370,8 @@ export const dashboardSheetSpecSchema = z.object({
   charts: z.array(chartSpecSchema).max(24).optional(),
   pivots: z.array(dashboardPivotSpecSchema).max(12).optional(),
   tables: z.array(dashboardTableSpecSchema).max(8).optional(),
+  // Wave W1 (data-bound cards) · scorecards survive the spec→persist round-trip.
+  scorecards: z.array(dashboardScorecardSpecSchema).max(24).optional(),
   gridLayout: dashboardGridLayoutsSchema.optional(),
   order: z.number().optional(),
 });
@@ -3257,6 +3419,12 @@ export const dashboardSpecSchema = z.object({
    * Empty/absent = nothing flagged.
    */
   attentionAreas: z.array(attentionAreaSchema).max(12).optional(),
+  /**
+   * Wave W1 (data-bound cards) · Executive-Summary KPI scorecards, round-tripped
+   * from the agent's dashboard build into `dashboard.scorecards`. Optional +
+   * back-compat.
+   */
+  scorecards: z.array(dashboardScorecardSpecSchema).max(8).optional(),
 });
 
 export type DashboardSpec = z.infer<typeof dashboardSpecSchema>;
@@ -3320,6 +3488,9 @@ export const dashboardPatchSchema = z.object({
   // W-SBGRID · the Executive-Summary free-form card layout. Whole-field replace,
   // debounced from the band's react-grid-layout on drag/resize.
   summaryGridLayout: dashboardGridLayoutsSchema.optional(),
+  // Wave W1 (data-bound cards) · KPI scorecard band edit/recompute — a
+  // whole-array replace (mirrors `attentionAreas`).
+  scorecards: z.array(dashboardScorecardSpecSchema).max(8).optional(),
 });
 
 export type DashboardPatch = z.infer<typeof dashboardPatchSchema>;

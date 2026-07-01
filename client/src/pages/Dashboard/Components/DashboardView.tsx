@@ -442,6 +442,25 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
     [canEdit, dashboard.id, onRefresh, refetchDashboards, toast],
   );
 
+  // Wave W8 · re-run every Executive-Summary KPI scorecard against the current
+  // dataset and persist refreshed snapshots.
+  const handleRecomputeScorecards = useCallback(async () => {
+    if (!canEdit) return;
+    try {
+      await dashboardsApi.recomputeScorecards(dashboard.id);
+      if (onRefresh) await onRefresh();
+      await refetchDashboards();
+      toast({ title: 'KPIs refreshed' });
+    } catch (e) {
+      logger.error(e);
+      toast({
+        title: 'Could not refresh KPIs',
+        description: e instanceof Error ? e.message : 'Try again.',
+        variant: 'destructive',
+      });
+    }
+  }, [canEdit, dashboard.id, onRefresh, refetchDashboards, toast]);
+
   // W-SBGRID · debounced persist of the Executive-Summary free-form card layout.
   // Mirrors `handlePersistGrid` (the tile-canvas saver) but targets the
   // dashboard-level `summaryGridLayout` field via the band's `/patch` route.
@@ -1013,6 +1032,13 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                   </div>
                   {canEdit ? (
                     <AddTileMenu
+                      dashboardId={dashboard.id}
+                      sheetId={currentSheetId ?? undefined}
+                      hasSourceSession={!!dashboard.sessionId && !dashboard.isShared}
+                      onComposed={async () => {
+                        if (onRefresh) await onRefresh();
+                        await refetchDashboards();
+                      }}
                       onAddNarrative={handleAddNarrativeBlock}
                       onAddChart={async (chart) => {
                         if (!currentSheetId) return;
@@ -1064,6 +1090,8 @@ export function DashboardView({ dashboard, onBack, onDeleteChart, onDeleteTable,
                       (dashboard.summaryGridLayout as Layouts | undefined) ?? null
                     }
                     onPersistSummaryLayout={canEdit ? handlePersistSummaryGrid : undefined}
+                    scorecards={dashboard.scorecards}
+                    onRecomputeScorecards={canEdit ? handleRecomputeScorecards : undefined}
                   />
                 ) : null}
 

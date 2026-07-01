@@ -3454,6 +3454,11 @@ export async function runAgentTurn(
           intermediateSummaries,
           envelope: dashEnvelope,
           pivot: dashPivot,
+          // Wave W6 · dataset context for data-bound Executive-Summary KPI
+          // scorecards (gated by SCORECARD_EXEC_SUMMARY_ENABLED inside).
+          summary: ctx.summary,
+          sessionId: ctx.sessionId,
+          chatDocument: ctx.chatDocument,
           ...(followUpPrompts && followUpPrompts.length > 0
             ? { followUpPrompts }
             : {}),

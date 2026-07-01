@@ -13,6 +13,7 @@ import {
   InvestigationSummary,
   PriorInvestigationItem,
   AttentionAreaSpec,
+  DashboardScorecardSpec,
 } from '@/shared/schema';
 import { dashboardsApi } from '@/lib/api';
 
@@ -49,6 +50,8 @@ export interface DashboardData {
   attentionAreas?: AttentionAreaSpec[];
   /** W-SBGRID · saved free-form positions for the Executive-Summary cards. */
   summaryGridLayout?: Layouts;
+  /** Wave W7 · data-bound KPI scorecards for the Executive-Summary band. */
+  scorecards?: DashboardScorecardSpec[];
   /**
    * Wave DR15 · source session id. Persisted by the server's
    * `from-spec` / `from-analysis` create paths when supplied. Drives
@@ -136,6 +139,7 @@ export const normalizeDashboard = (dashboard: PersistedDashboard): DashboardData
     priorInvestigationsSnapshot: dashboard.priorInvestigationsSnapshot,
     attentionAreas: dashboard.attentionAreas,
     summaryGridLayout: dashboard.summaryGridLayout as Layouts | undefined,
+    scorecards: dashboard.scorecards,
     sessionId: dashboard.sessionId,
   };
   

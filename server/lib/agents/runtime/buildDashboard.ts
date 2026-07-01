@@ -58,7 +58,13 @@ import {
   type DashboardTemplate,
   type InvestigationSummary,
   type PriorInvestigationItem,
+  type DataSummary,
+  type DashboardScorecardSpec,
 } from "../../../shared/schema.js";
+import type { ChatDocument } from "../../../models/chat.model.js";
+import { isFlagOn } from "../../featureFlags.js";
+import { selectScorecardMetrics } from "../../scorecard/selectScorecardMetrics.js";
+import { computeScorecard } from "../../scorecard/computeScorecard.js";
 import {
   decideFeaturedCount,
   selectFeaturedCharts,
@@ -145,6 +151,66 @@ export interface BuildDashboardArgs {
   followUpPrompts?: string[];
   investigationSummary?: InvestigationSummary;
   priorInvestigationsSnapshot?: PriorInvestigationItem[];
+  /**
+   * Wave W6 (data-bound cards) · dataset context for the Executive-Summary KPI
+   * scorecards. When `SCORECARD_EXEC_SUMMARY_ENABLED` is on AND all three are
+   * present, the band is built from REAL dataset queries (value + PoP delta +
+   * sparkline) instead of the free-typed `magnitudes` KPI strip. Optional +
+   * back-compat: absent → the legacy KPI strip path is unchanged.
+   */
+  summary?: DataSummary;
+  sessionId?: string;
+  chatDocument?: ChatDocument | null;
+}
+
+/**
+ * Wave W6 · build + compute the Executive-Summary KPI scorecard band from real
+ * dataset queries and stamp it onto the spec. Returns true when scorecards were
+ * attached (so the caller suppresses the legacy free-typed KPI strip). Never
+ * throws — on any failure it returns false and the KPI strip path takes over.
+ */
+async function attachExecScorecards(
+  spec: DashboardSpec,
+  args: BuildDashboardArgs
+): Promise<boolean> {
+  if (!isFlagOn("SCORECARD_EXEC_SUMMARY_ENABLED")) return false;
+  if (!args.summary || !args.sessionId) return false;
+  try {
+    const model = args.chatDocument?.semanticModel ?? null;
+    const defs = selectScorecardMetrics({
+      summary: args.summary,
+      charts: args.charts,
+      model,
+      max: 6,
+    });
+    if (defs.length === 0) return false;
+    const loadRows = args.chatDocument
+      ? async () => {
+          const { loadLatestData } = await import("../../../utils/dataLoader.js");
+          return (await loadLatestData(args.chatDocument!)) as Record<string, any>[];
+        }
+      : undefined;
+    const scorecards: DashboardScorecardSpec[] = await Promise.all(
+      defs.map(async (d) => ({
+        ...d,
+        snapshot: await computeScorecard(d, {
+          summary: args.summary!,
+          sessionId: args.sessionId,
+          chat: args.chatDocument,
+          model,
+          loadRows,
+        }),
+      }))
+    );
+    spec.scorecards = scorecards;
+    return true;
+  } catch (err) {
+    agentLog("buildDashboard.scorecards_failed", {
+      turnId: args.turnId,
+      error: errorMessage(err),
+    });
+    return false;
+  }
 }
 
 // Pure-logic gating lives in ./dashboardAutogenGate.ts so it can be
@@ -318,15 +384,20 @@ async function runDashboardCompletion(
     summarySheet.charts = pickFeaturedCharts(args.charts, spec.template, args.depthBudget);
     summarySheet.pivots = args.pivot ? [args.pivot] : [];
 
-    // Prepend the deterministic KPI strip from envelope magnitudes (or the
-    // legacy magnitudes argument). Idempotent — replaces any prior block
-    // titled "Headline numbers".
-    const kpiBlock = buildKpiStripBlock(args.envelope?.magnitudes ?? args.magnitudes);
-    if (kpiBlock) {
-      const existing = (summarySheet.narrativeBlocks ?? []).filter(
-        (b) => b.title !== "Headline numbers"
-      );
-      summarySheet.narrativeBlocks = [kpiBlock, ...existing];
+    // Wave W6 · prefer DATA-BOUND KPI scorecards (real value + PoP delta +
+    // sparkline). When attached, suppress the legacy free-typed KPI strip.
+    const scored = await attachExecScorecards(spec, args);
+    if (!scored) {
+      // Prepend the deterministic KPI strip from envelope magnitudes (or the
+      // legacy magnitudes argument). Idempotent — replaces any prior block
+      // titled "Headline numbers".
+      const kpiBlock = buildKpiStripBlock(args.envelope?.magnitudes ?? args.magnitudes);
+      if (kpiBlock) {
+        const existing = (summarySheet.narrativeBlocks ?? []).filter(
+          (b) => b.title !== "Headline numbers"
+        );
+        summarySheet.narrativeBlocks = [kpiBlock, ...existing];
+      }
     }
 
     // ---- Sheet 2: All Artefacts (deterministic) ----

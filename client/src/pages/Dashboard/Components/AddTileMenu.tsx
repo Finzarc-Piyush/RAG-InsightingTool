@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   BarChart3,
+  LayoutGrid,
   Loader2,
   Minus,
   Plus,
@@ -31,7 +32,23 @@ import { useDashboardEditMode } from "../context/DashboardEditModeContext";
 import { sessionsApi } from "@/lib/api/sessions";
 import type { ChartSpec, DashboardTableSpec } from "@/shared/schema";
 import { chartSpecToTableSpec } from "../lib/chartSpecToTableSpec";
+import { GuidedCardBuilderDialog } from "./GuidedCardBuilder/GuidedCardBuilderDialog";
 import { cn } from "@/lib/utils";
+
+/** Wave W12 · build-time Vite flag + optional localStorage override (dev/QA). */
+function isCardBuilderOn(): boolean {
+  try {
+    const ls =
+      typeof localStorage !== "undefined"
+        ? localStorage.getItem("dashboard.cardBuilder")
+        : null;
+    if (ls === "true") return true;
+    if (ls === "false") return false;
+  } catch {
+    /* ignore */
+  }
+  return import.meta.env.VITE_DASHBOARD_CARD_BUILDER === "true";
+}
 
 /**
  * Wave DR6 · "+ Add tile" menu, mounted above the canvas. Visible only
@@ -71,6 +88,13 @@ interface AddTileMenuProps {
   onAddTable?: (table: DashboardTableSpec) => Promise<void>;
   /** Position the new block at this `order` value (default: prepend). */
   defaultOrder?: number;
+  /** Wave W12 · guided card builder wiring (data-bound cards). */
+  dashboardId?: string;
+  sheetId?: string;
+  /** True when the dashboard has an accessible source session to query. */
+  hasSourceSession?: boolean;
+  /** Called after a card is composed + persisted (refetch the dashboard). */
+  onComposed?: () => void | Promise<void>;
 }
 
 function generateId(prefix: string): string {
@@ -82,9 +106,15 @@ export function AddTileMenu({
   onAddChart,
   onAddTable,
   defaultOrder = 0,
+  dashboardId,
+  sheetId,
+  hasSourceSession,
+  onComposed,
 }: AddTileMenuProps) {
   const { mode, canToggle } = useDashboardEditMode();
   const [noteOpen, setNoteOpen] = useState(false);
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const showBuilder = isCardBuilderOn() && !!dashboardId && !!hasSourceSession;
   const [noteTitle, setNoteTitle] = useState("");
   const [noteBody, setNoteBody] = useState("");
   const [busy, setBusy] = useState(false);
@@ -139,9 +169,15 @@ export function AddTileMenu({
             Add tile
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-52">
-          <DropdownMenuLabel>Add to this sheet</DropdownMenuLabel>
-          <DropdownMenuSeparator />
+        <DropdownMenuContent align="end" className="w-56">
+          {/* Wave W12 · DATA cards are selection-only (no typed numbers). */}
+          <DropdownMenuLabel>Data</DropdownMenuLabel>
+          {showBuilder ? (
+            <DropdownMenuItem onSelect={() => setBuilderOpen(true)}>
+              <LayoutGrid className="h-4 w-4 mr-2" />
+              Build a card…
+            </DropdownMenuItem>
+          ) : null}
           {onAddChart ? (
             <DropdownMenuItem
               onSelect={() => {
@@ -164,9 +200,11 @@ export function AddTileMenu({
               Table from session
             </DropdownMenuItem>
           ) : null}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>Annotate</DropdownMenuLabel>
           <DropdownMenuItem onSelect={() => setNoteOpen(true)}>
             <StickyNote className="h-4 w-4 mr-2" />
-            Markdown note
+            Note (text)
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={handleAddDivider} disabled={busy}>
             <Minus className="h-4 w-4 mr-2" />
@@ -174,6 +212,18 @@ export function AddTileMenu({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {showBuilder && dashboardId ? (
+        <GuidedCardBuilderDialog
+          dashboardId={dashboardId}
+          sheetId={sheetId}
+          open={builderOpen}
+          onOpenChange={setBuilderOpen}
+          onComposed={async () => {
+            await onComposed?.();
+          }}
+        />
+      ) : null}
 
       {onAddChart || onAddTable ? (
         <ChartFromSessionPicker

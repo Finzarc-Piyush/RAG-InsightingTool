@@ -165,6 +165,18 @@ export const FEATURE_FLAGS = {
     purpose: "Auto-generate a dashboard after a qualifying answer.",
     lifecycle: "experimental",
   },
+  SCORECARD_EXEC_SUMMARY_ENABLED: {
+    default: false,
+    purpose:
+      "Wave W (data-bound cards): auto-generate DATA-BOUND KPI scorecards (value + PoP delta + sparkline) for the Executive-Summary band instead of free-typed magnitudes.",
+    lifecycle: "experimental",
+  },
+  DASHBOARD_CARD_BUILDER_ENABLED: {
+    default: false,
+    purpose:
+      "Wave W (data-bound cards): the Power-BI-style guided card builder + the /tiles/compose & /tiles/preview endpoints that run a live measure×agg×filter query against the dataset.",
+    lifecycle: "experimental",
+  },
   AUTO_ATTACH_LAYERS_ENABLED: {
     default: true,
     purpose: "Auto-attach reference/comparison layers to charts.",

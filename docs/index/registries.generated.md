@@ -41,7 +41,7 @@ The three canonical registries (CLAUDE.md invariant #8). One read instead of gre
 | `web_search` | Open-web search / external research for ANY question the uploaded data can | server/lib/agents/runtime/tools/webSearchTool.ts |
 | `zod` | — | server/lib/agents/runtime/tools/registerTools.ts |
 
-## HTTP routes (142 handlers across 21 modules)
+## HTTP routes (146 handlers across 21 modules)
 
 ### server/routes/upload.ts — mounted at `/api` (3)
 - `POST` /api/upload
@@ -108,12 +108,13 @@ The three canonical registries (CLAUDE.md invariant #8). One read instead of gre
 - `GET` /api/data/session/:sessionId
 - `GET` /api/data/user/:username/sessions
 
-### server/routes/dashboards.ts — mounted at `/api` (26)
+### server/routes/dashboards.ts — mounted at `/api` (30)
 - `GET` /api/dashboards
 - `POST` /api/dashboards
 - `DELETE` /api/dashboards/:dashboardId
 - `GET` /api/dashboards/:dashboardId
 - `PATCH` /api/dashboards/:dashboardId
+- `GET` /api/dashboards/:dashboardId/builder-metadata
 - `DELETE` /api/dashboards/:dashboardId/charts
 - `POST` /api/dashboards/:dashboardId/charts
 - `PATCH` /api/dashboards/:dashboardId/charts/:chartIndex
@@ -122,6 +123,7 @@ The three canonical registries (CLAUDE.md invariant #8). One read instead of gre
 - `POST` /api/dashboards/:dashboardId/patch
 - `DELETE` /api/dashboards/:dashboardId/pivots
 - `POST` /api/dashboards/:dashboardId/pivots
+- `POST` /api/dashboards/:dashboardId/scorecards/recompute
 - `POST` /api/dashboards/:dashboardId/sheets
 - `DELETE` /api/dashboards/:dashboardId/sheets/:sheetId
 - `PATCH` /api/dashboards/:dashboardId/sheets/:sheetId
@@ -130,6 +132,8 @@ The three canonical registries (CLAUDE.md invariant #8). One read instead of gre
 - `DELETE` /api/dashboards/:dashboardId/tables
 - `POST` /api/dashboards/:dashboardId/tables
 - `PATCH` /api/dashboards/:dashboardId/tables/:tableIndex
+- `POST` /api/dashboards/:dashboardId/tiles/compose
+- `POST` /api/dashboards/:dashboardId/tiles/preview
 - `POST` /api/dashboards/:id/drill
 - `GET` /api/dashboards/:id/export/pptx
 - `GET` /api/dashboards/:id/export/xlsx

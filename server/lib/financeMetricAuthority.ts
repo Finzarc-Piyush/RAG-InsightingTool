@@ -51,6 +51,13 @@ export type MetricKind =
 
 export type Additivity = "additive" | "non_additive";
 
+/**
+ * Direction of "good" for a metric — drives the scorecard's direction-aware
+ * tone (a rise in GC% is GOOD → green; a rise in returns% is BAD → red;
+ * a metric with no natural direction gets no colour judgment).
+ */
+export type MetricPolarity = "higher_better" | "lower_better" | "neutral";
+
 export interface FinanceTerm {
   /** Canonical id, e.g. "gross_contribution_pct". */
   id: string;
@@ -358,6 +365,84 @@ export function classifyMetric(name: string, semanticEntry?: SemanticHint): Metr
     return { kind: "ratio_percent", additivity: "non_additive" };
   }
   return { kind: "additive", additivity: "additive" };
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Metric polarity — direction of "good" (the scorecard tone layer of the authority)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Registry-term → polarity. Kept as a map (not a field scattered across ~30
+ * FINANCE_TERMS entries) so the polarity layer stays a single cohesive block.
+ * Terms omitted here fall through to the token heuristic, then `neutral`.
+ */
+const POLARITY_BY_TERM_ID: Readonly<Record<string, MetricPolarity>> = Object.freeze({
+  // Amounts / ratios where UP is good.
+  net_revenue: "higher_better",
+  gross_sales: "higher_better",
+  gross_profit: "higher_better",
+  gross_contribution: "higher_better",
+  ebitda: "higher_better",
+  ebit: "higher_better",
+  pbt: "higher_better",
+  pat: "higher_better",
+  volume: "higher_better",
+  gross_contribution_pct: "higher_better",
+  gross_margin_pct: "higher_better",
+  ebitda_pct: "higher_better",
+  value_share_pct: "higher_better",
+  volume_share_pct: "higher_better",
+  market_share_pct: "higher_better",
+  growth_pct: "higher_better",
+  adherence_rate: "higher_better",
+  numeric_distribution: "higher_better",
+  weighted_distribution: "higher_better",
+  realization: "higher_better",
+  gc_per_unit: "higher_better",
+  // Costs / leakage where UP is bad.
+  returns: "lower_better",
+  cogs: "lower_better",
+  trade_spend: "lower_better",
+  trade_spend_pct: "lower_better",
+  raw_material: "lower_better",
+  packaging_material: "lower_better",
+  conversion_cost: "lower_better",
+  overheads: "lower_better",
+  // Investment ratios / mix / index → deliberately NEUTRAL (no colour judgment):
+  //   ap_spend, ap_pct, mix_pct, index, score, row_count.
+});
+
+/**
+ * Unambiguous cost/leakage tokens → lower_better. NOTE: bare "return"/"returns"
+ * is intentionally EXCLUDED (it would mislabel ROI / "rate of return"); the
+ * finance-term `returns` is caught by POLARITY_BY_TERM_ID instead.
+ */
+const LOWER_BETTER_TOKENS = new Set([
+  "cost", "costs", "cogs", "expense", "expenses", "defect", "defects",
+  "complaint", "complaints", "churn", "attrition", "stockout", "stockouts",
+  "oos", "wastage", "shrinkage", "rejection", "rejections", "reject",
+  "overdue", "dso", "backlog", "downtime", "scrap", "rework", "loss", "losses",
+]);
+const HIGHER_BETTER_TOKENS = new Set([
+  "revenue", "sales", "profit", "margin", "share", "growth", "adherence",
+  "compliance", "distribution", "availability", "penetration", "productivity",
+  "throughput", "realization", "realisation",
+]);
+
+/**
+ * Resolve a metric/column name to its polarity (direction of "good").
+ * Order: registry-term map → token heuristic (lower before higher, so an
+ * explicit cost word dominates) → neutral.
+ */
+export function resolveMetricPolarity(name: string): MetricPolarity {
+  if (!name || !name.trim()) return "neutral";
+  const term = resolveFinanceTerm(name);
+  const byId = term ? POLARITY_BY_TERM_ID[term.id] : undefined;
+  if (byId) return byId;
+  const tokens = normalizeMetricTokens(name);
+  if (tokens.some((t) => LOWER_BETTER_TOKENS.has(t))) return "lower_better";
+  if (tokens.some((t) => HIGHER_BETTER_TOKENS.has(t))) return "higher_better";
+  return "neutral";
 }
 
 function expressionHintNonAdditive(hint: SemanticHint): boolean {

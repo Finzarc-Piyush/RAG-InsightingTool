@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Plus,
+  RefreshCw,
   Sparkles,
 } from "lucide-react";
 import type { Layouts } from "react-grid-layout";
@@ -16,8 +17,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { AttentionAreaSpec, DashboardAnswerEnvelope } from "@/shared/schema";
+import type {
+  AttentionAreaSpec,
+  DashboardAnswerEnvelope,
+  DashboardScorecardSpec,
+} from "@/shared/schema";
 import { useDashboardEditMode } from "../context/DashboardEditModeContext";
+import {
+  DashboardScorecardRow,
+  isScorecardExecSummaryOn,
+} from "./DashboardScorecardRow";
 import {
   SUMMARY_GROUPS,
   SUMMARY_GROUP_ORDER,
@@ -85,6 +94,11 @@ export interface DashboardSummaryBandProps {
   summaryGridLayout?: Layouts | null;
   /** W-SBGRID · debounced persist of the card layout on drag/resize. */
   onPersistSummaryLayout?: (layouts: Layouts) => void;
+  /** Wave W7 · data-bound KPI scorecards (dashboard.scorecards). Rendered as a
+   *  strip above the narrative; gated by VITE_SCORECARD_EXEC_SUMMARY. */
+  scorecards?: DashboardScorecardSpec[] | null;
+  /** Wave W8 · re-run the KPI scorecards against the current dataset (edit mode). */
+  onRecomputeScorecards?: () => void | Promise<void>;
 }
 
 export function DashboardSummaryBand({
@@ -96,6 +110,8 @@ export function DashboardSummaryBand({
   onUpdate,
   summaryGridLayout,
   onPersistSummaryLayout,
+  scorecards,
+  onRecomputeScorecards,
 }: DashboardSummaryBandProps) {
   const [open, setOpen] = useState<boolean>(() => readOpen(dashboardId));
   useEffect(() => setOpen(readOpen(dashboardId)), [dashboardId]);
@@ -153,8 +169,11 @@ export function DashboardSummaryBand({
     typeof envelope?.tldr === "string" && envelope.tldr.trim()
       ? envelope.tldr.trim()
       : null;
+  const hasScorecards = (scorecards?.length ?? 0) > 0;
   const hasAnything =
-    hasSummaryBandContent(envelope) || (attentionAreas?.length ?? 0) > 0;
+    hasSummaryBandContent(envelope) ||
+    (attentionAreas?.length ?? 0) > 0 ||
+    hasScorecards;
 
   if (!hasAnything && !isEditing) return null;
 
@@ -196,6 +215,18 @@ export function DashboardSummaryBand({
           ) : null}
         </button>
         <div className="flex items-center gap-1">
+          {/* Wave W8 · refresh the data-bound KPI scorecards against current data. */}
+          {isEditing && onRecomputeScorecards && hasScorecards && isScorecardExecSummaryOn() ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void onRecomputeScorecards()}
+              className="h-7 flex-shrink-0 px-2 text-xs text-muted-foreground"
+              title="Recompute the KPI scorecards from the latest data"
+            >
+              <RefreshCw className="mr-1 h-3.5 w-3.5" aria-hidden="true" /> Refresh KPIs
+            </Button>
+          ) : null}
           {/* W-SBGRID · reset the free-form arrangement back to auto-placement. */}
           {isEditing && onPersistSummaryLayout && summaryGridLayout
             && Object.keys(summaryGridLayout).length > 0 ? (
@@ -224,11 +255,16 @@ export function DashboardSummaryBand({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                {SUMMARY_GROUP_ORDER.map((group) => (
-                  <DropdownMenuItem key={group} onClick={() => openAdd(group)} className="capitalize">
-                    {SUMMARY_GROUPS[group].singular}
-                  </DropdownMenuItem>
-                ))}
+                {SUMMARY_GROUP_ORDER
+                  // Wave W8 · when the data-bound scorecard band is active, the
+                  // free-typed "Key number" add path is removed — KPI numbers
+                  // must come from real dataset queries, never typed by hand.
+                  .filter((group) => !(group === "magnitudes" && isScorecardExecSummaryOn()))
+                  .map((group) => (
+                    <DropdownMenuItem key={group} onClick={() => openAdd(group)} className="capitalize">
+                      {SUMMARY_GROUPS[group].singular}
+                    </DropdownMenuItem>
+                  ))}
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null}
@@ -248,8 +284,11 @@ export function DashboardSummaryBand({
 
       {open ? (
         <div id={`dashboard-summary-band-${dashboardId}`} className="px-4 pb-4 lg:px-5">
+          {/* Wave W7 · data-bound KPI scorecards lead the exec summary. */}
+          <DashboardScorecardRow scorecards={scorecards} />
+
           {tldr ? (
-            <Heading size="md" as="p" className="mt-2 max-w-4xl text-foreground/90">
+            <Heading size="md" as="p" className="mt-3 max-w-4xl text-foreground/90">
               {tldr}
             </Heading>
           ) : null}
