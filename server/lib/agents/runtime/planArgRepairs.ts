@@ -1028,6 +1028,7 @@ export function repairExecuteQueryPlanSort(step: PlanStep): void {
 export {
   extractRankingIntent,
   enforceRankingPlanShape,
+  liftSingleRowRankingFloor,
 } from "./planArgRepairs/ranking.js";
 export type {
   RankingIntentKind,

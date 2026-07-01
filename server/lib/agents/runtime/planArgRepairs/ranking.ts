@@ -16,20 +16,22 @@
  * can't drop it on the floor.
  *
  * This family is LOW-COUPLING: it depends only on external modules
- * (`findMatchingColumn`) and type-only references to `PlanStep` / `DataSummary`.
- * It does NOT reference any runtime value from planArgRepairs.ts, so it carries
- * no import cycle.
+ * (`findMatchingColumn`, and `TREND_INTENT_RE` from queryIntentAuthority for the
+ * growth-question exclusion) and type-only references to `PlanStep` /
+ * `DataSummary`. It does NOT reference any runtime value from planArgRepairs.ts
+ * and queryIntentAuthority does not import back here, so it carries no cycle.
  */
 import type { PlanStep } from "../types.js";
 import type { DataSummary } from "../../../../shared/schema.js";
 import { findMatchingColumn } from "../../utils/columnMatcher.js";
+import { TREND_INTENT_RE } from "../queryIntentAuthority.js";
 
 /** Shape of a user-question ranking intent, when one is recognised. */
 export type RankingIntentKind = "topN" | "extremum" | "entityList";
 
 export interface RankingIntent {
   kind: RankingIntentKind;
-  /** Number of rows the user asked for (1 for `extremum`, undefined for `entityList`). */
+  /** Number of rows to return (the user's N for `topN`, `EXTREMUM_LEADERBOARD_N` for `extremum`, undefined for `entityList`). */
   n?: number;
   /** Sort direction implied by the question wording (desc by default). */
   direction: "desc" | "asc";
@@ -42,6 +44,18 @@ export interface RankingIntent {
   /** Verbatim phrase that triggered the intent (for logging / tests). */
   matchedPhrase: string;
 }
+
+/**
+ * How many rows an extremum / single-winner question ("who has the highest X",
+ * "which channel shows the most Y") should return. A superlative answer is more
+ * trustworthy and decision-grade when the narrator can name the winner AND cite
+ * the surrounding leaderboard — a bare `LIMIT 1` leaves the synthesis step with
+ * a single row, so it (honestly) hedges "no other result is present, a ranking
+ * cannot be completed". 15 stays well under the synthesis surfacing cap
+ * (QUERY_RESULTS_MAX_ROWS_PER_STEP = 50 in buildSynthesisContext.ts), so every
+ * row reaches the narrator.
+ */
+export const EXTREMUM_LEADERBOARD_N = 15;
 
 const TOP_N_RE =
   /\b(top|best|leading)\s+(\d{1,7})\b/i;
@@ -235,13 +249,15 @@ export function extractRankingIntent(
     matchedPhrase = bottomMatch[0];
   } else if (extremumMaxMatch) {
     kind = "extremum";
-    n = 1;
+    // Return a leaderboard, not a single argmax row — see EXTREMUM_LEADERBOARD_N.
+    n = EXTREMUM_LEADERBOARD_N;
     direction = "desc";
     agg = "max";
     matchedPhrase = extremumMaxMatch[0];
   } else if (extremumMinMatch) {
     kind = "extremum";
-    n = 1;
+    // Return a leaderboard, not a single argmax row — see EXTREMUM_LEADERBOARD_N.
+    n = EXTREMUM_LEADERBOARD_N;
     direction = "asc";
     agg = "min";
     matchedPhrase = extremumMinMatch[0];
@@ -327,7 +343,11 @@ function applyToBreakdownRanking(
     const cur = typeof args.topN === "number" ? args.topN : 0;
     if (cur < intent.n) args.topN = intent.n;
   } else if (intent.kind === "extremum") {
-    args.topN = 1;
+    // Leaderboard, not a single winner: keep whatever (larger) topN the planner
+    // may have chosen, but never let it collapse to one row. `rankBy` composite
+    // expressions are left untouched, so ratio/composite rankings are safe.
+    const cur = typeof args.topN === "number" ? args.topN : 0;
+    if (cur < EXTREMUM_LEADERBOARD_N) args.topN = EXTREMUM_LEADERBOARD_N;
     if (intent.agg === "max") {
       // Default aggregation already "sum"; for "who has highest", sum is
       // appropriate when row-per-entity isn't guaranteed and "max" is
@@ -362,22 +382,66 @@ function applyToExecuteQueryPlan(
   }
   const before = JSON.stringify(plan);
 
-  // groupBy must include the entity column in front (so grouping is per-
-  // entity, not lost as a tail dimension).
-  const groupBy = Array.isArray(plan.groupBy)
-    ? (plan.groupBy as unknown[]).filter(
-        (g): g is string => typeof g === "string" && g !== intent.entityColumn
-      )
-    : [];
-  plan.groupBy = [intent.entityColumn, ...groupBy];
+  // Prepend the entity column to groupBy (so grouping is per-entity, not lost
+  // as a tail dimension). Reused by the entityList and simple-metric branches;
+  // deliberately NOT applied in the preserve-computed branch, which trusts the
+  // groupBy the planner built for its computed ranking.
+  const entityFirstGroupBy = (): string[] => {
+    const rest = Array.isArray(plan!.groupBy)
+      ? (plan!.groupBy as unknown[]).filter(
+          (g): g is string => typeof g === "string" && g !== intent.entityColumn
+        )
+      : [];
+    return [intent.entityColumn, ...rest];
+  };
+
+  // Raise plan.limit to the intent's N when the planner truncated the ranking
+  // below it — but never REDUCE a deliberately larger limit and never touch an
+  // absent/0 (unlimited) limit. This is the single-row → leaderboard lift.
+  const liftLimit = (): void => {
+    if (intent.n === undefined) return;
+    const cur = typeof plan!.limit === "number" ? plan!.limit : undefined;
+    if (cur !== undefined && cur > 0 && cur < intent.n) plan!.limit = intent.n;
+  };
 
   if (intent.kind === "entityList") {
     // Listing intent: distinct entities only. Strip aggregations and any
     // numeric sort/limit so the planner doesn't accidentally rank.
+    plan.groupBy = entityFirstGroupBy();
     plan.aggregations = [];
     delete plan.sort;
     delete plan.limit;
-  } else if (intent.metricColumn) {
+    args.plan = plan;
+    step.args = args;
+    return {
+      changed: JSON.stringify(plan) !== before,
+      reason: `execute_query_plan coerced to entityList on ${intent.entityColumn}`,
+    };
+  }
+
+  // COMPUTED RANKING GUARD: when the planner deliberately built a computed
+  // metric (a ratio like GST/Net Sales, a gap like MRP−NR, a share) it lives in
+  // plan.computedAggregations with plan.sort on the computed alias. Rewriting
+  // aggregations/sort here to a raw single-column sum would rank by the WRONG
+  // measure — a worse bug than the single-row one we're fixing. So preserve the
+  // shape verbatim and only lift the row cap off the leaderboard.
+  const hasComputed =
+    Array.isArray(plan.computedAggregations) &&
+    (plan.computedAggregations as unknown[]).length > 0;
+  if (hasComputed) {
+    liftLimit();
+    args.plan = plan;
+    step.args = args;
+    return {
+      changed: JSON.stringify(plan) !== before,
+      reason: `execute_query_plan preserved computed ${intent.kind} ranking on ${intent.entityColumn} (limit → ${plan.limit ?? "unlimited"})`,
+    };
+  }
+
+  if (intent.metricColumn) {
+    // Simple-metric ranking: the LLM frequently gets the entity column / metric
+    // / limit wrong, so enforce the leaderboard shape deterministically.
+    plan.groupBy = entityFirstGroupBy();
     // Ensure an aggregation on the metric column exists. Choose `max` for
     // extremum-style questions where the planner explicitly indicated max,
     // otherwise prefer `sum` (FMCG pragmatism — totals dominate).
@@ -438,6 +502,89 @@ export function enforceRankingPlanShape(
   }
   if (step.tool === "execute_query_plan") {
     return applyToExecuteQueryPlan(step, intent);
+  }
+  return { changed: false };
+}
+
+/**
+ * Broad superlative detector for the single-row → leaderboard FLOOR (Part 3).
+ * Wider than EXTREMUM_MAX_RE / EXTREMUM_MIN_RE (matches "which/what X …" too,
+ * not just "who has …") — and that is SAFE here precisely because this floor
+ * only ever LIFTS a row cap. It never rewrites the metric / sort / groupBy /
+ * computedAggregations, so a false positive is harmless: it just returns a few
+ * more rows of whatever the planner already computed. That safety is why we can
+ * afford a broad regex here, where `enforceRankingPlanShape` (which clobbers the
+ * plan shape) must stay narrow.
+ */
+export const SUPERLATIVE_FLOOR_RE =
+  /\b(?:who|which|what)\b[\s\S]{0,80}?\b(?:highest|largest|greatest|biggest|widest|most|maximum|max|top|lowest|smallest|least|fewest|narrowest|minimum|min|bottom|worst)\b/i;
+
+/**
+ * Deterministic backstop for LLM-emitted single-row rankings. When the planner
+ * itself (not the ranking-intent repair) shapes a superlative question as a
+ * grouped ranking capped at `LIMIT 1` / `topN 1` — the exact failure behind
+ * "no other <entity> result is present in the supplied observations, so a
+ * ranking cannot be completed" — lift the cap to a leaderboard so the narrator
+ * can name the winner AND cite the surrounding field.
+ *
+ * Wired in planner.ts immediately AFTER `enforceRankingPlanShape`. This is
+ * PLAN-SHAPE enforcement (how many rows a ranking step returns), NOT
+ * question-intent / depth-budget classification — it computes no intent class
+ * and no depthBudget (those live in queryIntentAuthority). It only ever touches
+ * the row cap; the metric, sort, groupBy and computedAggregations are left
+ * exactly as the planner built them.
+ */
+export function liftSingleRowRankingFloor(
+  step: PlanStep,
+  question: string | undefined
+): EnforceRankingResult {
+  if (!RANKING_TOOLS.has(step.tool)) return { changed: false };
+  const q = (question ?? "").trim();
+  if (!q) return { changed: false };
+  // Growth / trend questions route to compute_growth (WGR5); don't nudge their
+  // row shape even if a superlative word appears ("which brand grew the most").
+  if (TREND_INTENT_RE.test(q)) return { changed: false };
+  if (!SUPERLATIVE_FLOOR_RE.test(q)) return { changed: false };
+
+  const args = (step.args ?? {}) as Record<string, unknown>;
+
+  if (step.tool === "breakdown_ranking") {
+    const cur = typeof args.topN === "number" ? args.topN : undefined;
+    if (cur !== undefined && cur > 0 && cur < EXTREMUM_LEADERBOARD_N) {
+      args.topN = EXTREMUM_LEADERBOARD_N;
+      step.args = args;
+      return {
+        changed: true,
+        reason: `breakdown_ranking single-row floor: topN ${cur} → ${EXTREMUM_LEADERBOARD_N}`,
+      };
+    }
+    return { changed: false };
+  }
+
+  // execute_query_plan: only lift when this is genuinely a grouped ranking
+  // (per-entity groupBy + a sort) truncated below the leaderboard size. A bare
+  // scalar/limit query without groupBy+sort is left alone.
+  const plan = args.plan as Record<string, unknown> | undefined;
+  if (!plan || typeof plan !== "object") return { changed: false };
+  const groupByNonEmpty =
+    Array.isArray(plan.groupBy) && (plan.groupBy as unknown[]).length > 0;
+  const sortNonEmpty =
+    Array.isArray(plan.sort) && (plan.sort as unknown[]).length > 0;
+  const cur = typeof plan.limit === "number" ? plan.limit : undefined;
+  if (
+    groupByNonEmpty &&
+    sortNonEmpty &&
+    cur !== undefined &&
+    cur > 0 &&
+    cur < EXTREMUM_LEADERBOARD_N
+  ) {
+    plan.limit = EXTREMUM_LEADERBOARD_N;
+    args.plan = plan;
+    step.args = args;
+    return {
+      changed: true,
+      reason: `execute_query_plan single-row floor: limit ${cur} → ${EXTREMUM_LEADERBOARD_N}`,
+    };
   }
   return { changed: false };
 }

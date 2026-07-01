@@ -8,6 +8,7 @@ import {
   enforceRankingPlanShape,
   extractRankingIntent,
 } from "../lib/agents/runtime/planArgRepairs.js";
+import { EXTREMUM_LEADERBOARD_N } from "../lib/agents/runtime/planArgRepairs/ranking.js";
 import type { PlanStep } from "../lib/agents/runtime/types.js";
 import type { DataSummary } from "../shared/schema.js";
 
@@ -83,7 +84,8 @@ describe("RNK1 · enforceRankingPlanShape", () => {
     };
     const result = enforceRankingPlanShape(step, intent);
     assert.equal(result.changed, true);
-    assert.equal((step.args as any).topN, 1);
+    // Extremum returns a leaderboard, not a single winner (RNK1 fix).
+    assert.equal((step.args as any).topN, EXTREMUM_LEADERBOARD_N);
     assert.equal((step.args as any).direction, "asc");
   });
 
@@ -108,7 +110,7 @@ describe("RNK1 · enforceRankingPlanShape", () => {
     assert.equal(plan.limit, 300);
   });
 
-  it("coerces execute_query_plan extremum to {limit: 1, op: 'max', sort: desc}", () => {
+  it("coerces execute_query_plan extremum to {limit: leaderboard, op: 'max', sort: desc}", () => {
     const intent = extractRankingIntent("who has the maximum leaves", summary);
     assert.ok(intent);
     const step: PlanStep = {
@@ -123,7 +125,8 @@ describe("RNK1 · enforceRankingPlanShape", () => {
     assert.equal(plan.aggregations[0].column, "Leaves");
     assert.equal(plan.aggregations[0].operation, "max");
     assert.deepEqual(plan.sort, [{ column: "Leaves_max", direction: "desc" }]);
-    assert.equal(plan.limit, 1);
+    // Leaderboard, not a single argmax row (RNK1 fix).
+    assert.equal(plan.limit, EXTREMUM_LEADERBOARD_N);
   });
 
   it("coerces execute_query_plan extremum-min to {op: 'min', sort: asc}", () => {
@@ -138,7 +141,68 @@ describe("RNK1 · enforceRankingPlanShape", () => {
     const plan = (step.args as any).plan;
     assert.equal(plan.aggregations[0].operation, "min");
     assert.deepEqual(plan.sort, [{ column: "Leaves_min", direction: "asc" }]);
-    assert.equal(plan.limit, 1);
+    assert.equal(plan.limit, EXTREMUM_LEADERBOARD_N);
+  });
+
+  it("PRESERVES a computed-metric ranking (ratio/gap) — never clobbers to a raw column, only lifts the row cap", () => {
+    // The LLM built a deliberate computed ranking (a ratio sorted on its alias)
+    // capped at LIMIT 1. Rewriting it to a raw single-column sum would rank by
+    // the wrong measure — the worse bug. The repair must leave the shape intact
+    // and only lift the single-row cap to the leaderboard size.
+    const intent = extractRankingIntent("who has the highest sales", summary);
+    assert.ok(intent);
+    assert.equal(intent!.kind, "extremum");
+    const step: PlanStep = {
+      id: "s1",
+      tool: "execute_query_plan",
+      args: {
+        plan: {
+          groupBy: ["Region"], // deliberately NOT the intent entity — must stay
+          aggregations: [
+            { column: "Sales", operation: "sum", alias: "sales_sum" },
+            { column: "Leaves", operation: "sum", alias: "leaves_sum" },
+          ],
+          computedAggregations: [
+            { alias: "ratio", expression: "sales_sum / leaves_sum" },
+          ],
+          sort: [{ column: "ratio", direction: "desc" }],
+          limit: 1,
+        },
+      },
+    };
+    const result = enforceRankingPlanShape(step, intent);
+    const plan = (step.args as any).plan;
+    // Shape preserved verbatim...
+    assert.deepEqual(plan.groupBy, ["Region"]);
+    assert.equal(plan.aggregations.length, 2);
+    assert.deepEqual(plan.computedAggregations, [
+      { alias: "ratio", expression: "sales_sum / leaves_sum" },
+    ]);
+    assert.deepEqual(plan.sort, [{ column: "ratio", direction: "desc" }]);
+    // ...only the single-row cap is lifted.
+    assert.equal(plan.limit, EXTREMUM_LEADERBOARD_N);
+    assert.equal(result.changed, true);
+  });
+
+  it("leaves an unlimited computed ranking alone (already returns the full field)", () => {
+    const intent = extractRankingIntent("who has the highest sales", summary);
+    assert.ok(intent);
+    const step: PlanStep = {
+      id: "s1",
+      tool: "execute_query_plan",
+      args: {
+        plan: {
+          groupBy: ["Region"],
+          computedAggregations: [{ alias: "ratio", expression: "a / b" }],
+          sort: [{ column: "ratio", direction: "desc" }],
+          // no limit → unlimited
+        },
+      },
+    };
+    enforceRankingPlanShape(step, intent);
+    const plan = (step.args as any).plan;
+    assert.equal(plan.limit, undefined);
+    assert.deepEqual(plan.groupBy, ["Region"]);
   });
 
   it("rewrites entity-list intent to plain groupBy with no aggregations or limit", () => {

@@ -5,6 +5,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { extractRankingIntent } from "../lib/agents/runtime/planArgRepairs.js";
+import { EXTREMUM_LEADERBOARD_N } from "../lib/agents/runtime/planArgRepairs/ranking.js";
 import type { DataSummary } from "../shared/schema.js";
 
 const summary: DataSummary = {
@@ -57,11 +58,12 @@ describe("RNK1 · extractRankingIntent", () => {
     assert.equal(intent!.direction, "asc");
   });
 
-  it("parses 'who has the highest absenteeism' as extremum max with n=1", () => {
+  it("parses 'who has the highest absenteeism' as extremum max with a leaderboard n", () => {
     const intent = extractRankingIntent("who has the highest absenteeism", summary);
     assert.ok(intent);
     assert.equal(intent!.kind, "extremum");
-    assert.equal(intent!.n, 1);
+    // Extremum returns a leaderboard, not a single argmax row (RNK1 fix).
+    assert.equal(intent!.n, EXTREMUM_LEADERBOARD_N);
     assert.equal(intent!.direction, "desc");
     assert.equal(intent!.agg, "max");
     assert.equal(intent!.metricColumn, "Absenteeism");
@@ -78,7 +80,7 @@ describe("RNK1 · extractRankingIntent", () => {
     const intent = extractRankingIntent("who has the lowest absenteeism", summary);
     assert.ok(intent);
     assert.equal(intent!.kind, "extremum");
-    assert.equal(intent!.n, 1);
+    assert.equal(intent!.n, EXTREMUM_LEADERBOARD_N);
     assert.equal(intent!.direction, "asc");
     assert.equal(intent!.agg, "min");
   });

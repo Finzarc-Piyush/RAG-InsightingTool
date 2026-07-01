@@ -16,6 +16,11 @@ import { detectPeriodFromQuery, DatePeriod, extractDatesFromQuery, ExtractedDate
 import { applyVagueTrendDefaultAggregation } from './queryParserTemporalDefault.js';
 import { repairMisassignedDimensionFilters } from './dimensionFilterRepair.js';
 import { sanitisePivotColumnDimensionsInput } from './pivotLayoutFromDimensions.js';
+import {
+  EXTREMUM_LEADERBOARD_N,
+  SUPERLATIVE_FLOOR_RE,
+} from './agents/runtime/planArgRepairs/ranking.js';
+import { TREND_INTENT_RE } from './agents/runtime/queryIntentAuthority.js';
 import { logger } from "./logger.js";
 
 // W32 · exported so callers (e.g. chatStream.service.ts) can declare
@@ -311,6 +316,18 @@ function sanitiseParsedQuery(raw: Nullable<QueryParserResult>, summary?: DataSum
   parsed.sort = sanitiseSort(raw?.sort as Nullable<SortRequest>[]);
   parsed.topBottom = sanitiseTopBottom(raw?.topBottom as Nullable<TopBottomRequest>);
   if (typeof raw?.limit === 'number') parsed.limit = Math.max(1, Math.round(raw.limit));
+  // RNK1 · single-winner superlative floor (belt-and-suspenders for the NL→SQL
+  // path). A "which/who has the highest X" question shaped as a single row can't
+  // support "which is highest" and makes the narrator hedge "no other result is
+  // present". Lift ONLY the degenerate count/limit === 1 (never an explicit
+  // "top 5"), and skip growth/trend questions (they route to compute_growth).
+  const superlativeQ = (parsed.rawQuestion || '').trim();
+  if (superlativeQ && SUPERLATIVE_FLOOR_RE.test(superlativeQ) && !TREND_INTENT_RE.test(superlativeQ)) {
+    if (parsed.topBottom && parsed.topBottom.count === 1) {
+      parsed.topBottom = { ...parsed.topBottom, count: EXTREMUM_LEADERBOARD_N };
+    }
+    if (parsed.limit === 1) parsed.limit = EXTREMUM_LEADERBOARD_N;
+  }
   if (raw?.notes) parsed.notes = raw.notes.filter(Boolean) as string[];
 
   applyVagueTrendDefaultAggregation(parsed, parsed.rawQuestion || '', summary);
@@ -523,7 +540,7 @@ YOUR TASK:
   * Example: "Which months had total revenue above the yearly monthly average" → valueFilter: {column: "total", operator: ">", reference: "mean"}
   * The column should be the metric being compared - match to available numeric columns
 - If the user wants to exclude categories, use exclusionFilters.
-- If the user asks for **top/bottom N** or superlatives implying a short ranked list, populate **topBottom** and/or **sort** and ensure **groupBy** + **aggregations** match the dimension and measure being ranked.
+- If the user asks for **top/bottom N** or superlatives implying a short ranked list, populate **topBottom** and/or **sort** and ensure **groupBy** + **aggregations** match the dimension and measure being ranked. For a **single-winner superlative** ("which/who has the highest/largest/most/lowest X"), return a short **leaderboard** (topBottom.count ~15 / limit ~15) so the winner can be named alongside runners-up — **never count/limit 1** (a single row cannot support "which is highest").
 - Identify chart type hints (line, bar, scatter, pie, area) if strongly implied.
 - **Investigative / driver phrasing**: Questions like **"Investigating factors driving …"**, **"What drives success in …"**, **"Drivers of X in [region]"**, **"Why is [category] strong in [region]?"** — extract **dimensionFilters** for every named literal that matches **sample_values** / **top_values** (e.g. Region **East**, Category **Technology**). Prefer **dimensionFilters** over guessing new column names. If the user does **not** ask for totals or breakdowns yet, you may leave **aggregations** and **groupBy** null and rely on filters only; set **confidence** ≥ 0.85 when literals clearly match hints.
 

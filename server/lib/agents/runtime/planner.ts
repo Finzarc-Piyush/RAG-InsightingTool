@@ -106,6 +106,7 @@ import {
   injectMultiPerIntent,
   extractRankingIntent,
   enforceRankingPlanShape,
+  liftSingleRowRankingFloor,
   synthesizeAggregationStep,
   planAlreadyCoversAggregation,
 } from "./planArgRepairs.js";
@@ -599,7 +600,7 @@ Rules:
 - PRR1 — BUILD ON A PRIOR ANSWER: when the question references or extends an EARLIER turn's result ("now break that down by X", "of those…", "compare to the last/previous answer", "same but for Y"), FIRST emit a retrieve_prior_result step with a short description of the result to reuse (e.g. {"query":"top 10 products by sales"}). It returns that prior turn's FULL stored rows + columns so you build on them — never silently re-derive or guess which entities/filters were involved. (Within the SAME turn, reference an earlier step's output via dependsOn / Prior tool observations instead.)
 - Step budget: at most 6 steps when requestsDashboard is false; at most 14 steps when requestsDashboard is true (dashboard breakdowns are independent and parallelisable, so the larger budget translates to ~3 parallel groups of 4–5 steps each rather than 14× sequential latency). Each step: id (unique string), tool (exact name), args (object, {} if none), optional dependsOn (id string), optional parallelGroup (string), optional hypothesisId (string).
 - parallelGroup EFFICIENCY: when the plan has 3+ independent breakdowns (Region, Category, Salesman, etc.), assign them the same parallelGroup string — they run concurrently and count as ONE step against the step budget. Steps in the same parallelGroup must not have dependsOn pointing to each other. Cap at 5 steps per group when requestsDashboard is true (so an 8-dim dashboard fits in two parallelGroups), otherwise 3.
-- RNK1 — RANKING / LEADERBOARD / ENTITY-MAX intent: for "top N <entities>" (top 300 salespeople, best 50 SKUs), "who has the highest/maximum/most/largest <metric>" (max leaves, highest absenteeism), "who has the lowest/minimum/least/fewest <metric>", and "list <entities>" / "who are the <entities>" questions, emit the leaderboard plan shape — never aggregate the metric without grouping by the entity. Two valid tools: (a) breakdown_ranking with metricColumn=<numeric>, breakdownColumn=<entity column from schema>, topN=<N from question> (use the literal N — do not cap; for "highest/lowest" use topN=1), direction="desc" (default) or "asc" (for lowest/least/fewest/worst/bottom). (b) execute_query_plan with plan.groupBy=[<entity>], plan.aggregations=[{column:<metric>, operation:"sum"|"max"|"min"}], plan.sort=[{column:"<metric>_<op>", direction:"desc"|"asc"}], plan.limit=<N> (1 for extremum, N for "top N"). For entity-listing intent ("list the salespeople") use execute_query_plan with groupBy=[<entity>], NO aggregations, NO limit. A deterministic post-processor will repair these shapes when the planner gets them wrong, but emit the correct shape on the first try when possible.
+- RNK1 — RANKING / LEADERBOARD / ENTITY-MAX intent: for "top N <entities>" (top 300 salespeople, best 50 SKUs), "who has the highest/maximum/most/largest <metric>" (max leaves, highest absenteeism), "who has the lowest/minimum/least/fewest <metric>", and "list <entities>" / "who are the <entities>" questions, emit the leaderboard plan shape — never aggregate the metric without grouping by the entity. Two valid tools: (a) breakdown_ranking with metricColumn=<numeric>, breakdownColumn=<entity column from schema>, topN=<N from question> (use the literal N — do not cap; for a single-winner "highest/lowest/which X is most" question use topN=15, a short leaderboard, and name the winner in the narrative — NEVER topN=1, so the answer can cite the ranking and runners-up), direction="desc" (default) or "asc" (for lowest/least/fewest/worst/bottom). (b) execute_query_plan with plan.groupBy=[<entity>], plan.aggregations=[{column:<metric>, operation:"sum"|"max"|"min"}], plan.sort=[{column:"<metric>_<op>", direction:"desc"|"asc"}], plan.limit=<N> (for a single-winner/extremum question use ~15 — a short leaderboard, NOT 1 — so the answer names the winner AND cites runners-up; N for "top N"). For a COMPUTED metric (ratio like GST/Net_Sales, gap like MRP−NR, share) put it in plan.computedAggregations and sort on that alias — still return ~15 rows, never a single row. For entity-listing intent ("list the salespeople") use execute_query_plan with groupBy=[<entity>], NO aggregations, NO limit. A deterministic post-processor will repair these shapes when the planner gets them wrong, but emit the correct shape on the first try when possible.
 - hypothesisId: when INVESTIGATION_HYPOTHESES is present, set this to the id of the hypothesis the step primarily tests; the server marks that hypothesis resolved when the step produces evidence.
 ${PLANNER_CONFIDENCE_DIRECTIVE}
 - TOOL_ROUTER_HINT (when present in the user message): a deterministic pre-classifier maps the question to an analyst intent and lists the canonical tools in priority order. Treat the first recommendation as the default unless the question's specifics rule it out; if you deviate, justify in your rationale. EXTERNAL_CLAIM_MARKERS (when present): the question references external claims the dataset alone cannot answer — add a web_search step before synthesis.
@@ -892,6 +893,18 @@ Output JSON shape: {"rationale": string, "steps": [{"id": string, "tool": string
     if (rankingFix.changed) {
       logger.warn(
         `[planner] coerced ${step.tool} step ${step.id} to ranking shape: ${rankingFix.reason ?? ""}`
+      );
+    }
+    // RNK1 · single-row → leaderboard FLOOR. The intent repair above only fires
+    // for "who has …" phrasings; this catches the LLM's OWN `LIMIT 1` / `topN 1`
+    // on superlative "which/what X is highest/largest/…" questions (the failure
+    // behind "no other <entity> result is present … a ranking cannot be
+    // completed"). Row-cap only — never rewrites metric/sort/groupBy — so it is
+    // safe on computed (ratio/gap) plans and on any superlative false positive.
+    const rankingFloorFix = liftSingleRowRankingFloor(step, ctx.question);
+    if (rankingFloorFix.changed) {
+      logger.warn(
+        `[planner] lifted ${step.tool} step ${step.id} off single-row cap: ${rankingFloorFix.reason ?? ""}`
       );
     }
     // WPF2 · Compound-shape Metric guard: prevent silent SUM across mixed
