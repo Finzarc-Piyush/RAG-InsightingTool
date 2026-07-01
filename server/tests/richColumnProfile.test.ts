@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildRichDataSummary,
+  computeFullColumnNumericStats,
   type NumericColumnProfile,
   type DateColumnProfile,
   type CategoricalColumnProfile,
@@ -62,6 +63,7 @@ test("classifies columns by authoritative type, not re-detection", () => {
     date: 1,
     categorical: 1,
     boolean: 1,
+    empty: 0,
   });
 });
 
@@ -163,4 +165,141 @@ test("hidden __tf_* facet columns are excluded", () => {
   const result = buildRichDataSummary(rows, summary);
   assert.equal(result.columns.length, 1);
   assert.equal(result.columns[0].name, "region");
+});
+
+// ── Semantic-type-driven presentation (the user's fixes) ────────────────────
+
+function semanticSummary(
+  colName: string,
+  semantics: NonNullable<DataSummary["columns"][number]["semantics"]>,
+  extra: Partial<DataSummary["columns"][number]> = {},
+): DataSummary {
+  return makeSummary({
+    rowCount: 3,
+    numericColumns: extra.type === "number" ? [colName] : [],
+    dateColumns: extra.type === "date" ? [colName] : [],
+    columns: [
+      { name: colName, type: extra.type ?? "number", sampleValues: [], semantics, ...extra },
+    ],
+  } as Partial<DataSummary>);
+}
+
+test("ratio_percent measure → sum suppressed, mean kept (SS5-7: never sum a %)", () => {
+  const rows = [{ margin: 12 }, { margin: 18 }, { margin: 30 }];
+  const summary = semanticSummary("margin", {
+    semanticType: "measure_ratio_percent",
+    aggregation: "avg",
+    displayKind: "numeric",
+    source: "deterministic",
+  }, { type: "number" });
+  const m = buildRichDataSummary(rows, summary).columns[0] as NumericColumnProfile;
+  assert.equal(m.kind, "numeric");
+  assert.equal(m.sum, null); // never summed
+  assert.equal(m.mean, 20); // mean still meaningful
+});
+
+test("ordinal (fy_month_number) → mean+sum null, counts as categorical (SS3)", () => {
+  const rows = [{ fy_month_number: 1 }, { fy_month_number: 1 }, { fy_month_number: 1 }];
+  const summary = semanticSummary("fy_month_number", {
+    semanticType: "ordinal",
+    aggregation: "none",
+    displayKind: "ordinal",
+    source: "deterministic",
+  }, { type: "number" });
+  const result = buildRichDataSummary(rows, summary);
+  const o = result.columns[0] as NumericColumnProfile;
+  assert.equal(o.kind, "ordinal");
+  assert.equal(o.mean, null);
+  assert.equal(o.sum, null);
+  assert.equal(o.min, 1); // order statistic kept
+  assert.equal(result.dataset.typeBreakdown.categorical, 1);
+  assert.equal(result.dataset.typeBreakdown.numeric, 0);
+});
+
+test("temporal_year → date tally, no mean/sum (SS2)", () => {
+  const rows = [{ Year: 26 }, { Year: 26 }, { Year: 26 }];
+  const summary = semanticSummary("Year", {
+    semanticType: "temporal_year",
+    aggregation: "none",
+    displayKind: "date",
+    temporalGrain: "year",
+    source: "deterministic",
+  }, { type: "number" });
+  const result = buildRichDataSummary(rows, summary);
+  assert.equal(result.dataset.typeBreakdown.date, 1);
+  assert.equal(result.dataset.typeBreakdown.numeric, 0);
+});
+
+test("single-date Month column → grain monthOrQuarter, NOT dayOrWeek (SS1)", () => {
+  const rows = [
+    { Month: "2026-04-01" },
+    { Month: "2026-04-01" },
+    { Month: "2026-04-01" },
+  ];
+  const summary = semanticSummary("Month", {
+    semanticType: "temporal_month",
+    aggregation: "none",
+    displayKind: "date",
+    temporalGrain: "monthOrQuarter",
+    source: "deterministic",
+  }, { type: "date" });
+  const d = buildRichDataSummary(rows, summary).columns[0] as DateColumnProfile;
+  assert.equal(d.kind, "date");
+  assert.equal(d.grain, "monthOrQuarter");
+});
+
+test("empty column (100% blank) → empty profile + empty tally (SS4)", () => {
+  const rows = [{ UGST: null }, { UGST: "" }, { UGST: null }];
+  const summary = semanticSummary("UGST", {
+    semanticType: "empty",
+    aggregation: "none",
+    displayKind: "empty",
+    source: "deterministic",
+  }, { type: "string" });
+  const result = buildRichDataSummary(rows, summary);
+  assert.equal(result.columns[0].kind, "empty");
+  assert.equal(result.columns[0].nullPct, 100);
+  assert.equal(result.dataset.typeBreakdown.empty, 1);
+});
+
+test("sum/min/max come from FULL column even when profiled rows are a sample (P3)", () => {
+  // Full data: sum 55, min 1, max 10. Simulate the endpoint sampling to 3 rows
+  // by passing full stats + a reduced `data`.
+  const fullData = Array.from({ length: 10 }, (_, i) => ({ v: i + 1 }));
+  const fullStats = computeFullColumnNumericStats(fullData, ["v"]);
+  const sampledData = [{ v: 1 }, { v: 5 }, { v: 9 }]; // a sample; its own sum is 15
+  const summary = makeSummary({
+    rowCount: 10,
+    numericColumns: ["v"],
+    columns: [{ name: "v", type: "number", sampleValues: [1, 2, 3] }],
+  } as Partial<DataSummary>);
+  const result = buildRichDataSummary(sampledData, summary, {
+    fullColumnNumericStats: fullStats,
+  });
+  const v = result.columns[0] as NumericColumnProfile;
+  assert.equal(v.sum, 55); // full sum, NOT the sample's 15
+  assert.equal(v.min, 1);
+  assert.equal(v.max, 10);
+  assert.equal(v.mean, 5.5);
+});
+
+test("accounting-negative strings parse to negatives, not positives (N1)", () => {
+  const rows = [{ adj: "(1.5)" }, { adj: "2.0" }, { adj: "(3)" }];
+  const summary = makeSummary({
+    rowCount: 3,
+    numericColumns: ["adj"],
+    columns: [{ name: "adj", type: "number", sampleValues: ["(1.5)"] }],
+  } as Partial<DataSummary>);
+  const p = buildRichDataSummary(rows, summary).columns[0] as NumericColumnProfile;
+  assert.equal(p.min, -3); // not +3
+  assert.equal(p.negativeCount, 2);
+  assert.equal(p.sum, -2.5); // -1.5 + 2 - 3, not +6.5
+});
+
+test("no semantics → legacy numeric/date membership routing is preserved", () => {
+  // SUMMARY has no `semantics` on any column; behaves exactly as before.
+  const result = buildRichDataSummary(ROWS, SUMMARY);
+  const price = result.columns.find((c) => c.name === "price") as NumericColumnProfile;
+  assert.equal(price.kind, "numeric");
+  assert.equal(price.sum, 1100); // still summed (default aggregation)
 });

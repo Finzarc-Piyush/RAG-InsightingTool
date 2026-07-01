@@ -15,6 +15,7 @@ import {
   intradayResolution,
 } from './dateUtils.js';
 import { isLikelyIdentifierColumnName, isIdentifierLikeNumericColumn } from './columnIdHeuristics.js';
+import { classifyColumnSemantics } from './columnSemantics.js';
 import { agentLog } from './agents/runtime/agentLogger.js';
 import { findMatchingColumn } from './agents/utils/columnMatcher.js';
 import type { DatasetProfile } from './datasetProfile.js';
@@ -987,6 +988,7 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     });
 
     let temporalDisplayGrain: 'dayOrWeek' | 'monthOrQuarter' | 'year' | undefined;
+    let parsedDatesForGrain: Date[] | undefined;
     if (isDate && nn.length > 0) {
       const parsedDates = nn
         .map((v) => {
@@ -998,6 +1000,7 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
         })
         .filter((d): d is Date => !!d);
       if (parsedDates.length > 0) {
+        parsedDatesForGrain = parsedDates;
         temporalDisplayGrain = inferTemporalGrainFromDates(parsedDates);
       }
     }
@@ -1068,6 +1071,21 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
     const duration =
       type === 'number' ? finaliseDurationForColumn(col) : undefined;
 
+    // Deterministic per-column semantic type (name + values). The floor that
+    // survives an LLM timeout; refined later in uploadQueue once additivity /
+    // indicators are known (see overlayLlmSemantics). Duration columns are real
+    // numeric measures — leave them additive (skip the classifier override).
+    const semantics = duration
+      ? undefined
+      : classifyColumnSemantics({
+          name: col,
+          isNumericMember: type === 'number',
+          isDateMember: type === 'date',
+          hasCurrency: !!currency,
+          sampleValues: values,
+          dates: parsedDatesForGrain,
+        });
+
     return {
       name: col,
       type,
@@ -1078,6 +1096,7 @@ export function createDataSummary(data: Record<string, any>[]): DataSummary {
       ...(timeOfDayInfo ? { timeOfDay: timeOfDayInfo } : {}),
       ...(duration ? { duration } : {}),
       ...(dateRange ? { dateRange } : {}),
+      ...(semantics ? { semantics } : {}),
     };
   });
 

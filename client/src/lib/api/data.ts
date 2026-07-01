@@ -68,7 +68,24 @@ export const dataApi = {
  * statistics that are meaningful for its kind.
  * ------------------------------------------------------------------ */
 
-export type ColumnKind = "numeric" | "date" | "categorical" | "boolean";
+export type ColumnKind =
+  | "numeric"
+  | "date"
+  | "categorical"
+  | "boolean"
+  | "ordinal"
+  | "empty";
+
+/** Semantic classification (name + values). Mirrors server ColumnSemantics.
+ * Drives which stat tiles are shown and the "why suppressed" rationale chip. */
+export interface ColumnSemanticsView {
+  semanticType: string;
+  aggregation: "sum" | "avg" | "none";
+  displayKind: "numeric" | "date" | "categorical" | "boolean" | "ordinal" | "empty";
+  temporalGrain?: "dayOrWeek" | "monthOrQuarter" | "year";
+  source?: "deterministic" | "llm" | "user";
+  confidence?: number;
+}
 
 export interface BaseColumnProfile {
   name: string;
@@ -79,10 +96,13 @@ export interface BaseColumnProfile {
   nullPct: number;
   completeness: number;
   distinctCount: number;
+  /** Present when the server attached a semantic classification. */
+  semantics?: ColumnSemanticsView;
 }
 
 export interface NumericColumnProfile extends BaseColumnProfile {
-  kind: "numeric";
+  /** "ordinal" reuses the numeric shape but suppresses mean/sum/std (all null). */
+  kind: "numeric" | "ordinal";
   nonNumericCount: number;
   mean: number | null;
   median: number | null;
@@ -135,10 +155,17 @@ export interface CategoricalColumnProfile extends BaseColumnProfile {
   negativeValues?: string[];
 }
 
+/** A column with no non-blank values at all (100% missing). Rendered in a
+ * collapsed "Empty columns" group and excluded from the type tallies. */
+export interface EmptyColumnProfile extends BaseColumnProfile {
+  kind: "empty";
+}
+
 export type RichColumnProfile =
   | NumericColumnProfile
   | DateColumnProfile
-  | CategoricalColumnProfile;
+  | CategoricalColumnProfile
+  | EmptyColumnProfile;
 
 export interface RichDataSummaryResponse {
   dataset: {
@@ -149,6 +176,8 @@ export interface RichDataSummaryResponse {
       date: number;
       categorical: number;
       boolean: number;
+      /** All-blank columns (100% missing). */
+      empty: number;
     };
     totalCells: number;
     totalNulls: number;

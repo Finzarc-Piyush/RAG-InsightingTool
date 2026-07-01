@@ -35,8 +35,9 @@ import { errorMessage } from "../utils/errorMessage.js";
 const DOC_ID_SEPARATOR = "__";
 
 /** Bump whenever the profile prompt or `DatasetProfile` shape changes
- *  materially — older cache docs then read as a MISS and get recomputed. */
-export const DATASET_PROFILE_CACHE_SCHEMA_VERSION = 1;
+ *  materially — older cache docs then read as a MISS and get recomputed.
+ *  v2: added per-column semantic-type output (`perColumn`) + prompt contract. */
+export const DATASET_PROFILE_CACHE_SCHEMA_VERSION = 2;
 
 /** Test-only container injection. Production never touches this. */
 let testContainerOverride: {

@@ -1153,6 +1153,82 @@ class UploadQueue {
           logger.warn("W6 · additivity stamp failed (non-fatal):", additivityErr);
         }
 
+        // Semantic-type authority · refine each column's `semantics` now that
+        // additivity + indicators are known, then overlay the dataset-profile
+        // LLM's per-column type (name + values). The deterministic classifier is
+        // the floor; the LLM refines but never demotes a hard signal. Best-effort
+        // (non-blocking): a timeout leaves the deterministic `semantics` stamped
+        // at parse time (createDataSummary) intact.
+        try {
+          const { classifyColumnSemantics, overlayLlmSemantics } = await import(
+            "../lib/columnSemantics.js"
+          );
+          const numericSet = new Set(summary.numericColumns);
+          const dateSet = new Set(summary.dateColumns);
+          const perColumnLlm = new Map(
+            (datasetProfile?.perColumn ?? []).map((p) => [p.name, p]),
+          );
+          const scanRows = Math.min(data.length, 5000);
+          const sampleFor = (name: string): unknown[] => {
+            const out: unknown[] = [];
+            for (let i = 0; i < scanRows; i++) {
+              const v = (data[i] as Record<string, unknown>)?.[name];
+              if (v === null || v === undefined) continue;
+              if (typeof v === "string" && v.trim() === "") continue;
+              out.push(v);
+              if (out.length >= 200) break;
+            }
+            return out;
+          };
+          for (const col of summary.columns) {
+            if (col.temporalFacetGrain) continue; // skip hidden __tf_* facet helpers
+            let base = classifyColumnSemantics({
+              name: col.name,
+              isNumericMember: numericSet.has(col.name),
+              isDateMember: dateSet.has(col.name),
+              additivity: col.additivity,
+              additivityKind: col.additivityKind,
+              hasCurrency: !!col.currency,
+              isBooleanIndicator: col.indicator?.kind === "boolean",
+              sampleValues: sampleFor(col.name),
+            });
+            // Preserve the date-derived grain the parse-time pass computed — the
+            // name-only re-run here can't recover it for un-named date columns.
+            if (
+              !base.temporalGrain &&
+              base.displayKind === "date" &&
+              col.semantics?.temporalGrain
+            ) {
+              base = { ...base, temporalGrain: col.semantics.temporalGrain };
+            }
+            const llm = perColumnLlm.get(col.name);
+            col.semantics = overlayLlmSemantics(
+              base,
+              llm
+                ? { semanticType: llm.semanticType, temporalGrain: llm.temporalGrain }
+                : undefined,
+              col.name,
+            );
+            // A4 · back-fill the DURABLE additivity signal (read by the chart
+            // math in chartGenerator.resolveAggregation) from semantics, so a
+            // ratio/per-unit the name-based finance catalog missed (e.g.
+            // "Primary Scheme") is still never SUMMED. Only ever UPGRADE
+            // additive→non_additive; never downgrade a catalog verdict.
+            const st = col.semantics.semanticType;
+            if (col.additivity !== "non_additive") {
+              if (st === "measure_ratio_percent") {
+                col.additivity = "non_additive";
+                col.additivityKind = "ratio_percent";
+              } else if (st === "measure_per_unit") {
+                col.additivity = "non_additive";
+                col.additivityKind = "per_unit";
+              }
+            }
+          }
+        } catch (semanticsErr) {
+          logger.warn("column-semantics refine failed (non-fatal):", semanticsErr);
+        }
+
         // W-LEAVE · detect the dataset's structural LEAVE / non-working day(s)
         // (a weekday whose daily activity is ≈0 — e.g. Sundays). Stored inert on
         // the summary; the engine reads it to DISCLOSE + ask before excluding

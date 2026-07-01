@@ -21,6 +21,9 @@ import {
   Fingerprint,
   Sigma,
   Layers,
+  ListOrdered,
+  CircleSlash,
+  ChevronRight,
 } from 'lucide-react';
 import {
   dataApi,
@@ -29,6 +32,7 @@ import {
   type NumericColumnProfile,
   type DateColumnProfile,
   type CategoricalColumnProfile,
+  type EmptyColumnProfile,
   type ColumnKind,
 } from '@/lib/api/data';
 import { useToast } from '@/hooks/use-toast';
@@ -130,6 +134,20 @@ const KIND_STYLE: Record<ColumnKind, KindStyle> = {
     text: 'text-sky-600 dark:text-sky-400',
     soft: 'bg-sky-500/10',
     bar: 'bg-sky-500',
+  },
+  ordinal: {
+    label: 'Ordinal',
+    Icon: ListOrdered,
+    text: 'text-slate-600 dark:text-slate-300',
+    soft: 'bg-slate-500/10',
+    bar: 'bg-slate-500',
+  },
+  empty: {
+    label: 'Empty',
+    Icon: CircleSlash,
+    text: 'text-muted-foreground',
+    soft: 'bg-muted',
+    bar: 'bg-muted-foreground/40',
   },
 };
 
@@ -292,13 +310,17 @@ function CompletenessRing({ pct, accent }: { pct: number; accent: string }) {
 
 function qualityFlags(col: RichColumnProfile): Array<{ tone: 'warn' | 'info'; text: string }> {
   const flags: Array<{ tone: 'warn' | 'info'; text: string }> = [];
+  if (col.kind === 'empty') {
+    flags.push({ tone: 'warn', text: 'Empty (all blank)' });
+    return flags;
+  }
   if (col.nullPct >= 1) {
     flags.push({
       tone: col.nullPct >= 20 ? 'warn' : 'info',
       text: `${fmtPct(col.nullPct)} missing`,
     });
   }
-  if (col.kind === 'numeric') {
+  if (col.kind === 'numeric' || col.kind === 'ordinal') {
     if (col.outlierCount > 0) flags.push({ tone: 'info', text: `${fmtInt(col.outlierCount)} outliers` });
     if (col.nonNumericCount > 0)
       flags.push({ tone: 'warn', text: `${fmtInt(col.nonNumericCount)} non-numeric` });
@@ -311,6 +333,12 @@ function qualityFlags(col: RichColumnProfile): Array<{ tone: 'warn' | 'info'; te
     if (col.isLikelyId) flags.push({ tone: 'info', text: 'Likely identifier' });
     else if (col.isHighCardinality) flags.push({ tone: 'info', text: 'High cardinality' });
   }
+  // Why a stat is suppressed — mirrors the server's aggregation policy so the
+  // "—" tiles read as intentional, not broken.
+  const st = col.semantics?.semanticType;
+  if (st === 'measure_ratio_percent') flags.push({ tone: 'info', text: 'Ratio — not summed' });
+  else if (st === 'measure_per_unit') flags.push({ tone: 'info', text: 'Per-unit — not summed' });
+  else if (col.kind === 'ordinal') flags.push({ tone: 'info', text: 'Ordinal — not averaged or summed' });
   return flags;
 }
 
@@ -501,16 +529,40 @@ function CategoricalDetail({ col }: { col: CategoricalColumnProfile }) {
   );
 }
 
+function EmptyDetail({ col }: { col: EmptyColumnProfile }) {
+  return (
+    <section className="rounded-lg border border-dashed border-border/70 bg-card/40 p-8 text-center">
+      <CircleSlash className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+      <h4 className="text-sm font-semibold text-foreground">Empty column</h4>
+      <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+        All {fmtInt(col.totalValues)} cells are blank — there are no values to
+        profile. The column exists in the schema but was never populated.
+      </p>
+    </section>
+  );
+}
+
 /* ------------------------------------------------------------------ *
  * Rail sparkline source values
  * ------------------------------------------------------------------ */
 
 function railSpark(col: RichColumnProfile): number[] {
-  if (col.kind === 'numeric') return col.histogram.map((b) => b.count);
-  if (col.kind === 'date') return col.timeline.map((t) => t.count);
-  return col.topValues.map((t) => t.count);
+  switch (col.kind) {
+    case 'numeric':
+    case 'ordinal':
+      return col.histogram.map((b) => b.count);
+    case 'date':
+      return col.timeline.map((t) => t.count);
+    case 'categorical':
+    case 'boolean':
+      return col.topValues.map((t) => t.count);
+    case 'empty':
+    default:
+      return [];
+  }
 }
 
+/** Which columns render via the CategoricalDetail panel. */
 function categoricalKind(k: ColumnKind): boolean {
   return k === 'categorical' || k === 'boolean';
 }
@@ -527,6 +579,7 @@ export function DataSummaryModal({ isOpen, onClose, sessionId }: DataSummaryModa
   const [selected, setSelected] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
+  const [showEmpty, setShowEmpty] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -565,10 +618,18 @@ export function DataSummaryModal({ isOpen, onClose, sessionId }: DataSummaryModa
     return data.columns.filter((c) => {
       if (q && !c.name.toLowerCase().includes(q)) return false;
       if (typeFilter === 'all') return true;
-      if (typeFilter === 'categorical') return categoricalKind(c.kind);
+      // Ordinal columns are tallied under Categorical (discrete keys), so the
+      // Categorical filter surfaces them too.
+      if (typeFilter === 'categorical')
+        return categoricalKind(c.kind) || c.kind === 'ordinal';
       return c.kind === typeFilter;
     });
   }, [data, search, typeFilter]);
+
+  // Empty (all-blank) columns are grouped + collapsed at the bottom of the rail
+  // rather than cluttering the main list — but they stay discoverable.
+  const visibleCols = useMemo(() => filtered.filter((c) => c.kind !== 'empty'), [filtered]);
+  const emptyCols = useMemo(() => filtered.filter((c) => c.kind === 'empty'), [filtered]);
 
   // Keep a valid selection as filters change.
   useEffect(() => {
@@ -691,42 +752,40 @@ export function DataSummaryModal({ isOpen, onClose, sessionId }: DataSummaryModa
               </div>
               <ScrollArea className="flex-1">
                 <div className="p-2">
-                  {filtered.map((col) => {
-                    const style = KIND_STYLE[col.kind];
-                    const Icon = style.Icon;
-                    const active = col.name === selected;
-                    return (
+                  {visibleCols.map((col) => (
+                    <ColumnRailButton
+                      key={col.name}
+                      col={col}
+                      active={col.name === selected}
+                      onSelect={() => setSelected(col.name)}
+                    />
+                  ))}
+
+                  {emptyCols.length > 0 && (
+                    <div className="mt-1">
                       <button
-                        key={col.name}
                         type="button"
-                        onClick={() => setSelected(col.name)}
-                        className={`mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
-                          active ? 'bg-primary/10 ring-1 ring-primary/30' : 'hover:bg-muted/60'
-                        }`}
+                        onClick={() => setShowEmpty((v) => !v)}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/60"
                       >
-                        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${style.soft} ${style.text}`}>
-                          <Icon className="h-4 w-4" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium text-foreground">
-                            {col.name}
-                          </span>
-                          <span className="mt-0.5 flex items-center gap-1.5">
-                            <span className="h-1 w-16 overflow-hidden rounded-full bg-border">
-                              <span
-                                className={`block h-full rounded-full ${style.bar}`}
-                                style={{ width: `${col.completeness}%` }}
-                              />
-                            </span>
-                            <span className="text-[11px] text-muted-foreground">
-                              {col.nullPct > 0 ? `${fmtPct(col.nullPct)} null` : 'complete'}
-                            </span>
-                          </span>
-                        </span>
-                        <Sparkline values={railSpark(col)} barClass={style.bar} />
+                        <ChevronRight
+                          className={`h-3.5 w-3.5 transition-transform ${showEmpty ? 'rotate-90' : ''}`}
+                        />
+                        Empty columns
+                        <span className="opacity-70">{emptyCols.length}</span>
                       </button>
-                    );
-                  })}
+                      {showEmpty &&
+                        emptyCols.map((col) => (
+                          <ColumnRailButton
+                            key={col.name}
+                            col={col}
+                            active={col.name === selected}
+                            onSelect={() => setSelected(col.name)}
+                          />
+                        ))}
+                    </div>
+                  )}
+
                   {filtered.length === 0 && (
                     <p className="px-3 py-6 text-center text-sm text-muted-foreground">
                       No columns match.
@@ -742,8 +801,11 @@ export function DataSummaryModal({ isOpen, onClose, sessionId }: DataSummaryModa
                 <div className="space-y-5 p-6">
                   <ColumnHeader col={selectedCol} />
                   <FlagChips col={selectedCol} />
-                  {selectedCol.kind === 'numeric' && <NumericDetail col={selectedCol} />}
+                  {(selectedCol.kind === 'numeric' || selectedCol.kind === 'ordinal') && (
+                    <NumericDetail col={selectedCol} />
+                  )}
                   {selectedCol.kind === 'date' && <DateDetail col={selectedCol} />}
+                  {selectedCol.kind === 'empty' && <EmptyDetail col={selectedCol} />}
                   {categoricalKind(selectedCol.kind) && (
                     <CategoricalDetail col={selectedCol as CategoricalColumnProfile} />
                   )}
@@ -765,6 +827,47 @@ export function DataSummaryModal({ isOpen, onClose, sessionId }: DataSummaryModa
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ColumnRailButton({
+  col,
+  active,
+  onSelect,
+}: {
+  col: RichColumnProfile;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const style = KIND_STYLE[col.kind];
+  const Icon = style.Icon;
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
+        active ? 'bg-primary/10 ring-1 ring-primary/30' : 'hover:bg-muted/60'
+      }`}
+    >
+      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${style.soft} ${style.text}`}>
+        <Icon className="h-4 w-4" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium text-foreground">{col.name}</span>
+        <span className="mt-0.5 flex items-center gap-1.5">
+          <span className="h-1 w-16 overflow-hidden rounded-full bg-border">
+            <span
+              className={`block h-full rounded-full ${style.bar}`}
+              style={{ width: `${col.completeness}%` }}
+            />
+          </span>
+          <span className="text-[11px] text-muted-foreground">
+            {col.nullPct > 0 ? `${fmtPct(col.nullPct)} null` : 'complete'}
+          </span>
+        </span>
+      </span>
+      <Sparkline values={railSpark(col)} barClass={style.bar} />
+    </button>
   );
 }
 

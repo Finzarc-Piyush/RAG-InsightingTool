@@ -1,5 +1,7 @@
 # Charting — behavior contract & v2 architecture
 
+> Recent changes (W-SEM): the Data Summary panel + `inferModel` now read the authoritative per-column `semantics` (int-encoded temporals/ordinals are dimensions not metrics; ratios AVG'd; empties dropped), and the durable `additivity` `resolveAggregation` reads is back-filled from semantics so a name-missed ratio is never SUMMED. Display grain uses [`displayGrainForColumn`](../../server/lib/temporalGrain.ts) (name/type first); the chart-axis `temporalGrainAuthority` is intentionally unchanged (invariant #11). ADR [`centralized-column-semantics.md`](../decisions/centralized-column-semantics.md).
+
 This doc has two roles:
 
 1. **Behavior contract** for the legacy

@@ -1,7 +1,12 @@
-import type { DataSummary } from "../shared/schema.js";
+import type {
+  AggregationPolicy,
+  ColumnSemantics,
+  DataSummary,
+} from "../shared/schema.js";
 import { parseFlexibleDate } from "./dateUtils.js";
-import { inferTemporalGrainFromDates } from "./temporalGrain.js";
+import { displayGrainForColumn } from "./temporalGrain.js";
 import { roundTo } from "./numberCoercion.js";
+import { parseNumericCell } from "../shared/parseNumericCell.js";
 
 /**
  * Rich, type-aware per-column profiling for the Data Summary modal.
@@ -17,7 +22,13 @@ import { roundTo } from "./numberCoercion.js";
  * data-summary endpoint without the Python service.
  */
 
-export type ColumnKind = "numeric" | "date" | "categorical" | "boolean";
+export type ColumnKind =
+  | "numeric"
+  | "date"
+  | "categorical"
+  | "boolean"
+  | "ordinal"
+  | "empty";
 
 export interface BaseColumnProfile {
   name: string;
@@ -33,10 +44,14 @@ export interface BaseColumnProfile {
   completeness: number;
   /** Distinct non-blank values (numeric: distinct numbers; date: distinct days). */
   distinctCount: number;
+  /** The authoritative semantic classification (name + values), when present.
+   * Drives which stat tiles are legal + the "why suppressed" rationale chip. */
+  semantics?: ColumnSemantics;
 }
 
 export interface NumericColumnProfile extends BaseColumnProfile {
-  kind: "numeric";
+  /** "ordinal" reuses the numeric shape but suppresses mean/sum/std (all null). */
+  kind: "numeric" | "ordinal";
   /** Non-blank cells that could not be parsed as a number. */
   nonNumericCount: number;
   mean: number | null;
@@ -95,10 +110,16 @@ export interface CategoricalColumnProfile extends BaseColumnProfile {
   negativeValues?: string[];
 }
 
+/** A column with no non-blank values at all (100% missing). */
+export interface EmptyColumnProfile extends BaseColumnProfile {
+  kind: "empty";
+}
+
 export type RichColumnProfile =
   | NumericColumnProfile
   | DateColumnProfile
-  | CategoricalColumnProfile;
+  | CategoricalColumnProfile
+  | EmptyColumnProfile;
 
 export interface RichDataSummary {
   dataset: {
@@ -109,6 +130,8 @@ export interface RichDataSummary {
       date: number;
       categorical: number;
       boolean: number;
+      /** All-blank columns (100% missing) — excluded from the other tallies. */
+      empty: number;
     };
     totalCells: number;
     totalNulls: number;
@@ -136,16 +159,11 @@ function isBlank(v: unknown): boolean {
   return false;
 }
 
-/** Currency-symbol / thousands-separator-aware numeric coercion. */
+/** Currency / thousands / percent / accounting-negative aware numeric coercion.
+ * Delegates to the shared `parseNumericCell` so `(1.5)` reads as -1.5 (not +1.5)
+ * — the profiler used to strip the parens and silently flip the sign. */
 function toNumber(v: unknown): number | null {
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  if (typeof v !== "string") return null;
-  const cleaned = v.replace(/[%,\s]/g, "").replace(/[^0-9eE.+-]/g, "");
-  if (cleaned === "" || cleaned === "+" || cleaned === "-" || cleaned === ".") {
-    return null;
-  }
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : null;
+  return parseNumericCell(v);
 }
 
 /** Linear-interpolation percentile over an ascending-sorted array. */
@@ -186,14 +204,73 @@ function toLocalIsoDay(d: Date): string {
 
 const ID_NAME_RE = /(^|[_\s-])(id|uuid|guid|code|sku|key|ref|reference)s?($|[_\s-])/i;
 
+/** Exact additive aggregates for one numeric column, computed over the FULL
+ * dataset before any row down-sampling — so `sum`/`min`/`max`/`zeros`/`negatives`
+ * are never silently scaled down on large datasets (the endpoint samples rows
+ * for the O(n log n) stats, but these O(n) figures stay exact). */
+export interface FullNumericStats {
+  count: number;
+  sum: number;
+  min: number;
+  max: number;
+  zeroCount: number;
+  negativeCount: number;
+}
+
+/** One pass over the full data computing exact additive stats per numeric column. */
+export function computeFullColumnNumericStats(
+  data: Record<string, unknown>[],
+  columnNames: string[],
+): Map<string, FullNumericStats> {
+  const acc = new Map<string, FullNumericStats>();
+  for (const name of columnNames) {
+    acc.set(name, {
+      count: 0,
+      sum: 0,
+      min: Number.POSITIVE_INFINITY,
+      max: Number.NEGATIVE_INFINITY,
+      zeroCount: 0,
+      negativeCount: 0,
+    });
+  }
+  for (const row of data) {
+    for (const name of columnNames) {
+      const n = toNumber(row[name]);
+      if (n === null) continue;
+      const s = acc.get(name)!;
+      s.count += 1;
+      s.sum += n;
+      if (n < s.min) s.min = n;
+      if (n > s.max) s.max = n;
+      if (n === 0) s.zeroCount += 1;
+      if (n < 0) s.negativeCount += 1;
+    }
+  }
+  return acc;
+}
+
 function buildNumericProfile(
   name: string,
   values: unknown[],
   currencySymbol: string | null,
+  opts?: {
+    aggregation?: AggregationPolicy;
+    kind?: "numeric" | "ordinal";
+    fullStats?: FullNumericStats;
+  },
 ): NumericColumnProfile {
   const total = values.length;
   const nonBlank = values.filter((v) => !isBlank(v));
   const nullCount = total - nonBlank.length;
+
+  // `sum` is illegal for a ratio/per-unit measure (never sum a %) and for a
+  // discrete key/ordinal; `mean`-family stats are additionally meaningless for
+  // ordinals (a month index / rank is not "averaged"). Order statistics
+  // (median/min/max/percentiles) stay — they're honest for any ordered column.
+  const aggregation: AggregationPolicy = opts?.aggregation ?? "sum";
+  const kind: "numeric" | "ordinal" = opts?.kind ?? "numeric";
+  const suppressSum = aggregation !== "sum";
+  const suppressMean = aggregation === "none";
 
   const nums: number[] = [];
   let nonNumericCount = 0;
@@ -205,8 +282,8 @@ function buildNumericProfile(
 
   const base: BaseColumnProfile = {
     name,
-    kind: "numeric",
-    datatypeLabel: "Decimal",
+    kind,
+    datatypeLabel: kind === "ordinal" ? "Ordinal" : "Decimal",
     totalValues: total,
     nullCount,
     nullPct: total > 0 ? roundTo((nullCount / total) * 100, 2) : 0,
@@ -228,13 +305,20 @@ function buildNumericProfile(
   }
 
   const integerLike = nums.every((n) => Number.isInteger(n));
-  const sum = nums.reduce((a, b) => a + b, 0);
-  const mean = sum / nums.length;
+  // Exact full-column figures when supplied (large-dataset fidelity); else the
+  // (possibly sampled) `nums` array — identical when the endpoint didn't sample.
+  const full = opts?.fullStats && opts.fullStats.count > 0 ? opts.fullStats : null;
+  const sum = full ? full.sum : nums.reduce((a, b) => a + b, 0);
+  const mean = full ? full.sum / full.count : sum / nums.length;
   let zeroCount = 0;
   let negativeCount = 0;
   for (const n of nums) {
     if (n === 0) zeroCount += 1;
     if (n < 0) negativeCount += 1;
+  }
+  if (full) {
+    zeroCount = full.zeroCount;
+    negativeCount = full.negativeCount;
   }
 
   // Heavy stats (sort, moments) can be sampled on very large columns.
@@ -274,26 +358,27 @@ function buildNumericProfile(
 
   return {
     ...(base as NumericColumnProfile),
-    datatypeLabel: integerLike ? "Integer" : "Decimal",
+    datatypeLabel:
+      kind === "ordinal" ? "Ordinal" : integerLike ? "Integer" : "Decimal",
     nonNumericCount,
-    mean: roundTo(mean),
+    mean: suppressMean ? null : roundTo(mean),
     median: roundTo(median),
-    std: roundTo(std),
-    variance: roundTo(variance),
-    min: roundTo(min),
-    max: roundTo(max),
-    range: roundTo(max - min),
+    std: suppressMean ? null : roundTo(std),
+    variance: suppressMean ? null : roundTo(variance),
+    min: roundTo(full ? full.min : min),
+    max: roundTo(full ? full.max : max),
+    range: roundTo(full ? full.max - full.min : max - min),
     q1: roundTo(q1),
     q3: roundTo(q3),
     iqr: roundTo(iqr),
     p5: roundTo(p5),
     p95: roundTo(p95),
-    sum: roundTo(sum),
+    sum: suppressSum ? null : roundTo(sum),
     zeroCount,
     negativeCount,
     outlierCount,
-    skewness,
-    cv: Math.abs(mean) > 1e-12 ? roundTo(std / Math.abs(mean), 4) : null,
+    skewness: suppressMean ? null : skewness,
+    cv: suppressMean || Math.abs(mean) <= 1e-12 ? null : roundTo(std / Math.abs(mean), 4),
     integerLike,
     currencySymbol,
     histogram: buildHistogram(sorted, min, max, integerLike),
@@ -333,7 +418,11 @@ function buildHistogram(
   return bins;
 }
 
-function buildDateProfile(name: string, values: unknown[]): DateColumnProfile {
+function buildDateProfile(
+  name: string,
+  values: unknown[],
+  opts?: { semanticType?: string },
+): DateColumnProfile {
   const total = values.length;
   const nonBlank = values.filter((v) => !isBlank(v));
   const nullCount = total - nonBlank.length;
@@ -360,7 +449,11 @@ function buildDateProfile(name: string, values: unknown[]): DateColumnProfile {
   }
 
   const hasRange = Number.isFinite(minMs) && Number.isFinite(maxMs);
-  const grain = parsed.length > 0 ? inferTemporalGrainFromDates(parsed) : null;
+  // Name/semantic-type FIRST, values only as a fallback — a column literally
+  // named "Month" with one date is monthly, not "Daily / weekly" (SS1). A
+  // single-point / unknown column returns null (renders "—"), never the old
+  // `dayOrWeek` default.
+  const grain = displayGrainForColumn(name, opts?.semanticType ?? null, parsed);
 
   return {
     name,
@@ -479,6 +572,21 @@ function buildCategoricalProfile(
   };
 }
 
+/** A column with zero non-blank cells. Surfaced (grouped/collapsed) rather than
+ * dropped — an all-null "GST Refund" is itself a finding — but with no stats. */
+function buildEmptyProfile(name: string, total: number): EmptyColumnProfile {
+  return {
+    name,
+    kind: "empty",
+    datatypeLabel: "Empty",
+    totalValues: total,
+    nullCount: total,
+    nullPct: 100,
+    completeness: 0,
+    distinctCount: 0,
+  };
+}
+
 function countDuplicateRows(data: Record<string, unknown>[]): number | null {
   if (data.length === 0 || data.length > DUPLICATE_SCAN_CAP) return null;
   const seen = new Set<string>();
@@ -499,9 +607,11 @@ function countDuplicateRows(data: Record<string, unknown>[]): number | null {
 export function buildRichDataSummary(
   data: Record<string, unknown>[],
   dataSummary: DataSummary,
+  opts?: { fullColumnNumericStats?: Map<string, FullNumericStats> },
 ): RichDataSummary {
   const numericSet = new Set(dataSummary.numericColumns ?? []);
   const dateSet = new Set(dataSummary.dateColumns ?? []);
+  const fullStatsByName = opts?.fullColumnNumericStats;
   const metaByName = new Map(
     (dataSummary.columns ?? []).map((c) => [c.name, c]),
   );
@@ -513,38 +623,66 @@ export function buildRichDataSummary(
 
   const rowCount = data.length;
   const columns: RichColumnProfile[] = [];
-  const typeBreakdown = { numeric: 0, date: 0, categorical: 0, boolean: 0 };
+  const typeBreakdown = { numeric: 0, date: 0, categorical: 0, boolean: 0, empty: 0 };
   let totalNulls = 0;
 
   for (const name of columnNames) {
     const values = data.map((row) => row[name]);
     const meta = metaByName.get(name);
+    const semantics = meta?.semantics;
+    // Prefer the authoritative semantic classification; fall back to the legacy
+    // numeric/date-membership routing for sessions uploaded before semantics
+    // existed (they render exactly as before).
+    const displayKind =
+      semantics?.displayKind ??
+      (numericSet.has(name) ? "numeric" : dateSet.has(name) ? "date" : "categorical");
     let profile: RichColumnProfile;
 
-    if (numericSet.has(name)) {
-      profile = buildNumericProfile(
-        name,
-        values,
-        meta?.currency?.symbol ?? null,
-      );
-      typeBreakdown.numeric += 1;
-    } else if (dateSet.has(name)) {
-      profile = buildDateProfile(name, values);
-      typeBreakdown.date += 1;
-    } else {
-      const indicator = meta?.indicator;
-      const isBoolean = indicator?.kind === "boolean";
-      profile = buildCategoricalProfile(
-        name,
-        values,
-        isBoolean,
-        indicator?.positiveValues,
-        indicator?.negativeValues,
-      );
-      if (isBoolean) typeBreakdown.boolean += 1;
-      else typeBreakdown.categorical += 1;
+    switch (displayKind) {
+      case "numeric":
+      case "ordinal": {
+        profile = buildNumericProfile(name, values, meta?.currency?.symbol ?? null, {
+          aggregation: semantics?.aggregation ?? "sum",
+          kind: displayKind === "ordinal" ? "ordinal" : "numeric",
+          fullStats: fullStatsByName?.get(name),
+        });
+        // temporal-int (Year) is displayKind 'date'; ordinal/numeric-id count as
+        // categorical keys, real measures as numeric.
+        if (displayKind === "ordinal") typeBreakdown.categorical += 1;
+        else typeBreakdown.numeric += 1;
+        break;
+      }
+      case "date": {
+        profile = buildDateProfile(name, values, {
+          semanticType: semantics?.semanticType,
+        });
+        typeBreakdown.date += 1;
+        break;
+      }
+      case "empty": {
+        profile = buildEmptyProfile(name, values.length);
+        typeBreakdown.empty += 1;
+        break;
+      }
+      case "boolean":
+      case "categorical":
+      default: {
+        const indicator = meta?.indicator;
+        const isBoolean = displayKind === "boolean" || indicator?.kind === "boolean";
+        profile = buildCategoricalProfile(
+          name,
+          values,
+          isBoolean,
+          indicator?.positiveValues,
+          indicator?.negativeValues,
+        );
+        if (isBoolean) typeBreakdown.boolean += 1;
+        else typeBreakdown.categorical += 1;
+        break;
+      }
     }
 
+    if (semantics) profile.semantics = semantics;
     totalNulls += profile.nullCount;
     columns.push(profile);
   }

@@ -168,6 +168,8 @@ interface ColumnEntry {
   isHiddenFacet: boolean;
   currencyIso?: string;
   grain?: SemanticDimension["temporalGrain"];
+  /** Authoritative per-column semantic classification (name + values). */
+  semantics?: DataSummary["columns"][number]["semantics"];
 }
 
 function summariseColumn(
@@ -181,7 +183,10 @@ function summariseColumn(
     // __tf_* are derived buckets — exclude them from the catalog
     isHiddenFacet: col.name.startsWith("__tf_"),
     currencyIso: col.currency?.isoCode,
-    grain: mapTemporalGrain(col.temporalDisplayGrain),
+    // Prefer the semantic display grain (name/type-aware) over the raw
+    // value-derived temporalDisplayGrain.
+    grain: mapTemporalGrain(col.semantics?.temporalGrain ?? col.temporalDisplayGrain),
+    semantics: col.semantics,
   };
 }
 
@@ -200,9 +205,16 @@ function buildSumMetric(
   const name = uniqueName(toSnakeCase(col.name), used);
   const isCurrency = !!col.currencyIso;
   const cls = classifyMetric(col.name);
-  const nonAdditive = cls.additivity === "non_additive";
+  // The semantic classifier and financeMetricAuthority both flag ratios/per-unit
+  // as non-additive; honour either so a % is never SUMmed even if the finance
+  // catalog missed the name (e.g. "Primary Scheme").
+  const nonAdditive =
+    cls.additivity === "non_additive" || col.semantics?.aggregation === "avg";
+  const isRatioPercent =
+    cls.kind === "ratio_percent" ||
+    col.semantics?.semanticType === "measure_ratio_percent";
   const format = nonAdditive
-    ? cls.kind === "ratio_percent"
+    ? isRatioPercent
       ? ("percent" as const)
       : ("ratio" as const)
     : isCurrency
@@ -380,6 +392,42 @@ function inferLongFormModel(
   for (const raw of summary.columns) {
     const col = summariseColumn(raw);
     if (col.isHiddenFacet) continue;
+
+    // ── Semantic-type-driven routing (the authority) ──────────────────────
+    // A numeric-typed column is NOT automatically a measure: an int-encoded
+    // Year / a month-index ordinal / a numeric id must become a dimension, and
+    // an all-blank column must be dropped, so the planner never proposes
+    // AVG(Year) / SUM(margin) / breakdown-by-empty.
+    const dk = col.semantics?.displayKind;
+    if (dk) {
+      if (dk === "empty") continue;
+      if (dk === "date") {
+        dimensions.push(buildTemporalDimension(col, dimensionNames));
+        continue;
+      }
+      if (dk === "boolean") {
+        dimensions.push(buildIndicatorDimension(col, dimensionNames));
+        continue;
+      }
+      if (dk === "ordinal") {
+        dimensions.push(buildCategoricalDimension(col, dimensionNames));
+        continue;
+      }
+      if (dk === "numeric") {
+        metrics.push(buildSumMetric(col, metricNames));
+        continue;
+      }
+      // dk === "categorical": a real breakdown dimension, UNLESS it's a
+      // high-cardinality identifier (surrogate key) with no shortlist — those
+      // shouldn't be offered as a breakdown axis.
+      if (col.semantics?.semanticType === "identifier" && !col.hasTopValues) {
+        continue;
+      }
+      dimensions.push(buildCategoricalDimension(col, dimensionNames));
+      continue;
+    }
+
+    // ── Legacy fallback (sessions with no semantics) ──────────────────────
     if (col.isIndicator) {
       // Indicator columns are categorical signals — surface as a
       // dimension. No metric.

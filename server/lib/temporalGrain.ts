@@ -49,6 +49,44 @@ export function inferTemporalGrainFromDates(dates: Date[]): TemporalDisplayGrain
   return 'year';
 }
 
+/**
+ * DISPLAY grain for a single column — name + semantic type FIRST, values only as
+ * a last resort. This is what the Data Summary "Granularity" tile shows; it is a
+ * display concern and deliberately NOT the chart-axis authority
+ * (`temporalGrainAuthority.resolveTrendGrain`, invariant #11), which is span /
+ * materialized-bucket driven and refuses to key off names.
+ *
+ * Precedence:
+ *   1. an explicit temporal semantic type (temporal_year/month/quarter),
+ *   2. the column NAME (a column literally named "Month"/"Year"/"Quarter"),
+ *   3. the value-derived median-gap heuristic — ONLY with ≥2 distinct days,
+ *   4. otherwise `null` — a single-point / unknown column renders "—" instead of
+ *      the misleading `dayOrWeek` default that made a one-date "Month" read
+ *      "Daily / weekly".
+ */
+export function displayGrainForColumn(
+  name: string,
+  semanticType?: string | null,
+  dates?: Date[],
+): TemporalDisplayGrain | null {
+  if (semanticType === 'temporal_year') return 'year';
+  if (semanticType === 'temporal_month' || semanticType === 'temporal_quarter') {
+    return 'monthOrQuarter';
+  }
+
+  const n = name.trim().toLowerCase().replace(/[_-]+/g, ' ');
+  if (/(^| )(year|yr)( |$)/.test(n) || n === 'fy') return 'year';
+  if (/(^| )(quarter|qtr|q[1-4])( |$)/.test(n)) return 'monthOrQuarter';
+  if (/(^| )(month|mth|mon)( |$)/.test(n)) return 'monthOrQuarter';
+  if (/(^| )(week|wk)( |$)/.test(n)) return 'dayOrWeek';
+
+  if (dates && dates.length > 0) {
+    const distinct = uniqueSortedDates(dates);
+    if (distinct.length >= 2) return inferTemporalGrainFromDates(dates);
+  }
+  return null;
+}
+
 /** dd/MM/yy, MMM-yy, or yyyy for charts and tables. */
 export function formatDateForChartAxis(date: Date, grain: TemporalDisplayGrain): string {
   const y = date.getFullYear();

@@ -23,7 +23,7 @@ import { loadChartsFromBlob } from "../lib/blobStorage.js";
 import { listPastAnalysesForSession } from "../models/pastAnalysis.model.js";
 import { loadLatestData } from "../utils/dataLoader.js";
 import { uploadLimits } from "../config/uploadLimits.js";
-import { buildRichDataSummary } from "../lib/richColumnProfile.js";
+import { buildRichDataSummary, computeFullColumnNumericStats } from "../lib/richColumnProfile.js";
 import {
   chartSpecSchema,
   barSortSpecSchema,
@@ -1212,7 +1212,7 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
         dataset: {
           rowCount: 0,
           columnCount: dataSummary.columns?.length ?? 0,
-          typeBreakdown: { numeric: 0, date: 0, categorical: 0, boolean: 0 },
+          typeBreakdown: { numeric: 0, date: 0, categorical: 0, boolean: 0, empty: 0 },
           totalCells: 0,
           totalNulls: 0,
           overallCompleteness: 100,
@@ -1229,9 +1229,20 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
     const MAX_ROWS_FOR_PROFILE = uploadLimits.maxRowsForDataSummaryProfile;
     const totalRowCount = data.length;
     const sampledForProfile = totalRowCount > MAX_ROWS_FOR_PROFILE;
+    // Exact additive aggregates (sum/min/max/zeros/negatives) computed over the
+    // FULL data BEFORE sampling, so those figures are never silently scaled down
+    // on large datasets. Only worth the extra O(n) pass when we're about to
+    // sample; otherwise buildRichDataSummary already sees every row.
+    let fullColumnNumericStats:
+      | ReturnType<typeof computeFullColumnNumericStats>
+      | undefined;
     if (sampledForProfile) {
       logger.log(
         `📊 Dataset has ${totalRowCount} rows; sampling ${MAX_ROWS_FOR_PROFILE} for the profile`,
+      );
+      fullColumnNumericStats = computeFullColumnNumericStats(
+        data,
+        dataSummary.numericColumns ?? [],
       );
       const step = totalRowCount / MAX_ROWS_FOR_PROFILE;
       const sampled: Record<string, any>[] = [];
@@ -1241,7 +1252,9 @@ export const getDataSummaryEndpoint = async (req: Request, res: Response) => {
       data = sampled;
     }
 
-    const richSummary = buildRichDataSummary(data, dataSummary);
+    const richSummary = buildRichDataSummary(data, dataSummary, {
+      fullColumnNumericStats,
+    });
     // Phase 0 · large-dataset transparency: tell the client when the profile was
     // computed on a sample so the UI can badge it instead of implying full fidelity.
     return res.json(

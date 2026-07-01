@@ -10,6 +10,7 @@
 import type { ChatDocument } from "../models/chat.model.js";
 import { SessionDataNotMaterializedError } from "../lib/columnarStorage.js";
 import { getFileFromBlob } from "../lib/blobStorage.js";
+import { parseNumericCell } from "../shared/parseNumericCell.js";
 import { parseFile, createDataSummary, convertDashToZeroForNumericColumns, canonicalizeDateColumnValues } from "../lib/fileParser.js";
 import { getDataForAnalysis } from "../lib/largeFileProcessor.js";
 import {
@@ -55,6 +56,18 @@ function normalizeNumericColumns(data: Record<string, any>[]): Record<string, an
         if (hasMonthName || hasDateSeparators) {
           normalizedRow[key] = value; // Keep as string if it's a date
           continue;
+        }
+
+        // Accounting-style negatives, e.g. "(1,234)" → -1234. The pure-number
+        // regex below rejects the parens (kept as a string), after which the
+        // downstream profiler would strip them and flip the sign to +. Handle
+        // it here via the shared parser so the negative survives ingest.
+        if (trimmed.startsWith('(') && trimmed.endsWith(')')) {
+          const parenNum = parseNumericCell(trimmed);
+          if (parenNum !== null) {
+            normalizedRow[key] = parenNum;
+            continue;
+          }
         }
         
         // Strip formatting characters

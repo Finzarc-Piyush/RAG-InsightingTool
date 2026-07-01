@@ -66,6 +66,21 @@ Return ONLY a JSON object with these keys:
 - grainGuess: optional short phrase (e.g. "daily orders", "monthly revenue").
 - notes: optional caveats (PII, mixed formats, fiscal year assumptions, etc.).
 - currencyOverrides: ONLY when "ambiguousCurrencyColumns" is non-empty. For each listed column, pick the most likely ISO 4217 code based on (a) market / region / brand values in other columns (e.g. "Off VN" → VND, "MARICO India" → INR, "USA West" → USD, "Stockholm" → SEK), (b) dataset shortDescription, (c) typical magnitudes (Vietnamese đồng amounts are usually in the billions, Japanese yen also large; CAD/USD/EUR/GBP smaller). Skip columns whose context is genuinely unclear. Use exactly 3-letter codes.
+- perColumn: for EVERY column, its true SEMANTIC TYPE judged from the column NAME and the VALUES together (not value shape alone). Each entry is {name, semanticType, temporalGrain?}. Choose semanticType from EXACTLY these values:
+  • temporal_date — a real calendar date/timestamp.
+  • temporal_year — a year, EVEN when stored as a plain int (e.g. a "Year" column that is 26 meaning FY2026, or 2024). Never a measure.
+  • temporal_month — a calendar month (a "Month" column, month names, or a single month-stamp). Set temporalGrain:"monthOrQuarter".
+  • temporal_quarter — a quarter label like "Q1"/"H1". Set temporalGrain:"monthOrQuarter".
+  • ordinal — a small integer POSITION/index/rank that must NEVER be averaged or summed (e.g. "fy_month_number"=1..12, a 1..5 rating, a rank).
+  • identifier — a code / key / SKU / id (e.g. "Brand_Code"), high-cardinality or code-like; not a measure.
+  • categorical_dimension — a text category to group by (e.g. "Channel"=GT/MT, "sub_channel_group").
+  • measure_additive — a real numeric quantity that is meaningful to SUM (volume, units, revenue amount).
+  • measure_ratio_percent — a ratio / percentage / rate / margin / share / scheme that must NEVER be summed (e.g. "Retailer Margin", "Primary Scheme", a "% ..." or a rate column). Only AVERAGE it.
+  • measure_per_unit — a per-unit price / index / score that must not be summed (e.g. MRP per unit, ASP).
+  • currency_amount — a monetary amount meaningful to sum.
+  • boolean_flag — a yes/no / true-false indicator.
+  • empty — the column is entirely blank in the sample.
+  Be intelligent and use the header text: a column literally named "Year"/"Month"/"Quarter" is temporal even if its values look numeric or constant; a "…_number"/"…_no"/"rank" is ordinal, not a measure; a "…margin"/"…rate"/"…%"/"…scheme"/"…share" is a ratio, never summed. Only use names from "columns"; omit a column if genuinely unsure rather than guessing a measure. temporalGrain (one of "dayOrWeek"|"monthOrQuarter"|"year") is optional and only for temporal_* columns.
 
 For each name in dirtyStringDateColumns, the pipeline will add a new column named Cleaned_<exact original header> with normalized values when possible.
 

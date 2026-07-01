@@ -996,6 +996,55 @@ export const agentWorkbenchSchema = z.array(agentWorkbenchEntrySchema).max(48);
 export type AgentWorkbench = z.infer<typeof agentWorkbenchSchema>;
 
 // Chat Messages
+/** Display grain for a temporal column. Declared here (rather than lower in the
+ * file) because `datasetProfileSchema.perColumn` and the semantic schemas below
+ * reference it. */
+export const temporalDisplayGrainSchema = z.enum(['dayOrWeek', 'monthOrQuarter', 'year']);
+
+/**
+ * Per-column SEMANTIC TYPE — the durable answer to "what IS this column,
+ * really?", using its NAME + its VALUES (not just value shape). This is the
+ * single authority the Data Summary panel, the temporal-grain authority, the
+ * semantic model, and the aggregation guard all read so that e.g. a "Year"
+ * stored as the int 26 is treated as time (never averaged) and a margin % is
+ * never summed. Filled deterministically at upload (columnSemantics.ts) and
+ * refined by the dataset-profile LLM (`perColumn`); never demotes a hard
+ * signal (a currency-tagged column stays a measure regardless of the LLM).
+ */
+export const semanticTypeSchema = z.enum([
+  // temporal — even when int/label-encoded (Year=26, fy_month_number=1, "Q1")
+  'temporal_date',
+  'temporal_year',
+  'temporal_month',
+  'temporal_quarter',
+  // discrete keys — numeric but NOT a measure (never averaged/summed)
+  'ordinal',
+  'identifier',
+  'categorical_dimension',
+  // measures
+  'measure_additive',
+  'measure_ratio_percent',
+  'measure_per_unit',
+  'currency_amount',
+  'boolean_flag',
+  // all-blank column
+  'empty',
+]);
+
+/** Which aggregate is legal for this column. `sum` only for additive/currency;
+ * ratio/per_unit → `avg`; ordinal/identifier/temporal-int → `none`. */
+export const aggregationPolicySchema = z.enum(['sum', 'avg', 'none']);
+
+/** Which Data-Summary detail panel + type tally a column belongs to. */
+export const displayKindSchema = z.enum([
+  'numeric',
+  'date',
+  'categorical',
+  'boolean',
+  'ordinal',
+  'empty',
+]);
+
 export const datasetProfileSchema = z.object({
   shortDescription: z.string(),
   dateColumns: z.array(z.string()),
@@ -1046,6 +1095,23 @@ export const datasetProfileSchema = z.object({
         })
       )
       .optional()),
+  /** Per-column semantic type inferred from the column NAME + sample VALUES.
+   * Overlays the deterministic classifier (columnSemantics.ts) at upload:
+   * catches int/label-encoded temporals (Year=26, "Q1"), ordinals
+   * (fy_month_number), and ratio/percent measures the name-heuristics miss.
+   * Optional + capped; a deployment that returns nothing degrades to the
+   * deterministic floor (non-blocking startup). `temporalGrain` refines the
+   * display grain for temporal columns. */
+  perColumn: z
+    .array(
+      z.object({
+        name: z.string(),
+        semanticType: semanticTypeSchema,
+        temporalGrain: temporalDisplayGrainSchema.optional(),
+      })
+    )
+    .max(200)
+    .optional(),
 });
 
 export type DatasetProfile = z.infer<typeof datasetProfileSchema>;
@@ -2006,7 +2072,20 @@ export const messageSchema = z.object({
 
 export type Message = z.infer<typeof messageSchema>;
 
-export const temporalDisplayGrainSchema = z.enum(['dayOrWeek', 'monthOrQuarter', 'year']);
+/** Full per-column semantic classification. `semanticTypeSchema` /
+ * `aggregationPolicySchema` / `displayKindSchema` are declared earlier (before
+ * `datasetProfileSchema`, which references `semanticTypeSchema` in its
+ * `perColumn` output); this object also needs `temporalDisplayGrainSchema`
+ * (declared just above), so it lives here. */
+export const columnSemanticsSchema = z.object({
+  semanticType: semanticTypeSchema,
+  aggregation: aggregationPolicySchema,
+  displayKind: displayKindSchema,
+  /** Display grain for temporal columns — name/type-driven, not median-gap. */
+  temporalGrain: temporalDisplayGrainSchema.optional(),
+  source: z.enum(['deterministic', 'llm', 'user']).default('deterministic'),
+  confidence: z.number().min(0).max(1).optional(),
+});
 
 export const temporalFacetGrainSchema = z.enum([
   'date',
@@ -2256,6 +2335,11 @@ export const dataSummarySchema = z.object({
     additivityKind: z.enum(["additive", "ratio_percent", "per_unit", "index_score"]).optional(),
     ratioNumeratorColumn: z.string().max(200).optional(),
     ratioDenominatorColumn: z.string().max(200).optional(),
+    /** The authoritative per-column semantic classification (name + values).
+     * Filled deterministically at upload and refined by the dataset-profile
+     * LLM. Absent on sessions uploaded before this feature — consumers fall
+     * back to their prior numeric/date-membership heuristics. */
+    semantics: columnSemanticsSchema.optional(),
   })),
   numericColumns: z.array(z.string()),
   dateColumns: z.array(z.string()),
@@ -2312,6 +2396,10 @@ export const dataSummarySchema = z.object({
 export type DataSummary = z.infer<typeof dataSummarySchema>;
 export type TemporalFacetColumnMeta = z.infer<typeof temporalFacetColumnMetaSchema>;
 export type TemporalDisplayGrain = z.infer<typeof temporalDisplayGrainSchema>;
+export type SemanticType = z.infer<typeof semanticTypeSchema>;
+export type AggregationPolicy = z.infer<typeof aggregationPolicySchema>;
+export type DisplayKind = z.infer<typeof displayKindSchema>;
+export type ColumnSemantics = z.infer<typeof columnSemanticsSchema>;
 
 // Column Statistics Schema
 export const columnStatisticsSchema = z.object({

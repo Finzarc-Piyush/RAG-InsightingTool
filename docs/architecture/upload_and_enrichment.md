@@ -1,5 +1,7 @@
 # Upload pipeline and enrichment (architecture)
 
+> Recent changes (W-SEM): per-column `semantics` (semanticType/aggregation/displayKind) is now stamped at parse ([`columnSemantics.ts`](../../server/lib/columnSemantics.ts) `classifyColumnSemantics`) and refined in `uploadQueue` with additivity/indicators + the dataset-profile LLM `perColumn` overlay; it also back-fills the durable `additivity` for missed ratios. ADR [`centralized-column-semantics.md`](../decisions/centralized-column-semantics.md).
+
 ## Default (v1)
 
 - **In-process** upload queue (`server/utils/uploadQueue.ts`): jobs live in memory on the API process; Cosmos chat documents hold session state (including `enrichmentStatus`, messages, data summary, sample rows).

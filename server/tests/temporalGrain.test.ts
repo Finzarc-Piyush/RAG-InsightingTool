@@ -4,6 +4,7 @@ import { sanitizeDateStringForParse } from "../lib/dateUtils.js";
 import {
   inferTemporalGrainFromDates,
   formatDateForChartAxis,
+  displayGrainForColumn,
 } from "../lib/temporalGrain.js";
 import { processChartData } from "../lib/chartGenerator.js";
 import type { ChartSpec } from "../shared/schema.js";
@@ -11,6 +12,36 @@ import type { ChartSpec } from "../shared/schema.js";
 describe("sanitizeDateStringForParse", () => {
   it("trims whitespace only (no regex date cleanup)", () => {
     assert.equal(sanitizeDateStringForParse("  2015-01-13  "), "2015-01-13");
+  });
+});
+
+describe("displayGrainForColumn", () => {
+  it("semantic type wins first", () => {
+    assert.equal(displayGrainForColumn("whatever", "temporal_year"), "year");
+    assert.equal(
+      displayGrainForColumn("x", "temporal_quarter"),
+      "monthOrQuarter",
+    );
+  });
+  it("column NAME resolves grain even with a single date (SS1 fix)", () => {
+    // A "Month" column of one date must be monthly, not the old dayOrWeek default.
+    assert.equal(
+      displayGrainForColumn("Month", null, [new Date(2026, 3, 1)]),
+      "monthOrQuarter",
+    );
+    assert.equal(displayGrainForColumn("Year", null, [new Date(2026, 3, 1)]), "year");
+    assert.equal(
+      displayGrainForColumn("Quarter", null, [new Date(2026, 3, 1)]),
+      "monthOrQuarter",
+    );
+  });
+  it("falls back to value spacing only with ≥2 distinct dates", () => {
+    const monthly = [new Date(2024, 0, 1), new Date(2024, 1, 1), new Date(2024, 2, 1)];
+    assert.equal(displayGrainForColumn("some_date", null, monthly), "monthOrQuarter");
+  });
+  it("single-point unknown column → null, never dayOrWeek", () => {
+    assert.equal(displayGrainForColumn("some_date", null, [new Date(2026, 3, 1)]), null);
+    assert.equal(displayGrainForColumn("some_date", null, []), null);
   });
 });
 
